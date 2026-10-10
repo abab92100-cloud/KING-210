@@ -93,11 +93,11 @@ function startForegroundSvc(){ if(!(typeof window!=='undefined'&&window.Capacito
           localStorage.setItem('king_bo_asked','1');
           BO.requestIgnoreBatteryOptimization().catch(()=>{}); } }).catch(()=>{});
   }catch(e){} }
-/* قفل استيقاظ المعالج + منعّاش أصلي: الإضافة المحلية TrqNative تمنع نوم المعالج
+/* قفل استيقاظ المعالج + منعّاش أصلي: الإضافة المحلية KingNative تمنع نوم المعالج
    بإطفاء الشاشة، وتراقب نبض المحرك من خارج الويب فيو — إن جُمّد 90 ثانية
    أُعيد تحميل التطبيق تلقائيًا فيُستأنف الاتصال والعمل دون تدخل */
 function startNativeKeepAlive(){ if(!(typeof window!=='undefined'&&window.Capacitor)) return;
-  const N=(window.Capacitor.Plugins||{}).TrqNative; if(!N) return;
+  const N=(window.Capacitor.Plugins||{}).KingNative; if(!N) return;
   try{ N.acquireWakeLock&&N.acquireWakeLock().catch(()=>{}); }catch(e){}
   try{ N.startWatchdog&&N.startWatchdog().catch(()=>{}); }catch(e){}
   if(!window.__kingHb) window.__kingHb=setInterval(()=>{
@@ -222,7 +222,6 @@ function saveAll(){ try{
   localStorage.setItem('king:mem',JSON.stringify(S.memory||{pairs:{},cycles:0,totalPnl:0}));
 }catch(e){} }
 function loadAll(){ try{
-  for(const [nk,ok] of [['king:cfg','trq:cfg'],['king:keys','trq:keys'],['king:snd','trq:snd'],['king:tone','trq:tone'],['king:rt','trq:rt'],['king:mem','trq:mem']]){    const cur=localStorage.getItem(nk), old=localStorage.getItem(ok);    if(cur==null&&old!=null) localStorage.setItem(nk,old); }
   const cfg=JSON.parse(localStorage.getItem('king:cfg')||'null'); if(cfg) S.config={...S.config,...cfg};
   const ks=localStorage.getItem('king:keys'); if(ks){ try{S.keys=JSON.parse(ks);}catch(e){S.keys=null;} }
   S.sound=localStorage.getItem('king:snd')!=='0';
