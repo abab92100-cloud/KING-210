@@ -28,3 +28,5 @@ android/.gradle
 android/build
 android/local.properties
 *.keystore
+plugins/king-native/android/build
+plugins/king-native/android/.gradle
