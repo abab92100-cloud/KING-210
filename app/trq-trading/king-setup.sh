@@ -2,10 +2,10 @@
 # ══════════════════════════════════════════════════════════════
 # KING Trading — مثبّت ومشغّل سيرفر الجوال بأمر واحد
 # الاستخدام (انسخه كاملًا في Termux):
-#   curl -sL https://github.com/abab92100-cloud/King/releases/latest/download/king-setup.sh | bash
+#   curl -sL https://github.com/abab92100-cloud/King/raw/main/releases/king-setup.sh | bash
 # مهم: إن كان السيرفر القديم يعمل في النافذة (سطور تتكرر) اضغط Ctrl+C أولًا ثم الصق الأمر
 # إن لم يوجد curl أصلًا:
-#   pkg install -y curl && curl -sL https://github.com/abab92100-cloud/King/releases/latest/download/king-setup.sh | bash
+#   pkg install -y curl && curl -sL https://github.com/abab92100-cloud/King/raw/main/releases/king-setup.sh | bash
 # ══════════════════════════════════════════════════════════════
 
 echo "═══ KING — سيرفر الجوال ═══"
@@ -30,7 +30,7 @@ echo "  Node $(node -v) ✓"
 # 2) تحميل أحدث نسخة من السيرفر دائمًا (رابط latest لا يتقادم) + إعادة محاولة
 mkdir -p "$HOME/king" && cd "$HOME/king"
 echo "• تحميل أحدث سيرفر..."
-if ! curl -L -s --fail --retry 3 --max-time 60 -o king-server.mjs "https://github.com/abab92100-cloud/King/releases/latest/download/king-server.mjs"; then
+if ! curl -L -s --fail --retry 3 --max-time 60 -o king-server.mjs "https://github.com/abab92100-cloud/King/raw/main/releases/king-server.mjs"; then
   echo "✗ فشل تحميل السيرفر — أعد المحاولة بعد دقيقة"
   exit 1
 fi
