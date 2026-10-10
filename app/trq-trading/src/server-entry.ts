@@ -1,4 +1,3 @@
-// @ts-nocheck
 /* ================================================================
    KING Trading — سيرفر الجوال (Termux)
    العقل الدائم للبوت: نفس محرك التطبيق يعمل هنا في Node بلا نوم
@@ -46,8 +45,8 @@ const srv = createServer(async (req, res) => {
     if (req.method === 'POST' && u.pathname === '/cmd') {
       let body = '';
       for await (const chunk of req) body += chunk;
-      let j = {};
-      try { j = JSON.parse(body || '{}'); } catch (e) {}
+      let j:any = {};
+      try { j = JSON.parse(body || '{}'); } catch{ /* intentional: optional step */ }
       const a = String(j.action || '');
       switch (a) {
         case 'start': startBot(); return send(res, 200, { ok: true });
@@ -67,7 +66,7 @@ const srv = createServer(async (req, res) => {
 
     send(res, 404, { ok: false, error: 'not found' });
   } catch (e) {
-    send(res, 500, { ok: false, error: String((e && e.message) || e) });
+    send(res, 500, { ok: false, error: String((e && (e as any).message) || e) });
   }
 });
 

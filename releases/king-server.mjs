@@ -6,7 +6,7 @@ process.env.KING_SERVER = "1";
 var dir = join(homedir(), ".king");
 try {
   mkdirSync(dir, { recursive: true });
-} catch (e) {
+} catch {
 }
 var file = join(dir, "king-server-store.json");
 var data = {};
@@ -22,7 +22,7 @@ function persist() {
     timer = null;
     try {
       writeFileSync(file, JSON.stringify(data));
-    } catch (e) {
+    } catch {
     }
   }, 300);
 }
@@ -163,7 +163,7 @@ async function connect() {
       if (seq !== connectSeq) {
         try {
           socket.close();
-        } catch (e) {
+        } catch {
         }
         return;
       }
@@ -174,14 +174,14 @@ async function connect() {
       pingTimer = setInterval(() => {
         try {
           socket.send(JSON.stringify({ id: String(Date.now()), type: "ping" }));
-        } catch (e) {
+        } catch {
         }
       }, Math.max(5e3, b.pingInterval - 2e3));
       watchTimer = setInterval(() => {
         if (Date.now() - streamState.lastMsgAt > b.pingInterval + b.pingTimeout + 4e3) {
           try {
             socket.close();
-          } catch (e) {
+          } catch {
           }
         }
       }, 5e3);
@@ -191,7 +191,7 @@ async function connect() {
     socket.onmessage = (ev) => {
       try {
         handleData(JSON.parse(ev.data));
-      } catch (e) {
+      } catch {
       }
     };
     socket.onerror = () => {
@@ -207,7 +207,7 @@ async function connect() {
     };
   } catch (e) {
     streamState.connecting = false;
-    streamState.error = e.message || String(e);
+    streamState.error = String(e?.message || e);
     if (onStatus) onStatus({ ...streamState });
     scheduleRetry();
   }
@@ -238,7 +238,7 @@ function setStreamSymbol(sym) {
     if (old) for (const t of topics(old)) {
       try {
         ws.send(JSON.stringify({ id: "u" + Date.now() + t.length, type: "unsubscribe", topic: t, privateChannel: false, response: false }));
-      } catch (e) {
+      } catch {
       }
     }
     subscribe();
@@ -255,7 +255,7 @@ function stopStream() {
   if (ws) {
     try {
       ws.close();
-    } catch (e) {
+    } catch {
     }
     ws = null;
   }
@@ -346,9 +346,11 @@ function beep(tone) {
       try {
         c.close();
       } catch (e) {
+        logSwallow("silent-catch", e);
       }
     }, 800);
   } catch (e) {
+    logSwallow("silent-catch", e);
   }
 }
 function lnPlugin() {
@@ -417,6 +419,7 @@ function startSilentKeepAlive() {
       });
     }, 15e3);
   } catch (e) {
+    logSwallow("silent-catch", e);
   }
 }
 function startForegroundSvc() {
@@ -444,6 +447,7 @@ function startForegroundSvc() {
       }).catch(() => {
       });
   } catch (e) {
+    logSwallow("silent-catch", e);
   }
 }
 function startNativeKeepAlive() {
@@ -454,17 +458,20 @@ function startNativeKeepAlive() {
     N.acquireWakeLock && N.acquireWakeLock().catch(() => {
     });
   } catch (e) {
+    logSwallow("silent-catch", e);
   }
   try {
     N.startWatchdog && N.startWatchdog().catch(() => {
     });
   } catch (e) {
+    logSwallow("silent-catch", e);
   }
   if (!window.__kingHb) window.__kingHb = setInterval(() => {
     try {
       N.heartbeat && N.heartbeat().catch(() => {
       });
     } catch (e) {
+      logSwallow("silent-catch", e);
     }
   }, 15e3);
   pushLog("server", "\u0642\u0641\u0644 \u0627\u0644\u0645\u0639\u0627\u0644\u062C \u0648\u0627\u0644\u0645\u0646\u0639\u0651\u0627\u0634 \u0627\u0644\u0630\u0627\u062A\u064A \u0641\u0639\u0651\u0627\u0644\u0627\u0646 \u2014 \u0627\u0644\u0645\u062D\u0631\u0643 \u0644\u0627 \u064A\u0646\u0627\u0645 \u0628\u0625\u0637\u0641\u0627\u0621 \u0627\u0644\u0634\u0627\u0634\u0629");
@@ -478,6 +485,7 @@ function logRevival() {
       pushLog("server", "\u0623\u064F\u0646\u0639\u0634 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0628\u0639\u062F \u062A\u062C\u0645\u064A\u062F \u0627\u0644\u0646\u0638\u0627\u0645 \u0644\u0647 \u2014 \u0627\u0633\u062A\u0624\u0646\u0641 \u0627\u0644\u0639\u0645\u0644 \u062E\u0644\u0627\u0644 " + s + " \u062B");
     }
   } catch (e) {
+    logSwallow("silent-catch", e);
   }
 }
 function clearNativeOngoing() {
@@ -493,6 +501,7 @@ function notify(txt, kind) {
         try {
           beep("bell");
         } catch (e) {
+          logSwallow("silent-catch", e);
         }
       }, 200);
     } else if (kind === "warn") {
@@ -501,6 +510,7 @@ function notify(txt, kind) {
     try {
       navigator.vibrate && navigator.vibrate(kind === "win" ? [80, 60, 140] : 120);
     } catch (e) {
+      logSwallow("silent-catch", e);
     }
   }
   pushLog(kind === "warn" ? "error" : "fill", txt);
@@ -535,7 +545,7 @@ async function remoteCmd(action, payload) {
     });
     return await r.json();
   } catch (e) {
-    return { ok: false, error: String(e && e.message || e) };
+    return { ok: false, error: String(e?.message || e) };
   }
 }
 var _remoteFails = 0;
@@ -567,6 +577,7 @@ function relayServerLogs() {
           try {
             beep("bell");
           } catch (e) {
+            logSwallow("silent-catch", e);
           }
         }, 200);
       } else if (l.kind === "error") beep("alarm");
@@ -574,6 +585,7 @@ function relayServerLogs() {
       try {
         navigator.vibrate && navigator.vibrate(win ? [80, 60, 140] : 120);
       } catch (e) {
+        logSwallow("silent-catch", e);
       }
     }
     nativeNotify("KING Trading", l.text);
@@ -703,6 +715,7 @@ function saveAll() {
     localStorage.setItem("king:rt", JSON.stringify(rt));
     localStorage.setItem("king:mem", JSON.stringify(S.memory || { pairs: {}, cycles: 0, totalPnl: 0 }));
   } catch (e) {
+    logSwallow("silent-catch", e);
   }
 }
 function loadAll() {
@@ -752,10 +765,23 @@ function loadAll() {
     const mem = JSON.parse(localStorage.getItem("king:mem") || "null");
     S.memory = { v: 3, pairs: {}, cycles: 0, totalPnl: 0, profiles: mem && mem.profiles || {} };
   } catch (e) {
+    logSwallow("silent-catch", e);
   }
 }
 function pushLog(kind, text) {
   S.logs = [{ id: uid("l"), at: Date.now(), kind, text }, ...S.logs].slice(0, 80);
+}
+var _swallowAt = {};
+function logSwallow(where, err) {
+  try {
+    const key = where + "|" + String(err && err.message || err || "");
+    const now = Date.now();
+    if (now - (_swallowAt[key] || 0) < 18e4) return;
+    _swallowAt[key] = now;
+    const msg = String(err && err.message || err || "unknown");
+    pushLog("warn", where + ": " + msg);
+  } catch (e2) {
+  }
 }
 function pushJr(row) {
   S.journal = [row, ...S.journal].slice(0, 120);
@@ -775,7 +801,7 @@ async function kcFetch(path, opts) {
     try {
       return await fetch(API_BASE + path, opts);
     } catch (e) {
-      if (e && e.name === "AbortError") throw e;
+      if (e?.name === "AbortError") throw e;
       API_BASE = "/kucoin";
       return await fetch(API_BASE + path, freshOpts(opts));
     }
@@ -784,7 +810,7 @@ async function kcFetch(path, opts) {
   try {
     res = await fetch(API_BASE + path, opts);
   } catch (e) {
-    if (e && e.name === "AbortError") throw e;
+    if (e?.name === "AbortError") throw e;
     API_BASE = DIRECT_BASE;
     return await fetch(API_BASE + path, freshOpts(opts));
   }
@@ -971,6 +997,7 @@ async function scanRadar() {
           out.trendPct = (out.price - ks[ks.length - 20].o) / ks[ks.length - 20].o * 100;
         }
       } catch (e) {
+        logSwallow("silent-catch", e);
       }
       try {
         const t = await fetchTicker(r.symbol);
@@ -978,6 +1005,7 @@ async function scanRadar() {
         if (bb > 0 && ba > 0) out.spread = (ba - bb) / ((ba + bb) / 2) * 100;
         if (!out.price) out.price = +t.price || 0;
       } catch (e) {
+        logSwallow("silent-catch", e);
       }
       return out;
     }));
@@ -995,7 +1023,7 @@ async function scanRadar() {
         turnover: d.turnover,
         grade: s.score >= 65 ? "\u{1F7E2}" : s.score >= 45 ? "\u{1F7E1}" : "\u{1F534}"
       };
-    }).sort((a, b) => b.score - a.score || (b.state === "\u0639\u0631\u0636\u064A \u0645\u062A\u0630\u0628\u0630\u0628") - (a.state === "\u0639\u0631\u0636\u064A \u0645\u062A\u0630\u0628\u0630\u0628") || b.turnover - a.turnover);
+    }).sort((a, b) => b.score - a.score || (b.state === "\u0639\u0631\u0636\u064A \u0645\u062A\u0630\u0628\u0630\u0628" ? 1 : 0) - (a.state === "\u0639\u0631\u0636\u064A \u0645\u062A\u0630\u0628\u0630\u0628" ? 1 : 0) || b.turnover - a.turnover);
     S.radar = { at: Date.now(), list };
     const cur = list.find((l) => l.symbol === S.config.symbol);
     const top = list[0];
@@ -1076,11 +1104,12 @@ async function placeOrderSmart(body) {
       }
     }
   } catch (_) {
+    logSwallow("silent-catch", _);
   }
   try {
     return await kcPrivate("POST", "/api/v1/orders", body);
   } catch (e) {
-    let m = e.message || String(e);
+    let m = e?.message || String(e);
     const isFunds = (x) => /insufficient|too high|available margin|available balance/i.test(x);
     const isMode = (x) => /margin mode|330005/i.test(x);
     if (body.postOnly && !isFunds(m) && !isMode(m)) {
@@ -1089,7 +1118,7 @@ async function placeOrderSmart(body) {
       try {
         return await kcPrivate("POST", "/api/v1/orders", b3);
       } catch (e2) {
-        m = e2.message || String(e2);
+        m = e2?.message || String(e2);
         body = b3;
       }
     }
@@ -1108,6 +1137,7 @@ async function placeOrderSmart(body) {
           { marginMode: "CROSS", symbols: [sym] }
         );
       } catch (_) {
+        logSwallow("silent-catch", _);
       }
     }
     const errs = [m];
@@ -1121,7 +1151,7 @@ async function placeOrderSmart(body) {
         mmCache[sym] = { at: Date.now(), mode: alt };
         return r;
       } catch (e3) {
-        const m3 = e3.message || String(e3);
+        const m3 = e3?.message || String(e3);
         if (!errs.includes(m3)) errs.push(m3);
       }
     }
@@ -1216,7 +1246,7 @@ async function exPlaceStopGuard() {
   const dDis = LOSS_STOP_USD / notional * 1.1;
   const cands = [sh ? e * (1 + dDis) : e * (1 - dDis)];
   if (liq > 0) cands.push(sh ? liq * 0.99 : liq * 1.01);
-  let gp = roundTick(sh ? Math.min(...cands) : Math.max(...cands), S.tickSize || 1e-10);
+  const gp = roundTick(sh ? Math.min(...cands) : Math.max(...cands), S.tickSize || 1e-10);
   if (!(gp > 0) || (sh ? gp <= mark * 1.003 : gp >= mark * 0.997)) {
     S._guardId = null;
     return;
@@ -1247,7 +1277,7 @@ async function exPlaceStopGuard() {
   } catch (e2) {
     if (!S._guardErrAt || Date.now() - S._guardErrAt > 3e5) {
       S._guardErrAt = Date.now();
-      pushLog("error", "\u0627\u0644\u062D\u0627\u0631\u0633 \u0627\u0644\u062E\u0627\u062F\u0645\u064A: " + (e2.message || e2));
+      pushLog("error", "\u0627\u0644\u062D\u0627\u0631\u0633 \u0627\u0644\u062E\u0627\u062F\u0645\u064A: " + String(e2?.message || e2));
     }
   }
 }
@@ -1848,10 +1878,10 @@ function sessionOf(ts) {
   const h = new Date(ts).getUTCHours();
   return h < 8 ? "\u0622\u0633\u064A\u0627" : h < 16 ? "\u0623\u0648\u0631\u0648\u0628\u0627" : "\u0623\u0645\u0631\u064A\u0643\u0627";
 }
-function learnTrade(side, pnl) {
+function learnTrade(_side, _pnl) {
   return;
 }
-function learnSlippage(side, slipPct) {
+function learnSlippage(_side, _slipPct) {
   return;
 }
 function memStats() {
@@ -2107,6 +2137,7 @@ function fillLevel(id, fp, taker) {
           const lp = await exPosition(S.config.symbol);
           q = lp ? Math.min(q, lp.size) : 0;
         } catch (_) {
+          logSwallow("silent-catch", _);
         }
         if (q > 0) await exCloseQty(S.config.symbol, cSide, q).catch((e) => pushLog("error", "\u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u062C\u0646\u064A \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0641\u0634\u0644: " + (e.message || e)));
       })();
@@ -2276,7 +2307,7 @@ function huntAligned() {
   }
   return true;
 }
-function dangerVeto(p) {
+function dangerVeto(_p) {
   const short = S.config.direction === "short";
   if (!bookQuality()) return "\u062F\u0641\u062A\u0631 \u0623\u0648 \u0633\u0628\u0631\u064A\u062F \u0631\u062F\u064A\u0621";
   if (toxicBlocked(S.config.direction)) return "\u0627\u062A\u062C\u0627\u0647 \u0633\u0627\u0645 \u0641\u064A \u0627\u0644\u0630\u0627\u0643\u0631\u0629 (\u064A\u064F\u0639\u0627\u062F \u0627\u062E\u062A\u0628\u0627\u0631\u0647 \u0643\u0644 \u0633\u0627\u0639\u0629)";
@@ -2388,13 +2419,13 @@ function warmedUp() {
   if ((S.tape || []).length < 12) return false;
   return true;
 }
-function memRec(dir2) {
+function memRec(_dir) {
   return null;
 }
 function smWR(r) {
   return (r.w + 1) / (r.n + 2);
 }
-function sanctionLevel(dir2) {
+function sanctionLevel(_dir) {
   return 0;
 }
 function toxicDir(dir2) {
@@ -2888,6 +2919,7 @@ function onStreamTick(d) {
       try {
         harvestRipe(d.price);
       } catch (e) {
+        logSwallow("silent-catch", e);
       }
     }
   }
@@ -2970,6 +3002,7 @@ async function loadMarket(full) {
         S._btcPrev = { px: bp, at: Date.now() };
       }
     } catch (e) {
+      logSwallow("silent-catch", e);
     }
   }
   return m;
@@ -2983,8 +3016,9 @@ async function liveSync() {
   const sym = S.config.symbol;
   try {
     const pos = await exPosition(sym);
+    const inGrace = S.ignoreExchangeUntil && Date.now() < S.ignoreExchangeUntil;
     if (pos) {
-      if (S.ignoreExchangeUntil && Date.now() < S.ignoreExchangeUntil && !S.position) {
+      if (inGrace && !S.position) {
       } else if (!S.position) {
         S.position = pos;
         pushLog("recover", "\u0627\u0633\u062A\u064F\u0639\u064A\u062F \u0645\u0631\u0643\u0632 " + pos.side + " \u0645\u0646 \u0627\u0644\u0645\u0646\u0635\u0629");
@@ -3048,7 +3082,7 @@ async function liveSync() {
     }
     if (S.position) exPlaceStopGuard();
   } catch (e) {
-    const m = e.message || String(e);
+    const m = String(e?.message || e);
     if (m !== _syncErrMsg || Date.now() - _syncErrAt > 6e4) {
       _syncErrAt = Date.now();
       _syncErrMsg = m;
@@ -3138,7 +3172,7 @@ async function liveSync() {
         l.status = "open";
         l.exchangeOrderId = r.orderId;
       } catch (e) {
-        const m = e.message || String(e);
+        const m = String(e?.message || e);
         if (/access denied|permission/i.test(m)) {
           if (!S.permDenied) {
             S.permDenied = true;
@@ -3159,6 +3193,7 @@ async function liveSync() {
         try {
           await kcPrivate("DELETE", "/api/v1/orders/" + o.orderId);
         } catch (e) {
+          logSwallow("silent-catch", e);
         }
       }
     }
@@ -3170,12 +3205,13 @@ async function liveSync() {
           try {
             await kcPrivate("DELETE", "/api/v1/stopOrders/" + st.id);
           } catch (e) {
+            logSwallow("silent-catch", e);
           }
         }
       }
     }
   } catch (e) {
-    const m = e.message || String(e);
+    const m = String(e?.message || e);
     if (m !== _syncErrMsg || Date.now() - _syncErrAt > 6e4) {
       _syncErrAt = Date.now();
       _syncErrMsg = m;
@@ -3216,6 +3252,7 @@ async function botTick() {
     try {
       m = await loadMarket(full);
     } catch (e) {
+      logSwallow("silent-catch", e);
     }
     const price = S.lastPrice || m.price || 0;
     if (S.status === "idle") {
@@ -3266,7 +3303,7 @@ async function botTick() {
             await exPlaceMarket(S.config.symbol, hunt.side, hunt.qty);
             done = true;
           } catch (e) {
-            const m2 = e.message || String(e);
+            const m2 = String(e?.message || e);
             if (/access denied|permission/i.test(m2)) {
               S.permDenied = true;
               pushLog("error", "\u26D4 \u0627\u0644\u0645\u0641\u062A\u0627\u062D \u0628\u0644\u0627 \u0635\u0644\u0627\u062D\u064A\u0629 \u062A\u062F\u0627\u0648\u0644 \u2014 \u0641\u0639\u0651\u0644 \xAB\u0627\u0644\u062A\u062F\u0627\u0648\u0644\xBB \u0644\u0644\u0639\u0642\u0648\u062F \u0627\u0644\u0622\u062C\u0644\u0629 \u0641\u064A KuCoin \u062B\u0645 \u0627\u062D\u0641\u0638 \u0627\u0644\u0645\u0641\u0627\u062A\u064A\u062D \u0645\u062C\u062F\u062F\u064B\u0627");
@@ -3291,21 +3328,24 @@ async function botTick() {
       try {
         await liveSync();
       } catch (e) {
+        logSwallow("silent-catch", e);
       }
     }
     try {
       maybeReport();
     } catch (e) {
+      logSwallow("silent-catch", e);
     }
     try {
       heartbeatBeat(price || m.price);
     } catch (e) {
+      logSwallow("silent-catch", e);
     }
     emit();
     saveAll();
   } catch (e) {
     S.lastTickAt = Date.now();
-    if (!/abort|timeout|429|50[0-4]|fetch/i.test(e.message || "")) pushLog("error", e.message || String(e));
+    if (!/abort|timeout|429|50[0-4]|fetch/i.test(String(e?.message || ""))) pushLog("error", String(e?.message || e));
   }
 }
 function startBot() {
@@ -3388,18 +3428,21 @@ async function stopBot() {
       await exCancelStops(S.config.symbol);
       S._guardId = null;
     } catch (e) {
+      logSwallow("silent-catch", e);
     }
     let flat = false;
     for (let i = 0; i < 4 && !flat; i++) {
       try {
         await exClose(S.config.symbol, prevSide);
       } catch (e) {
+        logSwallow("silent-catch", e);
       }
       try {
         await new Promise((r) => setTimeout(r, 700));
         const pos = await exPosition(S.config.symbol);
         flat = !pos;
       } catch (e) {
+        logSwallow("silent-catch", e);
       }
     }
     S.ignoreExchangeUntil = Date.now() + 15e3;
@@ -3500,7 +3543,7 @@ async function saveKeys(k) {
   } catch (e) {
     S.linkOk = false;
     S.exEquity = null;
-    toast("\u062D\u064F\u0641\u0638\u062A \u0627\u0644\u0645\u0641\u0627\u062A\u064A\u062D \u0644\u0643\u0646 \u0641\u0634\u0644 \u0627\u0644\u0627\u062A\u0635\u0627\u0644: " + (e.message || e));
+    toast("\u062D\u064F\u0641\u0638\u062A \u0627\u0644\u0645\u0641\u0627\u062A\u064A\u062D \u0644\u0643\u0646 \u0641\u0634\u0644 \u0627\u0644\u0627\u062A\u0635\u0627\u0644: " + String(e?.message || e));
   }
   emit();
   return S.linkOk;
@@ -3625,6 +3668,7 @@ function initEngine() {
       });
     }
   } catch (e) {
+    logSwallow("silent-catch", e);
   }
   if (R()) {
     pushLog("info", "\u0648\u0636\u0639 \u0633\u064A\u0631\u0641\u0631 \u0627\u0644\u062C\u0648\u0627\u0644 \u2014 \u0627\u0644\u0645\u062D\u0631\u0643 \u064A\u0639\u0645\u0644 \u0641\u064A Termux \u0628\u0644\u0627 \u0646\u0648\u0645");
@@ -3676,6 +3720,7 @@ function initEngine() {
       if (S.lastPrice) try {
         harvestRipe(S.lastPrice);
       } catch (e) {
+        logSwallow("silent-catch", e);
       }
     }
   });
@@ -3716,7 +3761,7 @@ var srv = createServer(async (req, res) => {
       let j = {};
       try {
         j = JSON.parse(body || "{}");
-      } catch (e) {
+      } catch {
       }
       const a = String(j.action || "");
       switch (a) {

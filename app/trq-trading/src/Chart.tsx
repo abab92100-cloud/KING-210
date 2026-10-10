@@ -1,4 +1,3 @@
-// @ts-nocheck
 /* ================================================================
    شارت احترافي — شموع يابانية + إطارات زمنية + مناطق:
    منطقة الدخول (عنبر) · منطقة جني الربح (خضراء) ·
@@ -6,6 +5,17 @@
    ================================================================ */
 import { useEffect, useRef, useState } from 'react';
 import { S, fetchKlines, fmtPx } from './engine';
+declare global {
+  interface Window {
+    Capacitor?: any;
+    webkitAudioContext?: any;
+    __kingHb?: any;
+    __KING_REMOTE?: string | null;
+    __chartDbg?: any;
+    __S?: any;
+  }
+}
+
 
 const TFS = [
   { label: '1د', gran: 1 },
@@ -22,12 +32,12 @@ const cacheGet = k => { const e = kCache[k]; return (e && Date.now() - e.at < 90
 const cacheSet = (k, cs) => { kCache[k] = { at: Date.now(), cs }; };
 
 export default function Chart() {
-  const ref = useRef(null);
+  const ref = useRef<any>(null);
   const [gran, setGran] = useState(1);
   const [viewN, setViewN] = useState(MAX_CANDLES); // عدد الشموع المعروض (تكبير/تصغير)
   const [, forceDraw] = useState(0);               // إجبار إعادة الرسم فور وصول البيانات
-  const pinch = useRef(null);
-  const dataRef = useRef({ key: '', candles: cacheGet(S.config.symbol + ':1'), loading: false });
+  const pinch = useRef<any>(null);
+  const dataRef = useRef<any>({ key: '', candles: cacheGet(S.config.symbol + ':1'), loading: false, fails: 0 });
 
   // جلب الشموع عند تغيير الزوج أو الإطار + تحديث دوري
   useEffect(() => {
@@ -35,7 +45,7 @@ export default function Chart() {
     const key = S.config.symbol + ':' + gran;
     // عند تبديل الفريم أو العملة: امسح شموع السابق فورًا — كاش قديم جدًا لا يُعرض أبدًا
     dataRef.current = { key, candles: cacheGet(key), loading: false, fails: 0 };
-    forceDraw(n => n + 1);
+    const t=setTimeout(()=>forceDraw(n => n + 1),0);
     const load = () => {
       if (dataRef.current.loading) return; // لا طلبات متراكبة — تكديس الطلبات يستدعي حظر المعدل
       dataRef.current.loading = true;
@@ -58,7 +68,7 @@ export default function Chart() {
     };
     load();
     const iv = setInterval(load, 15000);
-    return () => { alive = false; clearInterval(iv); };
+    return () => { alive = false; clearTimeout(t); clearInterval(iv); };
   }, [S.config.symbol, gran]);
 
   useEffect(() => {

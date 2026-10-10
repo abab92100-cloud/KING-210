@@ -1,5 +1,4 @@
-// @ts-nocheck
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   S, subscribe, initEngine, startBot, pauseBot, stopBot, newCycle,
   saveKeys, clearKeys, saveCfg, equity, desk, pulseAge, fmtPx, fmtUsd, fmtTime,
@@ -7,13 +6,25 @@ import {
 } from './engine';
 import { streamState } from './ws';
 import Chart from './Chart';
+declare global {
+  interface Window {
+    Capacitor?: any;
+    webkitAudioContext?: any;
+    __kingHb?: any;
+    __KING_REMOTE?: string | null;
+    __chartDbg?: any;
+    __S?: any;
+  }
+}
+
 
 function useEngine() {
   const [, setN] = useState(0);
   useEffect(() => {
     // جسّ سيرفر Termux أولًا: إن وُجد يعمل هو بالمحرك ونصبح واجهة — بلا جسّ لا يتغير شيء
     (async () => { await detectRemoteServer().catch(() => false); initEngine(); })();
-    return subscribe(() => setN(n => n + 1));
+    const un:any = subscribe(() => setN(n => n + 1));
+    return () => { if (typeof un === 'function') un(); };
   }, []);
 }
 
@@ -36,7 +47,7 @@ const dispSym = s => String(s || '').replace(/USDTM$/i, '/USDT').replace(/^XBT/i
 /* ---------- بحث أزواج المنصة ---------- */
 function SymbolPicker({ value, onPick }) {
   const [query, setQuery] = useState('');
-  const [all, setAll] = useState([]);
+  const [all, setAll] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
   useEffect(() => { listContracts().then(setAll).catch(() => {}); }, []);
   const q = query.trim().toUpperCase();
@@ -82,7 +93,9 @@ const QUICK = ['XBTUSDTM','ETHUSDTM','SOLUSDTM','XRPUSDTM','DOGEUSDTM','PEPEUSDT
 /* ---------- حالة القناة ---------- */
 function WsBar() {
   const st = streamState;
-  const silentMs = st.lastMsgAt ? Date.now() - st.lastMsgAt : null;
+  const [now,setTick]=useState(()=>Date.now());
+  useEffect(()=>{ const t=setInterval(()=>setTick(Date.now()),1000); return ()=>clearInterval(t); },[]);
+  const silentMs = st.lastMsgAt ? now - st.lastMsgAt : null;
   const alive = st.connected && silentMs != null && silentMs < 5000;
   return (
     <div className="wsbar">
@@ -104,7 +117,9 @@ function HomeScreen() {
   const first = S.priceTrail[0];
   const chg = first > 0 && S.lastPrice ? ((S.lastPrice - first) / first) * 100 : 0;
   const net = S.position ? S.position.unrealized : 0; // صافي الصفقة الحالية فقط — المجني له مربعه الخاص
-  const live = S.status === 'running' && S.lastTickAt && Date.now() - S.lastTickAt < 15000;
+  const [now,setTick]=useState(()=>Date.now());
+  useEffect(()=>{ const t=setInterval(()=>setTick(Date.now()),5000); return ()=>clearInterval(t); },[]);
+  const live = S.status === 'running' && S.lastTickAt && now - S.lastTickAt < 15000;
   const liqDangerNow = S.liqPrice && S.lastPrice &&
     (S.position && S.position.side === 'long' ? S.lastPrice <= S.liqPrice * 1.05 : S.lastPrice >= S.liqPrice * 0.95);
   return (
@@ -234,7 +249,7 @@ function RadarScreen() {
 }
 
 /* ---------- المراكز ---------- */
-function OrderRow({ l, tp }) {
+function OrderRow({ l, tp }: any) {
   return (
     <div className="orow">
       <span className={'badge ' + (tp ? 'b' : 'g')}>{tp ? 'جني' : l.status === 'open' ? 'مفتوح' : 'مسلّح'}</span>
@@ -457,7 +472,9 @@ function SettingsScreen() {
 export default function App() {
   useEngine();
   const [tab, setTab] = useState('home');
-  const toast = S.toastMsg && Date.now() - S.toastMsg.at < 2600 ? S.toastMsg.text : null;
+  const [now,setToastTick]=useState(()=>Date.now());
+  useEffect(()=>{ const t=setInterval(()=>setToastTick(Date.now()),1200); return ()=>clearInterval(t); },[]);
+  const toast = S.toastMsg && now - S.toastMsg.at < 2600 ? S.toastMsg.text : null;
   return (
     <div>
       <header>

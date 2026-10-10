@@ -1,4 +1,14 @@
-// @ts-nocheck
+declare global {
+  interface Window {
+    Capacitor?: any;
+    webkitAudioContext?: any;
+    __kingHb?: any;
+    __KING_REMOTE?: string | null;
+    __chartDbg?: any;
+    __S?: any;
+  }
+}
+
 /* ================================================================
    KuCoin Futures — عميل WebSocket عام (تدفق مستمر بلا انقطاع)
    - يجلب رمز bullet-public عبر البروكسي المحلي (/kucoin)
@@ -12,11 +22,11 @@ let REST=(typeof window!=='undefined'&&(window.Capacitor||location.protocol==='c
 
 export const streamState = {
   connected:false, connecting:false, lastMsgAt:0, bookAt:0, tradeAt:0,
-  msgs:0, reconnects:0, error:null,
+  msgs:0, reconnects:0, error:null as any,
 };
 
-let ws=null, pingTimer=null, watchTimer=null, retryTimer=null;
-let symbol=null, onMessage=null, onStatus=null;
+let ws:any=null, pingTimer:any=null, watchTimer:any=null, retryTimer:any=null;
+let symbol:any=null, onMessage:any=null, onStatus:any=null;
 let stopped=true, attempts=0, connectSeq=0;
 
 async function getBullet(){
@@ -92,23 +102,23 @@ async function connect(){
     const socket=new WebSocket(b.endpoint+'?token='+b.token+'&connectId='+seq+'_'+Date.now().toString(36));
     ws=socket;
     socket.onopen=()=>{
-      if(seq!==connectSeq){ try{socket.close();}catch(e){} return; }
+      if(seq!==connectSeq){ try{socket.close();}catch{ /* intentional: optional step */ } return; }
       attempts=0;
       streamState.connected=true; streamState.connecting=false;
       subscribe();
       pingTimer=setInterval(()=>{
-        try{ socket.send(JSON.stringify({id:String(Date.now()),type:'ping'})); }catch(e){}
+        try{ socket.send(JSON.stringify({id:String(Date.now()),type:'ping'})); }catch{ /* intentional: optional step */ }
       },Math.max(5000,b.pingInterval-2000));
       // مراقب النبض: إن صمت الخادم أكثر من المهلة نُغلق لإجبار إعادة الاتصال
       watchTimer=setInterval(()=>{
         if(Date.now()-streamState.lastMsgAt>b.pingInterval+b.pingTimeout+4000){
-          try{socket.close();}catch(e){}
+          try{socket.close();}catch{ /* intentional: optional step */ }
         }
       },5000);
       streamState.lastMsgAt=Date.now();
       if(onStatus) onStatus({...streamState});
     };
-    socket.onmessage=(ev)=>{ try{ handleData(JSON.parse(ev.data)); }catch(e){} };
+    socket.onmessage=(ev)=>{ try{ handleData(JSON.parse(ev.data)); }catch{ /* intentional: optional step */ } };
     socket.onerror=()=>{ streamState.error='خطأ في القناة'; };
     socket.onclose=()=>{
       if(seq!==connectSeq) return;
@@ -118,7 +128,7 @@ async function connect(){
       scheduleRetry();
     };
   }catch(e){
-    streamState.connecting=false; streamState.error=e.message||String(e);
+    streamState.connecting=false; streamState.error=String((e as any)?.message||e);
     if(onStatus) onStatus({...streamState});
     scheduleRetry();
   }
@@ -148,7 +158,7 @@ export function setStreamSymbol(sym){
   if(ws&&ws.readyState===1){
     // إلغاء اشتراك الزوج القديم حتى لا تختلط بياناته مع الجديد
     if(old) for(const t of topics(old)){
-      try{ ws.send(JSON.stringify({id:'u'+Date.now()+t.length,type:'unsubscribe',topic:t,privateChannel:false,response:false})); }catch(e){}
+      try{ ws.send(JSON.stringify({id:'u'+Date.now()+t.length,type:'unsubscribe',topic:t,privateChannel:false,response:false})); }catch{ /* intentional: optional step */ }
     }
     subscribe();
   }
@@ -159,7 +169,7 @@ export function stopStream(){
   if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
   clearTimers();
   connectSeq++;
-  if(ws){ try{ws.close();}catch(e){} ws=null; }
+  if(ws){ try{ws.close();}catch{ /* intentional: optional step */ } ws=null; }
   streamState.connected=false; streamState.connecting=false;
 }
 

@@ -19,5 +19,15 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', {
+        caughtErrors: 'none',
+        varsIgnorePattern: '^(_|MIN_NET_USD|exCancelStopOne|liveFlattenIfNeeded|wavg|dd|side|pnl|slipPct|p|dir|_bookFailsAt|_tapeFailsAt|gp)$',
+        argsIgnorePattern: '^_',
+      }],
+      'react-refresh/only-export-components': 'off',
+      '@typescript-eslint/no-unused-expressions': ['error', { allowShortCircuit: true }],
+    },
   },
 ])

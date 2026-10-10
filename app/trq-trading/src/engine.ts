@@ -1,4 +1,3 @@
-// @ts-nocheck
 /* ================================================================
    KING Trading — بوت تداول عقود KuCoin الآجلة
    النسخة المتصلة: بيانات لحظية عبر WebSocket (دفع مستمر) +
@@ -7,6 +6,17 @@
    انعكاس بشبكتين واسعتين + هروب من التصفية.
    ================================================================ */
 import { startStream, setStreamSymbol, streamState } from './ws';
+declare global {
+  interface Window {
+    Capacitor?: any;
+    webkitAudioContext?: any;
+    __kingHb?: any;
+    __KING_REMOTE?: string | null;
+    __chartDbg?: any;
+    __S?: any;
+  }
+}
+
 
 const TICK_MS = 1000; // القرارات كل ثانية على أسعار لحظية من القناة
 const MIN_NET_USD = 0.05, MAX_HUNT_OPEN = 3, HUNT_COOLDOWN = 10000,
@@ -52,7 +62,7 @@ function beep(tone){ try{ const c=_kaCtx||new (window.AudioContext||window.webki
   else { o.type='sine'; o.frequency.setValueAtTime(880,t);
     o.frequency.exponentialRampToValueAtTime(660,t+.14);
     g.gain.setValueAtTime(.1,t); g.gain.exponentialRampToValueAtTime(.001,t+.22); o.start(t); o.stop(t+.24); }
-  if(c!==_kaCtx) setTimeout(()=>{ try{c.close();}catch(e){} },800); }catch(e){} }
+  if(c!==_kaCtx) setTimeout(()=>{ try{c.close();}catch(e){ logSwallow("silent-catch", e); } },800); }catch(e){ logSwallow("silent-catch", e); } }
 /* إشعارات الجوال الأصلية — تعمل والتطبيق في الخلفية */
 function lnPlugin(){ try{ return window.Capacitor&&window.Capacitor.Plugins&&window.Capacitor.Plugins.LocalNotifications; }catch(e){ return null; } }
 let _channelsReady=false;
@@ -63,7 +73,7 @@ function ensureChannels(LN){ if(_channelsReady||!LN.createChannel) return; _chan
   // قناة حالة دائمة صامتة للإشعار المستمر
   LN.createChannel({id:'king_status',name:'حالة KING',description:'إشعار البقاء الدائم',
     importance:2,visibility:-1,vibration:false}).catch(()=>{}); }
-function nativeNotify(title,body,ongoing){ const LN=lnPlugin(); if(!LN) return;
+function nativeNotify(title:any,body:any,ongoing?:any){ const LN=lnPlugin(); if(!LN) return;
   ensureChannels(LN);
   LN.requestPermissions().then(r=>{ if(r.display!=='granted') return;
     LN.schedule({notifications:[{id:ongoing?7:((Date.now()%2000000000)+10),
@@ -71,13 +81,13 @@ function nativeNotify(title,body,ongoing){ const LN=lnPlugin(); if(!LN) return;
       channelId:ongoing?'king_status':'king_alerts'}]}).catch(()=>{}); }).catch(()=>{}); }
 /* بقاء صوتي صامت — تشغيل تيار صوتي غير مسموع يمنع نظام الويب من خنق
    مؤقتات المحرك وقناة الأسعار عند إطفاء الشاشة (السبب الأكبر لتوقف البوت) */
-let _kaCtx=null;
+let _kaCtx:any=null;
 export function startSilentKeepAlive(){ if(_kaCtx||!(typeof window!=='undefined'&&window.Capacitor)) return;
   try{ const c=new (window.AudioContext||window.webkitAudioContext)(); _kaCtx=c;
     const o=c.createOscillator(),g=c.createGain(); g.gain.value=0.0001;
     o.frequency.value=18; o.connect(g); g.connect(c.destination); o.start();
     setInterval(()=>{ if(_kaCtx&&_kaCtx.state!=='running') _kaCtx.resume().catch(()=>{}); },15000);
-  }catch(e){} }
+  }catch(e){ logSwallow("silent-catch", e); } }
 /* خدمة أمامية أندرويد: إشعار دائم يُبقي العملية حية ويمنع النظام من قتلها في الخلفية،
    + طلب استثناء «تحسين البطارية» مرة واحدة — السبب الثاني الأكبر لتوقف البوت أثناء النوم */
 function startForegroundSvc(){ if(!(typeof window!=='undefined'&&window.Capacitor)) return;
@@ -92,43 +102,43 @@ function startForegroundSvc(){ if(!(typeof window!=='undefined'&&window.Capacito
         if(r&&r.enabled&&BO.requestIgnoreBatteryOptimization){
           localStorage.setItem('king_bo_asked','1');
           BO.requestIgnoreBatteryOptimization().catch(()=>{}); } }).catch(()=>{});
-  }catch(e){} }
+  }catch(e){ logSwallow("silent-catch", e); } }
 /* قفل استيقاظ المعالج + منعّاش أصلي: الإضافة المحلية KingNative تمنع نوم المعالج
    بإطفاء الشاشة، وتراقب نبض المحرك من خارج الويب فيو — إن جُمّد 90 ثانية
    أُعيد تحميل التطبيق تلقائيًا فيُستأنف الاتصال والعمل دون تدخل */
 function startNativeKeepAlive(){ if(!(typeof window!=='undefined'&&window.Capacitor)) return;
   const N=(window.Capacitor.Plugins||{}).KingNative; if(!N) return;
-  try{ N.acquireWakeLock&&N.acquireWakeLock().catch(()=>{}); }catch(e){}
-  try{ N.startWatchdog&&N.startWatchdog().catch(()=>{}); }catch(e){}
+  try{ N.acquireWakeLock&&N.acquireWakeLock().catch(()=>{}); }catch(e){ logSwallow("silent-catch", e); }
+  try{ N.startWatchdog&&N.startWatchdog().catch(()=>{}); }catch(e){ logSwallow("silent-catch", e); }
   if(!window.__kingHb) window.__kingHb=setInterval(()=>{
-    try{ N.heartbeat&&N.heartbeat().catch(()=>{}); }catch(e){} },15000);
+    try{ N.heartbeat&&N.heartbeat().catch(()=>{}); }catch(e){ logSwallow("silent-catch", e); } },15000);
   pushLog('server','قفل المعالج والمنعّاش الذاتي فعّالان — المحرك لا ينام بإطفاء الشاشة'); }
 // علامة الإنعاش: المنعّاش الأصلي أعاد تحميل التطبيق بعد تجميد — يُسجَّل عند الإقلاع
 function logRevival(){ try{ const at=localStorage.getItem('king_revived');
   if(at){ localStorage.removeItem('king_revived');
     const s=Math.max(1,Math.round((Date.now()-+at)/1000));
-    pushLog('server','أُنعش التطبيق تلقائيًا بعد تجميد النظام له — استؤنف العمل خلال '+s+' ث'); } }catch(e){} }
+    pushLog('server','أُنعش التطبيق تلقائيًا بعد تجميد النظام له — استؤنف العمل خلال '+s+' ث'); } }catch(e){ logSwallow("silent-catch", e); } }
 function clearNativeOngoing(){ const LN=lnPlugin(); if(LN) LN.cancel({notifications:[{id:7}]}).catch(()=>{}); }
-function notify(txt,kind){ if(S.sound){
+function notify(txt:any,kind?:any){ if(S.sound){
     // نغمة مميزة لكل حدث: ربح = نغمتان صاعدتان · تحذير = تنبيه قوي · عادي = النغمة المختارة
-    if(kind==='win'){ beep(S.soundTone); setTimeout(()=>{ try{beep('bell');}catch(e){} },200); }
+    if(kind==='win'){ beep(S.soundTone); setTimeout(()=>{ try{beep('bell');}catch(e){ logSwallow("silent-catch", e); } },200); }
     else if(kind==='warn'){ beep('alarm'); }
     else beep(S.soundTone);
-    try{navigator.vibrate&&navigator.vibrate(kind==='win'?[80,60,140]:120);}catch(e){} }
+    try{navigator.vibrate&&navigator.vibrate(kind==='win'?[80,60,140]:120);}catch(e){ logSwallow("silent-catch", e); } }
   pushLog(kind==='warn'?'error':'fill',txt); nativeNotify('KING Trading',txt); }
 
 /* ---------- مخزن الحالة + إشعارات الواجهة ---------- */
 const listeners=new Set();
-let emitTimer=null;
+let emitTimer:any=null;
 export function subscribe(fn){ listeners.add(fn); return ()=>listeners.delete(fn); }
-export function emit(){ for(const fn of [...listeners]) fn(); }
+export function emit(){ for(const fn of [...listeners] as any[]) fn(); }
 function emitThrottled(){
   if(emitTimer) return;
   // توفير البطارية: التطبيق في الخلفية = تحديثات واجهة أبطأ، والمحرك والتنفيذ بلا تغيير
   const d=(typeof document!=='undefined'&&document.hidden)?1500:300;
   emitTimer=setTimeout(()=>{ emitTimer=null; emit(); },d);
 }
-function toast(m){ S.toastMsg={text:m,at:Date.now()}; emit(); }
+function toast(m:any){ S.toastMsg={text:m,at:Date.now()}; emit(); }
 
 /* ================================================================
    وضع سيرفر الجوال (Termux) — العقل يعمل في Node دائمًا بلا نوم،
@@ -139,12 +149,12 @@ function toast(m){ S.toastMsg={text:m,at:Date.now()}; emit(); }
 // ملاحظة حاسمة: لا ثابت مُقيَّم عند التحميل — window.__KING_REMOTE يُضبط بعد تقييم الوحدة،
 // فدالة حية تقرأه كل مرة وإلا بقي null للأبد واشتغل محرك محلي موازٍ (أوامر مزدوجة!)
 const R=()=>(typeof window!=='undefined'&&window.__KING_REMOTE)?String(window.__KING_REMOTE):null;
-async function remoteCmd(action,payload){ const base=R(); if(!base) return {ok:false,error:'no server'};
+async function remoteCmd(action:any,payload?:any){ const base=R(); if(!base) return {ok:false,error:'no server'};
   try{ const r=await fetch(base+'/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action,...(payload||{})})});
-    return await r.json(); }catch(e){ return {ok:false,error:String(e&&e.message||e)}; } }
+    return await r.json(); }catch(e){ return {ok:false,error:String((e as any)?.message||e)}; } }
 let _remoteFails=0;
-let _remoteLogSeen=null; // أحدث ختم زمني لسجل السيرفر عولج — أول مزامنة تُؤسسه بلا إعادة تشغيل الماضي
+let _remoteLogSeen:any=null; // أحدث ختم زمني لسجل السيرفر عولج — أول مزامنة تُؤسسه بلا إعادة تشغيل الماضي
 let _relayText='', _relayAt=0; // مانع التكرار — نفس النص خلال دقيقة لا يُبلّغ مرتين
 function relayServerLogs(){ // أحداث السيرفر تعيش في Termux ولا تصل الواجهة وحدها —
   // كل حدث مهم (جني/فتح/كابح/خدش) يُترجم هنا صوتًا وإشعارًا أصليًا حتى والتطبيق في الخلفية
@@ -162,9 +172,9 @@ function relayServerLogs(){ // أحداث السيرفر تعيش في Termux و
     _relayText=l.text; _relayAt=Date.now(); sent++;
     const win=l.kind==='fill'&&/جني|ربح/.test(l.text||'');
     if(S.sound!==false){
-      if(win){ beep(S.soundTone); setTimeout(()=>{ try{beep('bell');}catch(e){} },200); }
+      if(win){ beep(S.soundTone); setTimeout(()=>{ try{beep('bell');}catch(e){ logSwallow("silent-catch", e); } },200); }
       else if(l.kind==='error') beep('alarm'); else beep(S.soundTone);
-      try{navigator.vibrate&&navigator.vibrate(win?[80,60,140]:120);}catch(e){} }
+      try{navigator.vibrate&&navigator.vibrate(win?[80,60,140]:120);}catch(e){ logSwallow("silent-catch", e); } }
     nativeNotify('KING Trading',l.text); } }
 export async function remoteSync(){ const base=R(); if(!base) return false;
   try{ const r=await fetch(base+'/state'); const j=await r.json();
@@ -183,11 +193,11 @@ export async function detectRemoteServer(){ if(typeof window==='undefined') retu
     const r=await fetch('http://127.0.0.1:8787/state',{signal:c.signal}); clearTimeout(t);
     const j=await r.json();
     if(j&&j.ok){ window.__KING_REMOTE='http://127.0.0.1:8787'; return true; }
-  }catch(e){}
+  }catch(e){ logSwallow("silent-catch", e); }
   return false; }
 
 /* ---------- الحالة ---------- */
-export const S = {
+export const S: any = {
   keys:null,
   config:{symbol:'XBTUSDTM',displaySymbol:'BTC',leverage:3,gridStepPct:0.3,huntPct:0.15,
     levels:12,direction:'short',directionMode:'auto',cycleBalance:100,mode:'paper',tpNet:0.12},
@@ -220,7 +230,7 @@ function saveAll(){ try{
     history:S.history,logs:S.logs,savedAt:Date.now()};
   localStorage.setItem('king:rt',JSON.stringify(rt));
   localStorage.setItem('king:mem',JSON.stringify(S.memory||{pairs:{},cycles:0,totalPnl:0}));
-}catch(e){} }
+}catch(e){ logSwallow("silent-catch", e); } }
 function loadAll(){ try{
   const cfg=JSON.parse(localStorage.getItem('king:cfg')||'null'); if(cfg) S.config={...S.config,...cfg};
   const ks=localStorage.getItem('king:keys'); if(ks){ try{S.keys=JSON.parse(ks);}catch(e){S.keys=null;} }
@@ -245,11 +255,22 @@ function loadAll(){ try{
   // بصمات العملات (دراسة 60 ثانية) تُحفظ — أما سجل التعلم فأُلغي نهائيًا بطلب المالك
   const mem=JSON.parse(localStorage.getItem('king:mem')||'null');
   S.memory={v:3,pairs:{},cycles:0,totalPnl:0,profiles:(mem&&mem.profiles)||{}};
-}catch(e){} }
+}catch(e){ logSwallow("silent-catch", e); } }
 
 /* ---------- السجل ---------- */
-function pushLog(kind,text){ S.logs=[{id:uid('l'),at:Date.now(),kind,text},...S.logs].slice(0,80); }
-function pushJr(row){ S.journal=[row,...S.journal].slice(0,120); }
+function pushLog(kind:any,text:any){ S.logs=[{id:uid('l'),at:Date.now(),kind,text},...S.logs].slice(0,80); }
+const _swallowAt={};
+function logSwallow(where:any,err:any){
+  try{
+    const key=where+'|'+String((err&&err.message)||err||'');
+    const now=Date.now();
+    if(now-(_swallowAt[key]||0)<180000) return;
+    _swallowAt[key]=now;
+    const msg=String((err&&err.message)||err||'unknown');
+    pushLog('warn', where + ': ' + msg);
+  }catch(e2){ /* rate-limit logger must never throw */ }
+}
+function pushJr(row:any){ S.journal=[row,...S.journal].slice(0,120); }
 
 /* ================================================================
    عميل KuCoin — REST عبر البروكسي المحلي /kucoin
@@ -267,13 +288,13 @@ async function kcFetch(path,opts){
     if(IS_NATIVE) return await fetch(API_BASE+path,opts);
     // تحوّل سابق بسبب عثرة بروكسي — إن فشل المباشر أيضًا (CORS) نرجع للبروكسي ولا نقفل عليه
     try{ return await fetch(API_BASE+path,opts); }
-    catch(e){ if(e&&e.name==='AbortError') throw e;
+    catch(e){ if((e as any)?.name==='AbortError') throw e;
       API_BASE='/kucoin'; return await fetch(API_BASE+path,freshOpts(opts)); } }
   let res;
   try{ res=await fetch(API_BASE+path,opts); }
   catch(e){
     // مهلة/إجهاض = مشكلة الطلب نفسه وليست غياب البروكسي — لا تحويل نهائي للمباشر بسببها
-    if(e&&e.name==='AbortError') throw e;
+    if((e as any)?.name==='AbortError') throw e;
     API_BASE=DIRECT_BASE; return await fetch(API_BASE+path,freshOpts(opts)); }
   // 404 أو استجابة HTML (خادم الجوال المحلي يرجع index.html برمز 200) = لا بروكسي — تحوّل مباشر نهائي
   if(res.status===404 || !(res.headers.get('content-type')||'').toLowerCase().includes('json')){
@@ -301,7 +322,7 @@ async function kcPublic(path,timeout){
   if(j.code!=='200000') throw new Error(j.msg||j.code);
   return j.data;
 }
-async function kcPrivate(method,path,body){
+async function kcPrivate(method:any,path:any,body?:any){
   if(!S.keys) throw new Error('لا مفاتيح — اربط KuCoin من الإعدادات');
   const ts=String(Date.now());
   const raw=body?JSON.stringify(body):'';
@@ -322,7 +343,7 @@ async function kcPrivate(method,path,body){
 export async function getApiBase(){ return API_BASE; }
 const fetchTicker  = s => kcPublic('/api/v1/ticker?symbol='+encodeURIComponent(s),2500);
 const fetchContract= s => kcPublic('/api/v1/contracts/'+encodeURIComponent(s),3500);
-let _bookFailsAt=0, _tapeFailsAt=0;
+let _bookFailsAt:any=0, _tapeFailsAt:any=0;
 const fetchBook    = s => kcPublic('/api/v1/level2/depth20?symbol='+encodeURIComponent(s),2500)
   .then(d=>{ _bookFailsAt=0; return {bids:(d.bids||[]).map(r=>({price:+r[0],size:+r[1]})).filter(r=>r.price>0),
              asks:(d.asks||[]).map(r=>({price:+r[0],size:+r[1]})).filter(r=>r.price>0)}; })
@@ -339,7 +360,7 @@ export function fetchKlines(symbol,gran){
       return {t,o:+r[1],h:+r[2],l:+r[3],c:+r[4],v:+r[5]||0};
     }).filter(k=>k.t>0&&k.o>0).sort((x,y)=>x.t-y.t));
 }
-let contractsCache=null;
+let contractsCache:any=null;
 export function listContracts(){
   if(contractsCache&&Date.now()-contractsCache.at<300000) return Promise.resolve(contractsCache.items);
   return kcPublic('/api/v1/contracts/active',6000).then(d=>{
@@ -357,8 +378,8 @@ export function listContracts(){
    مرحلتان: (1) كل العقود بحجم 24 ساعة من طلب واحد
    (2) أعلى 18 سيولةً: شموع 15د + أفضل عرض/طلب لقياس التقلب والسبريد والاتجاه
    ================================================================ */
-function radarScore(x){ // x: {vol,spread,chg,trendPct,turnover,price}
-  let sc=50; const why=[];
+function radarScore(x:any){ // x: {vol,spread,chg,trendPct,turnover,price}
+  let sc=50; const why:any[]=[];
   // السعر المنخفض (العملات الصفرية) أولوية قصوى: برأس مال صغير تعطي عقودًا كثيرة
   // بخطوات شبكة دقيقة وأرباحًا متكررة، والتصفية أبعد — الغالية تعطي عقدًا هشًا وتصفية قريبة
   if(x.price>0){
@@ -410,20 +431,20 @@ export async function scanRadar(){
           let v=0; for(const k of last) v+=(k.h-k.l)/k.c; out.vol=v/last.length*100;
           out.price=ks[ks.length-1].c;
           out.trendPct=(out.price-ks[ks.length-20].o)/ks[ks.length-20].o*100; }
-      }catch(e){}
+      }catch(e){ logSwallow("silent-catch", e); }
       try{ const t=await fetchTicker(r.symbol);
         const bb=+t.bestBidPrice||0, ba=+t.bestAskPrice||0;
         if(bb>0&&ba>0) out.spread=(ba-bb)/((ba+bb)/2)*100;
-        if(!out.price) out.price=+t.price||0; }catch(e){}
+        if(!out.price) out.price=+t.price||0; }catch(e){ logSwallow("silent-catch", e); }
       return out; }));
-    const list=det.filter(d=>d.price>0).map(d=>{ const s=radarScore(d);
+    const list=det.filter((d:any)=>d.price>0).map((d:any)=>{ const s=radarScore(d);
       return {symbol:d.symbol,disp:d.symbol.replace(/USDTM$/i,'').replace(/^XBT/i,'BTC'),
         price:d.price,score:s.score,why:s.why,state:d.state||'—',
         vol:+d.vol.toFixed(2),chg:Math.round(d.chg*10)/10,turnover:d.turnover,
         grade:s.score>=65?'🟢':s.score>=45?'🟡':'🔴'}; })
       // الأفضل أولًا بلا تعادل مربك: الدرجة، ثم العرضي المتذبذب يتقدم، ثم الأعلى سيولة
-      .sort((a,b)=>b.score-a.score||
-        (b.state==='عرضي متذبذب')-(a.state==='عرضي متذبذب')||b.turnover-a.turnover);
+      .sort((a:any,b:any)=>b.score-a.score||
+        ((b.state==='عرضي متذبذب')?1:0)-((a.state==='عرضي متذبذب')?1:0)||b.turnover-a.turnover);
     S.radar={at:Date.now(),list};
     // توصية التبديل: عملتي الحالية ضعيفة وأخرى أقوى منها بفارق واضح
     const cur=list.find(l=>l.symbol===S.config.symbol);
@@ -443,7 +464,7 @@ export async function scanRadar(){
   finally{ S._radarBusy=false; }
 }
 
-async function exPosition(symbol){
+async function exPosition(symbol:any){
   const raw=await kcPrivate('GET','/api/v1/position?symbol='+encodeURIComponent(symbol));
   const p=Array.isArray(raw)?raw[0]:raw;
   const qty=p?Number(p.currentQty)||0:0;
@@ -484,9 +505,9 @@ async function placeOrderSmart(body){
     else { const pos=await kcPrivate('GET','/api/v1/position?symbol='+encodeURIComponent(sym));
       const mm=_mmFromPos(pos);
       if(mm){ mmCache[sym]={at:Date.now(),mode:mm}; body={...body,marginMode:mm}; } }
-  }catch(_){}
+  }catch(_){ logSwallow("silent-catch", _); }
   try{ return await kcPrivate('POST','/api/v1/orders',body); }
-  catch(e){ let m=e.message||String(e);
+  catch(e){ let m=(e as any)?.message||String(e);
     // تصنيف دقيق: «insufficient available margin» خطأ كمية/رصيد وليس وضع هامش —
     // الخلط بينهما كان يدخل سلسلة الوضع ويُنتج «margin mode does not match» وهميًا
     const isFunds=x=>/insufficient|too high|available margin|available balance/i.test(x);
@@ -494,7 +515,7 @@ async function placeOrderSmart(body){
     // رفض postOnly (السعر قاطع الدفتر): أعد المحاولة كأمر حدّي عادي — مستوى بعيد عابر لا يُفوَّت
     if(body.postOnly&&!isFunds(m)&&!isMode(m)){ const b3={...body}; delete b3.postOnly;
       try{ return await kcPrivate('POST','/api/v1/orders',b3); }
-      catch(e2){ m=e2.message||String(e2); body=b3; } }
+      catch(e2){ m=(e2 as any)?.message||String(e2); body=b3; } }
     // رصيد/كمية: أبطِل توثيق المضاعف ليُعاد جلبه فورًا وارمِ — لا علاقة لوضع الهامش هنا
     if(isFunds(m)){ S._metaAt=0; if(S._metaSym===sym) S._metaSym=null; throw e; }
     if(!isMode(m)) throw e;
@@ -502,7 +523,7 @@ async function placeOrderSmart(body){
     // (بأمر المالك: الهامش متبادل دائمًا ليحمي الرصيد الكلي الصفقة — لا معزول أبدًا)
     if(!mmTried[sym]){ mmTried[sym]=1;
       try{ await kcPrivate('POST','/api/v2/position/batchChangeMarginMode',
-        {marginMode:'CROSS',symbols:[sym]}); }catch(_){} }
+        {marginMode:'CROSS',symbols:[sym]}); }catch(_){ logSwallow("silent-catch", _); } }
     // جرّب كل الأوضاع بالتناوب واحفظ الفائز — أول نجاح يُسكت العاصفة نهائيًا
     const errs=[m];
     for(const alt of ['CROSS','ISOLATED',null]){
@@ -510,7 +531,7 @@ async function placeOrderSmart(body){
       const b2={...body}; if(alt) b2.marginMode=alt; else delete b2.marginMode;
       try{ const r=await kcPrivate('POST','/api/v1/orders',b2);
         mmCache[sym]={at:Date.now(),mode:alt}; return r; }
-      catch(e3){ const m3=e3.message||String(e3); if(!errs.includes(m3)) errs.push(m3); } }
+      catch(e3){ const m3=(e3 as any)?.message||String(e3); if(!errs.includes(m3)) errs.push(m3); } }
     // فشل كل شيء: اعرض كل الأسباب الحقيقية لا آخرها فقط — الخطأ الخفي كان يُبتلع
     throw new Error(errs.join(' | ')); } }
 // بوابة التوثيق: لا أمر دخول حقيقي بكمية محسوبة محليًا قبل توثيق مضاعف العقد
@@ -567,7 +588,7 @@ async function exPlaceStopGuard(){ if(S.config.mode!=='live'||!S.keys||!S.positi
   const dDis=LOSS_STOP_USD/notional*1.1; // حركة تعادل خسارة 16$ + هامش 10%
   const cands=[sh?e*(1+dDis):e*(1-dDis)];
   if(liq>0) cands.push(sh?liq*0.99:liq*1.01);
-  let gp=roundTick(sh?Math.min(...cands):Math.max(...cands),S.tickSize||1e-10);
+  const gp=roundTick(sh?Math.min(...cands):Math.max(...cands),S.tickSize||1e-10);
   // سلامة: سعر منحط أو ملاصق للسوق لا يحمي شيئًا — لا تُرسله
   if(!(gp>0)||(sh?gp<=mark*1.003:gp>=mark*0.997)){ S._guardId=null; return; }
   // حارس قائم قريب من المطلوب = لا شيء — إعادة الإرسال كل دقيقة كانت تراكم أوامر وقف مكدسة
@@ -586,7 +607,7 @@ async function exPlaceStopGuard(){ if(S.config.mode!=='live'||!S.keys||!S.positi
     if(!S._guardLogged){ S._guardLogged=true;
       pushLog('server','حارس خادمي مفعّل — إيقاف طوارئ على المنصة عند '+fmtPx(gp)+' (يعمل حتى لو نام التطبيق)'); }
   }catch(e){ if(!S._guardErrAt||Date.now()-S._guardErrAt>300000){ S._guardErrAt=Date.now();
-      pushLog('error','الحارس الخادمي: '+(e.message||e)); } } }
+      pushLog('error','الحارس الخادمي: '+(String((e as any)?.message||e))); } } }
 
 /* ---------- تدفق الشريط والحيتان — من صفقات المنصة المنفذة لحظيًا ---------- */
 function tapeFlow(){ const t=S.tape; if(!t||t.length<6) return {bias:0,whale:0,whaleVol:0};
@@ -636,7 +657,7 @@ function bookQuality(){ const b=S.orderBook,p=S.lastPrice||0;
 function medLevelSz(ob){ const s=[...ob.bids.slice(0,10),...ob.asks.slice(0,10)].map(x=>x.size).sort((a,b)=>a-b);
   return s.length?s[Math.floor(s.length/2)]:0; }
 function retStdev(){ const t=S.priceTrail; if(t.length<4) return 0;
-  const r=[]; for(let i=1;i<t.length;i++) if(t[i-1]>0) r.push((t[i]-t[i-1])/t[i-1]*100);
+  const r:any[]=[]; for(let i=1;i<t.length;i++) if(t[i-1]>0) r.push((t[i]-t[i-1])/t[i-1]*100);
   if(r.length<3) return 0; const m=r.reduce((a,b)=>a+b,0)/r.length;
   return Math.sqrt(r.reduce((s,x)=>s+(x-m)**2,0)/r.length); }
 function readRegime(){ const mom=S.confluence?S.confluence.momentum:0;
@@ -663,7 +684,7 @@ function readRegime(){ const mom=S.confluence?S.confluence.momentum:0;
     huntMult:shock?1.5:vk==='wild'?1.25:1,
     maxAdds:shock||vk==='wild'?1:3, scoutOnly:shock||vk==='wild'||young};
 }
-function scoreBias(){ let sc=0; const rs=[];
+function scoreBias(){ let sc=0; const rs:any[]=[];
   const bv=volSum(S.orderBook.bids),av=volSum(S.orderBook.asks),bt=bv+av;
   if(bt>0){ const im=(bv-av)/bt; sc+=im*40;
     if(Math.abs(im)>0.08) rs.push(im>0?'دفتر مشترين':'دفتر بائعين'); }
@@ -684,7 +705,7 @@ function readConfluence(){ const t=S.priceTrail,w=t.slice(-10);
   const imb=bd>0?(bids-asks)/bd:0;
   let mom=0; if(w.length>=2&&w[0]>0) mom=(w[w.length-1]-w[0])/w[0]*100;
   let tn=0,tp=0; for(const r of S.tape){tn+=r.size;tp+=r.price*r.size;}
-  const vwap=tn>0?tp/tn:null; let sc=0; const rs=[];
+  const vwap=tn>0?tp/tn:null; let sc=0; const rs:any[]=[];
   if(Math.abs(imb)>0.08){sc+=imb*40;rs.push(imb>0?'دفتر شراء غالب':'دفتر بيع غالب');}
   if(Math.abs(mom)>=0.04){sc+=mom*8;rs.push(mom>0?'زخم صاعد':'زخم هابط');}
   if(vwap&&S.lastPrice){ if(S.lastPrice>vwap){sc+=8;rs.push('فوق VWAP');} else {sc-=8;rs.push('تحت VWAP');} }
@@ -772,13 +793,13 @@ function levelQtys(center,n){ const c=S.config;
   // قلّص العدد فقط إن عجز أصغر مستوى عن شراء عقد واحد — لا أرضية $1 تُفسد النسبة
   while(m>1&&Math.floor((budget/denom(m))*lev/cv)<1) m--;
   const unit=budget/denom(m);
-  const out=[]; let acc=0;
+  const out:any[]=[]; let acc=0;
   for(let i=0;i<m;i++){ let q=Math.max(1,Math.floor(unit*(1+0.5*i)*lev/cv));
     if(S.maxOrderQty>0) q=Math.min(q,S.maxOrderQty); // سقف المنصة للأمر الواحد
     if(acc+q*cv/lev>budget&&out.length) break; // لا تتجاوز السيولة أبدًا
     out.push(q); acc+=q*cv/lev; }
   return out; }
-function buildGrid(center,wide){ const c=S.config,tick=S.tickSize||1e-10;
+function buildGrid(center:any,wide?:any){ const c=S.config,tick=S.tickSize||1e-10;
   // خطوة متكيفة مع التقلب اللحظي: الحركات المفاجئة توسّع المناطق تلقائيًا
   const vol=retStdev()||0.05;
   const volF=wide?1:Math.max(1,Math.min(3,vol*10));
@@ -798,7 +819,7 @@ function buildGrid(center,wide){ const c=S.config,tick=S.tickSize||1e-10;
   if(fills.length&&!wide){
     if(c.direction==='short') from=Math.max(from,Math.max(...fills)*(1+step*0.8));
     else from=Math.min(from,Math.min(...fills)*(1-step*0.8)); }
-  const grid=[];
+  const grid:any[]=[];
   const liq=S.liqPrice||(S.position&&S.position.liquidation)||0;
   // سلم التشبع المتسارع: يمتد من آخر منطقة دخول حتى حارس التصفية بتوزيع
   // ناعم متسارع (i/n)^1.5 — المستويات القريبة تلتقط الارتدادات السريعة،
@@ -856,7 +877,7 @@ function sanitizeAdds(){ const cap=effLevels();
   for(const side of ['buy','sell']){
     const live=S.grid.filter(g=>!g.reduceOnly&&g.side===side&&(g.status==='armed'||g.status==='open'))
       .sort((a,b)=>Math.abs((b.price||0)-px)-Math.abs((a.price||0)-px));
-    const kept=[];
+    const kept:any[]=[];
     for(const g of live){ if(g.lane==='comp'){ kept.push(g); continue; } // التعويض لا يُقلم ولا يُحسب ضد السقف
       const gap=g.lane?Math.max(st,S.config.gridStepPct*4):st;
       if(kept.length>=cap||kept.some(k=>tooClose(k.price,g.price,gap))){
@@ -888,7 +909,7 @@ function applyDelta(side,qty,price){ const dir=side==='sell'?'short':'long';
     S._exc={mae:0,mfe:0}; S._tpBanked=0;
     return {realized:pnl,closedQty:closeQty,addedQty:leftover}; }
   return {realized:pnl,closedQty:closeQty,addedQty:0}; }
-function noteEntry(qty,price,fee,source,noCount){ const side=S.position?S.position.side:(source==='hunt'?S.config.direction:'short');
+function noteEntry(qty:any,price:any,fee:any,source?:any,noCount?:any){ const side=S.position?S.position.side:(source==='hunt'?S.config.direction:'short');
   // لقطة ظروف الدخول لحظتها — تُختم على الصفقة عند إغلاقها في الذاكرة
   S._entryCtx={rg:S.regime?(S.regime.shock?'صدمة':S.regime.trend==='up'?'صاعد':S.regime.trend==='down'?'هابط':'عرضي'):'عرضي',
     ses:sessionOf(Date.now()),origin:source==='hunt'?'صيد':'شبكة',at:Date.now()};
@@ -908,7 +929,7 @@ function noteEntry(qty,price,fee,source,noCount){ const side=S.position?S.positi
   if(!S.activeCycle){ S.activeCycle={side,entry:price,openedAt:Date.now(),fills:1,levels:S.config.levels,pnl:0}; }
   else { S.activeCycle.fills++; if(S.position)S.activeCycle.entry=S.position.entry; }
   return id; }
-function noteClose(qty,exit,fee,source,pnl,lotId){ const lotId_=lotId;
+function noteClose(qty:any,exit:any,fee:any,source?:any,pnl?:any,lotId?:any){ const lotId_=lotId;
   const row=(lotId_?S.journal.find(j=>j.id===lotId_&&j.status==='open'):null)
     ||S.journal.find(j=>j.status==='open'&&(source==='إيقاف'||j.source===source))
     ||S.journal.find(j=>j.status==='open');
@@ -965,11 +986,11 @@ function armCompEntry(qty){ const pos=S.position; if(!pos||!(qty>0)) return;
   pushLog('server','تعويض: أُسلّح دخول '+side+' @ '+fmtPx(px)+' بكمية '+q+
     ' — إن عاد السعر للمتوسط أعاد شراء المُجناة'); }
 // فترة اليوم (UTC): آسيا 0-8 · أوروبا 8-16 · أمريكا 16-24
-function sessionOf(ts){ const h=new Date(ts).getUTCHours(); return h<8?'آسيا':h<16?'أوروبا':'أمريكا'; }
+function sessionOf(ts:any):any { const h=new Date(ts).getUTCHours(); return h<8?'آسيا':h<16?'أوروبا':'أمريكا'; }
 // التعلّم من نتائج الصفقات معطّل نهائيًا بطلب المالك — لا كتابة ولا قيود
-function learnTrade(side,pnl){ return; }
+function learnTrade(_side:any,_pnl:any){ return; }
 // قياس الانزلاق معطّل مع التعلم — لا كتابة في الذاكرة
-function learnSlippage(side,slipPct){ return; }
+function learnSlippage(_side:any,_slipPct:any){ return; }
 // إحصاءات مجمعة من الذاكرة القوية — للوحة الأداء والتقارير
 export function memStats(){ const mem=S.memory; const o={n:0,w:0,l:0,pnl:0,grossWin:0,grossLoss:0,maxLoseStreak:0,pf:0,winRate:0,avgWin:0,avgLoss:0};
   if(!mem||!mem.pairs) return o;
@@ -1141,7 +1162,7 @@ function fillLevel(id,fp,taker){ const l=S.grid.find(g=>g.id===id);
       // الكمية الحقيقية هي الحاكمة: تنفيذ جزئي سابق على المنصة قد يكون قلّص
       // المركز — إغلاق بكمية محلية أكبر من المركز يُرفض أو يرتد عكسيًا
       (async()=>{ let q=d.closedQty;
-        try{ const lp=await exPosition(S.config.symbol); q=lp?Math.min(q,lp.size):0; }catch(_){}
+        try{ const lp=await exPosition(S.config.symbol); q=lp?Math.min(q,lp.size):0; }catch(_){ logSwallow("silent-catch", _); }
         if(q>0) await exCloseQty(S.config.symbol,cSide,q)
           .catch(e=>pushLog('error','إغلاق الجني الحقيقي فشل: '+(e.message||e))); })();
       // اكتمل المركز بالكامل؟ — ألغِ كل الأوامر المعلقة (منصة وبوت) وابدأ دراسة دخول جديدة نظيفة
@@ -1289,7 +1310,7 @@ function huntAligned(){ const conf=S.confluence||{momentum:0,idle:false,score:0}
    لا «لابد أن تنطبق جميعها». المنع فقط بفيتو خطر قوي مثبت.
    ================================================================ */
 // فيتو الخطر: أسباب قوية وحدها تمنع فتح صفقة — ما دونها لا يوقف الصيد
-function dangerVeto(p){ const short=S.config.direction==='short';
+function dangerVeto(_p:any){ const short=S.config.direction==='short';
   if(!bookQuality()) return 'دفتر أو سبريد رديء';
   if(toxicBlocked(S.config.direction)) return 'اتجاه سام في الذاكرة (يُعاد اختباره كل ساعة)';
   const r=S.regime||{trend:'range',shock:false}, conf=S.confluence||{momentum:0};
@@ -1312,7 +1333,7 @@ function dangerVeto(p){ const short=S.config.direction==='short';
   if(short&&fund<-0.001) return 'تمويل مرتفع جدًا ضد الشورت';
   return null; }
 // كاشف الإشارات: الحيتان/الفجوات/الارتداد/الزخم/الضغط — أي واحدة تكفي لفتح صفقة
-function huntSignals(p){ const short=S.config.direction==='short'; const sig=[];
+function huntSignals(p:any){ const short=S.config.direction==='short'; const sig:any[]=[];
   const conf=S.confluence||{momentum:0,score:0}, r=S.regime||{trend:'range'};
   // 1) المرساة الكلاسيكية: تحرك ≥ عتبة الصيد من القمة/القاع
   if(S.huntAnchor){ const pct=(p-S.huntAnchor)/S.huntAnchor*100, need=effectiveHuntPct();
@@ -1379,11 +1400,11 @@ function warmedUp(){ if(!S.startedAt||Date.now()-S.startedAt<15000) return false
 // قراءة سجل مع نسيان تدريجي: عمر نصف 10 أيام — ذنب قديم يبهت أثره ولا يطارد للأبد
 // ⚠️ ذاكرة التعلم معطّلة بطلب المالك: كانت قيودها المتراكمة تخنق الصفقات —
 // تعيد null دائمًا فتسقط كل البوابات (حجم/خطوة/صيد/حظر) إلى وضعها الحر الطبيعي
-function memRec(dir){ return null; }
+function memRec(_dir:any):any { return null; }
 // معدل نجاح مُصحّح بايزيًا — العينة الصغيرة تُشدّ نحو الحياد بدل حكم متسرع
-function smWR(r){ return (r.w+1)/(r.n+2); }
+function smWR(r:any){ return (r.w+1)/(r.n+2); }
 // سُلّم العقوبات معطّل مع ذاكرة التعلم — لا قيود متراكمة من الماضي، القرار من السوق الحي فقط
-function sanctionLevel(dir){ return 0; }
+function sanctionLevel(_dir:any){ return 0; }
 function toxicDir(dir){ return sanctionLevel(dir)>=2; }
 function toxicBlocked(dir){ const lv=sanctionLevel(dir);
   S._probation=false;
@@ -1705,7 +1726,7 @@ function pruneGhosts(){ if(S.position) return;
 /* ================================================================
    تدفق السوق — WebSocket مستمر + REST احتياطي
    ================================================================ */
-function applyMeta(m){ S.lastPrice=m.price; S.markPrice=m.markPrice||m.price;
+function applyMeta(m:any){ S.lastPrice=m.price; S.markPrice=m.markPrice||m.price;
   if(m.makerFee)S.makerFee=m.makerFee; if(m.takerFee)S.takerFee=m.takerFee;
   if(m.funding!=null)S.funding=m.funding; if(m.multiplier)S.multiplier=m.multiplier;
   if(m.tickSize)S.tickSize=m.tickSize; S.lastTickAt=Date.now();
@@ -1741,7 +1762,7 @@ function onStreamTick(d){
       S._actHist=[...(S._actHist||[]),rate].slice(-30);
       const h=[...S._actHist].sort((a,b)=>a-b); S._actMed=h[Math.floor(h.length/2)]||0; }
     // تنفيذ فوري لجني الربح مع كل نبضة سعر — لا انتظار لدورة المحرك
-    if(S.status==='running'){ try{ harvestRipe(d.price); }catch(e){} }
+    if(S.status==='running'){ try{ harvestRipe(d.price); }catch(e){ logSwallow("silent-catch", e); } }
   }
   if(d.book){
     // تدفق الأوامر (OFI): ميزان ضغط أفضل عرض/طلب بين اللقطات — راكم 20 عينة أخيرة
@@ -1794,17 +1815,17 @@ async function loadMarket(full){
   const tapeStale=Date.now()-(streamState.tradeAt||0)>8000;
   if(full&&(bookStale||tapeStale||!S.tape.length)){
     const [ob,tp]=await Promise.all([fetchBook(c).catch(()=>null),fetchTape(c).catch(()=>null)]);
-    if(ob&&(ob.bids.length||ob.asks.length)) m.orderBook=ob;
-    else if(!ob) m.dataStale=Date.now();
-    if(tp&&tp.length&&tapeStale) m.tape=tp;
-    else if(!tp) m.dataStale=Date.now();
+    if(ob&&(ob.bids.length||ob.asks.length)) (m as any).orderBook=ob;
+    else if(!ob) (m as any).dataStale=Date.now();
+    if(tp&&tp.length&&tapeStale) (m as any).tape=tp;
+    else if(!tp) (m as any).dataStale=Date.now();
   }
   // قائد BTC: نبضة المؤشر توجّه صيد العملات التابعة — قراءة REST خفيفة كل دورة كاملة
   if(full&&c!=='XBTUSDTM'){ try{ const bt=await fetchTicker('XBTUSDTM'); const bp=+bt.price||0;
     if(bp>0){ const pv=S._btcPrev;
       if(pv&&pv.px>0){ const dtMin=Math.max(0.05,(Date.now()-pv.at)/60000);
         S._btcImp=Math.round(((bp-pv.px)/pv.px*100)/dtMin*10000)/10000; } // تغير % لكل دقيقة
-      S._btcPrev={px:bp,at:Date.now()}; } }catch(e){} }
+      S._btcPrev={px:bp,at:Date.now()}; } }catch(e){ logSwallow("silent-catch", e); } }
   return m;
 }
 
@@ -1815,7 +1836,9 @@ async function liveSync(){ if(S.config.mode!=='live'||!S.keys) return;
   const sym=S.config.symbol;
   try{
     const pos=await exPosition(sym);
-    if(pos){ if(S.ignoreExchangeUntil&&Date.now()<S.ignoreExchangeUntil&&!S.position){}
+    const inGrace=S.ignoreExchangeUntil&&Date.now()<S.ignoreExchangeUntil;
+    if(pos){
+      if(inGrace&&!S.position){ /* ignore stale center during grace window */ }
       else if(!S.position){ S.position=pos; pushLog('recover','استُعيد مركز '+pos.side+' من المنصة'); }
       else { S.position.size=pos.size; S.position.entry=pos.entry;
         S.position.unrealized=pos.unrealized; S.position.side=pos.side;
@@ -1850,7 +1873,7 @@ async function liveSync(){ if(S.config.mode!=='live'||!S.keys) return;
         kcPrivate('POST','/api/v2/changeCrossUserLeverage',
           {symbol:sym,leverage:String(S.config.leverage)}).catch(()=>{}); } }
     if(S.position) exPlaceStopGuard(); // إيقاف طوارئ على المنصة يحمي المركز حتى لو نام التطبيق
-  }catch(e){ const m=e.message||String(e);
+  }catch(e){ const m=String((e as any)?.message||e);
     if(m!==_syncErrMsg||Date.now()-_syncErrAt>60000){ _syncErrAt=Date.now(); _syncErrMsg=m;
       pushLog('error','قراءة المركز: '+m); } }
   try{
@@ -1898,7 +1921,7 @@ async function liveSync(){ if(S.config.mode!=='live'||!S.keys) return;
       try{ const r=await exPlaceLimit({clientOid:l.clientOid,symbol:sym,side:l.side,
         price:l.price,qty:l.qty,reduceOnly:l.reduceOnly,leverage:S.config.leverage});
         l.status='open'; l.exchangeOrderId=r.orderId;
-      }catch(e){ const m=e.message||String(e);
+      }catch(e){ const m=String((e as any)?.message||e);
         if(/access denied|permission/i.test(m)){ if(!S.permDenied){ S.permDenied=true;
           pushLog('error','⛔ المفتاح يقرأ الرصيد لكن بلا صلاحية تداول — من KuCoin: إدارة API ← تعديل المفتاح ← فعّل «التداول» للعقود الآجلة ثم احفظ المفاتيح مجددًا');
           toast('⚠️ فعّل صلاحية التداول في مفتاح KuCoin'); } break; }
@@ -1907,22 +1930,22 @@ async function liveSync(){ if(S.config.mode!=='live'||!S.keys) return;
           pushLog('error','أمر '+l.side+' @ '+fmtPx(l.price)+': '+m); } } }
     const liveIds=new Set(S.grid.filter(l=>l.exchangeOrderId).map(l=>l.exchangeOrderId));
     for(const o of exs){ if(!liveIds.has(o.orderId)){
-      try{ await kcPrivate('DELETE','/api/v1/orders/'+o.orderId); }catch(e){} } }
+      try{ await kcPrivate('DELETE','/api/v1/orders/'+o.orderId); }catch(e){ logSwallow("silent-catch", e); } } }
     // كنس الستوبات اليتيمة (مخنوق 30ث): أوامر الوقف تعيش في قائمة منفصلة لا يطالها
     // كنس الأوامر العادية أعلاه — احتفظ بالحارس الحالي فقط واحذف ما عداه. فشل
     // القراءة (null) يعني تخطي الجولة بلا حذف أعمى
     if(!S._stopSweepAt||Date.now()-S._stopSweepAt>30000){ S._stopSweepAt=Date.now();
       const stops=await exStops(sym);
       if(stops) for(const st of stops){ if(st.id&&st.id!==S._guardId){
-        try{ await kcPrivate('DELETE','/api/v1/stopOrders/'+st.id); }catch(e){} } } }
-  }catch(e){ const m=e.message||String(e);
+        try{ await kcPrivate('DELETE','/api/v1/stopOrders/'+st.id); }catch(e){ logSwallow("silent-catch", e); } } } }
+  }catch(e){ const m=String((e as any)?.message||e);
     // نفس الخطأ مرة كل دقيقة — السطر الواحد كل 5 ثوانٍ كان يغرق السجل ويطلق تنبيهات مجنونة
     if(m!==_syncErrMsg||Date.now()-_syncErrAt>60000){ _syncErrAt=Date.now(); _syncErrMsg=m;
       pushLog('error','مزامنة الأوامر: '+m); } } }
 async function liveFlattenIfNeeded(prevSide){ if(S.config.mode!=='live'||!S.keys||!prevSide) return;
   try{ const pos=await exPosition(S.config.symbol);
     if(pos){ await exCancelAll(S.config.symbol); await exClose(S.config.symbol,pos.side);
-      pushLog('server','أُغلق المركز الحقيقي على المنصة'); } }catch(e){} }
+      pushLog('server','أُغلق المركز الحقيقي على المنصة'); } }catch(e){ logSwallow("silent-catch", e); } }
 
 // نبضة حياة: البوت يعمل لكنه صامت — كل 4 دقائق بلا أي سطر يكتب لماذا لا صيد الآن،
 // فلا يبدو متجمدًا وهو يترقب (الصمت الطويل كان يُقرأ «تأخير غير مفهوم»)
@@ -1956,8 +1979,8 @@ async function botTick(){
   try{
     const full=S.heartbeat%5===0||!S.tape.length;
     // القرارات تعتمد سعر القناة اللحظي؛ REST للإثراء فقط — فشله لا يوقف التنفيذ أبدًا
-    let m={price:S.lastPrice||S.markPrice||0,markPrice:S.markPrice||S.lastPrice||0};
-    try{ m=await loadMarket(full); }catch(e){}
+    let m:any={price:S.lastPrice||S.markPrice||0,markPrice:S.markPrice||S.lastPrice||0};
+    try{ m=await loadMarket(full); }catch(e){ logSwallow("silent-catch", e); }
     const price=S.lastPrice||m.price||0;
     if(S.status==='idle'){ applyMeta(m); emit(); saveAll(); return; }
     S.heartbeat++;
@@ -1984,7 +2007,7 @@ async function botTick(){
         const before=filledAdds(); fillLevel(l.id,l.price,false);
         if(filledAdds()>before) S.lastAddAt=Date.now(); }
       const hunt=huntTrigger(price);
-      const staleData=m.dataStale&&Date.now()-m.dataStale<30000;
+      const staleData=(m as any).dataStale&&Date.now()-(m as any).dataStale<30000;
       if(staleData&&hunt){
         if(!S._staleWarnAt||Date.now()-S._staleWarnAt>120000){ S._staleWarnAt=Date.now();
           pushLog('warn','⚠️ بيانات السوق غير متوفرة حاليًا — تم إيقاف فتح صفقات جديدة حتى عودة التدفق'); }
@@ -1992,7 +2015,7 @@ async function botTick(){
       if(hunt&&!S.permDenied&&!staleData){ let done=false;
         if(S.config.mode==='live'&&S.keys){
           try{ await exPlaceMarket(S.config.symbol,hunt.side,hunt.qty); done=true; }
-          catch(e){ const m=e.message||String(e);
+          catch(e){ const m=String((e as any)?.message||e);
             if(/access denied|permission/i.test(m)){ S.permDenied=true;
               pushLog('error','⛔ المفتاح بلا صلاحية تداول — فعّل «التداول» للعقود الآجلة في KuCoin ثم احفظ المفاتيح مجددًا');
               toast('⚠️ فعّل صلاحية التداول في مفتاح KuCoin'); }
@@ -2005,12 +2028,12 @@ async function botTick(){
     pruneGhosts(); markUnrealized(price||m.price);
     // مزامنة المنصة كل 5 ثوانٍ تكفي — كل ثانية كانت تستنزف حصة الطلبات والبطارية
     if(!S._liveSyncAt||Date.now()-S._liveSyncAt>5000){ S._liveSyncAt=Date.now();
-      try{ await liveSync(); }catch(e){} }
-    try{ maybeReport(); }catch(e){}
-    try{ heartbeatBeat(price||m.price); }catch(e){}
+      try{ await liveSync(); }catch(e){ logSwallow("silent-catch", e); } }
+    try{ maybeReport(); }catch(e){ logSwallow("silent-catch", e); }
+    try{ heartbeatBeat(price||m.price); }catch(e){ logSwallow("silent-catch", e); }
     emit(); saveAll();
   }catch(e){ S.lastTickAt=Date.now();
-    if(!/abort|timeout|429|50[0-4]|fetch/i.test(e.message||'')) pushLog('error',e.message||String(e)); }
+    if(!/abort|timeout|429|50[0-4]|fetch/i.test(String((e as any)?.message||''))) pushLog('error',String((e as any)?.message||e)); }
 }
 
 /* ---------- أوامر التشغيل ---------- */
@@ -2048,14 +2071,14 @@ export async function stopBot(){ if(R()){ await remoteCmd('stop'); await remoteS
   if(S.status==='idle') return;
   const p=S.lastPrice||S.markPrice||0, prevSide=S.position?S.position.side:null;
   if(S.config.mode==='live'&&S.keys&&prevSide){
-    try{ await exCancelAll(S.config.symbol); await exCancelStops(S.config.symbol); S._guardId=null; }catch(e){}
+    try{ await exCancelAll(S.config.symbol); await exCancelStops(S.config.symbol); S._guardId=null; }catch(e){ logSwallow("silent-catch", e); }
     // الإغلاق يجب أن يتأكد لا أن يُرسل ويُنسى: أعد المحاولة حتى يتسطح المركز
     // فعلًا على المنصة — الإرسال الأعمى القديم ترك مركزه مفتوحًا وأغلق محليًا فقط
     let flat=false;
     for(let i=0;i<4&&!flat;i++){
-      try{ await exClose(S.config.symbol,prevSide); }catch(e){}
+      try{ await exClose(S.config.symbol,prevSide); }catch(e){ logSwallow("silent-catch", e); }
       try{ await new Promise(r=>setTimeout(r,700));
-        const pos=await exPosition(S.config.symbol); flat=!pos; }catch(e){}
+        const pos=await exPosition(S.config.symbol); flat=!pos; }catch(e){ logSwallow("silent-catch", e); }
     }
     S.ignoreExchangeUntil=Date.now()+15000; // لا تستعد مركزًا يُسوّى الآن كشبح
     if(!flat){ pushLog('error','⚠️ إغلاق المنصة لم يتأكد بعد 4 محاولات — راجع المركز يدويًا في KuCoin فورًا');
@@ -2099,7 +2122,7 @@ export async function saveKeys(k){
     S.linkOk=true; S.exEquity=eq; S.permDenied=false;
     toast('تم الربط ✓ الرصيد $'+(eq!=null?eq.toFixed(2):'—'));
   }catch(e){ S.linkOk=false; S.exEquity=null;
-    toast('حُفظت المفاتيح لكن فشل الاتصال: '+(e.message||e)); }
+    toast('حُفظت المفاتيح لكن فشل الاتصال: '+String((e as any)?.message||e)); }
   emit(); return S.linkOk;
 }
 export function clearKeys(){ if(R()){ remoteCmd('clearKeys').then(()=>remoteSync()); return; }
@@ -2187,7 +2210,7 @@ export function initEngine(){
   if(booted) return; booted=true;
   if(typeof window!=='undefined') window.__S=S; // للفحص والتشخيص
   // إذن الإشعارات يُطلب عند الإقلاع في الوضعين — بلا إذن لا يصل أي تنبيه خارج التطبيق
-  try{ const LN=lnPlugin(); if(LN){ ensureChannels(LN); LN.requestPermissions().catch(()=>{}); } }catch(e){}
+  try{ const LN=lnPlugin(); if(LN){ ensureChannels(LN); LN.requestPermissions().catch(()=>{}); } }catch(e){ logSwallow("silent-catch", e); }
   // وضع السيرفر: المحرك يعيش في Termux — هنا مرآة حية فقط، لا محرك محلي إطلاقًا
   // (تشغيل محركين معًا = أوامر مزدوجة على المنصة، لذلك لا سقوط تلقائي للوضع المحلي أبدًا)
   if(R()){ pushLog('info','وضع سيرفر الجوال — المحرك يعمل في Termux بلا نوم');
@@ -2219,6 +2242,6 @@ export function initEngine(){
   // عند العودة من الخلفية: دورة محرك فورية لتعويض أي فترة خنق + إعادة فحص الأرباح الناضجة
   if(typeof document!=='undefined') document.addEventListener('visibilitychange',()=>{
     if(!document.hidden){ botTick().catch(()=>{});
-      if(S.lastPrice) try{ harvestRipe(S.lastPrice); }catch(e){} } });
+      if(S.lastPrice) try{ harvestRipe(S.lastPrice); }catch(e){ logSwallow("silent-catch", e); } } });
   emit();
 }

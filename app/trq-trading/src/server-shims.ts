@@ -1,4 +1,3 @@
-// @ts-nocheck
 /* ================================================================
    محاكيات بيئة Node لسيرفر Termux — تُقيَّم قبل المحرك (ترتيب الواردات)
    · localStorage على ملف JSON في ~/.king — الحالة تنجو من إعادة التشغيل
@@ -11,22 +10,22 @@ import { join } from 'node:path';
 process.env.KING_SERVER = '1';
 
 const dir = join(homedir(), '.king');
-try { mkdirSync(dir, { recursive: true }); } catch (e) {}
+try { mkdirSync(dir, { recursive: true }); } catch{ /* intentional: optional step */ }
 const file = join(dir, 'king-server-store.json');
 
 let data = {};
 try { if (existsSync(file)) data = JSON.parse(readFileSync(file, 'utf8') || '{}'); } catch (e) { data = {}; }
 
-let timer = null;
+let timer:any = null;
 function persist() {
   if (timer) return;
   timer = setTimeout(() => {
     timer = null;
-    try { writeFileSync(file, JSON.stringify(data)); } catch (e) {}
+    try { writeFileSync(file, JSON.stringify(data)); } catch{ /* intentional: optional step */ }
   }, 300);
 }
 
-globalThis.localStorage = {
+;(globalThis as any).localStorage = {
   getItem: k => (k in data ? data[k] : null),
   setItem: (k, v) => { data[k] = String(v); persist(); },
   removeItem: k => { delete data[k]; persist(); },
