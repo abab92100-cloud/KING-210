@@ -1,0 +1,14 @@
+[
+    {
+        "merged": "com.king.nativeplugin.king-native-release-28:/drawable-v23/abc_control_background_material.xml",
+        "source": "com.king.nativeplugin.king-native-appcompat-1.7.1-18:/drawable-v23/abc_control_background_material.xml"
+    },
+    {
+        "merged": "com.king.nativeplugin.king-native-release-28:/drawable-v23/compat_splash_screen.xml",
+        "source": "com.king.nativeplugin.king-native-core-splashscreen-1.0.1-2:/drawable-v23/compat_splash_screen.xml"
+    },
+    {
+        "merged": "com.king.nativeplugin.king-native-release-28:/drawable-v23/compat_splash_screen_no_icon_background.xml",
+        "source": "com.king.nativeplugin.king-native-core-splashscreen-1.0.1-2:/drawable-v23/compat_splash_screen_no_icon_background.xml"
+    }
+]

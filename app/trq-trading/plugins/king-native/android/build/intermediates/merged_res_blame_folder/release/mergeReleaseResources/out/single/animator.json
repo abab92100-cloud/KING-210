@@ -1,0 +1,26 @@
+[
+    {
+        "merged": "com.king.nativeplugin.king-native-release-28:/animator/fragment_open_exit.xml",
+        "source": "com.king.nativeplugin.king-native-fragment-1.8.9-11:/animator/fragment_open_exit.xml"
+    },
+    {
+        "merged": "com.king.nativeplugin.king-native-release-28:/animator/fragment_close_enter.xml",
+        "source": "com.king.nativeplugin.king-native-fragment-1.8.9-11:/animator/fragment_close_enter.xml"
+    },
+    {
+        "merged": "com.king.nativeplugin.king-native-release-28:/animator/fragment_close_exit.xml",
+        "source": "com.king.nativeplugin.king-native-fragment-1.8.9-11:/animator/fragment_close_exit.xml"
+    },
+    {
+        "merged": "com.king.nativeplugin.king-native-release-28:/animator/fragment_fade_enter.xml",
+        "source": "com.king.nativeplugin.king-native-fragment-1.8.9-11:/animator/fragment_fade_enter.xml"
+    },
+    {
+        "merged": "com.king.nativeplugin.king-native-release-28:/animator/fragment_fade_exit.xml",
+        "source": "com.king.nativeplugin.king-native-fragment-1.8.9-11:/animator/fragment_fade_exit.xml"
+    },
+    {
+        "merged": "com.king.nativeplugin.king-native-release-28:/animator/fragment_open_enter.xml",
+        "source": "com.king.nativeplugin.king-native-fragment-1.8.9-11:/animator/fragment_open_enter.xml"
+    }
+]

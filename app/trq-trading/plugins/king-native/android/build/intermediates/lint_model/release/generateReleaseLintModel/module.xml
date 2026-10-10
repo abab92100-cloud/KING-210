@@ -1,0 +1,19 @@
+<lint-module
+    format="1"
+    dir="/workspace/github__abab92100-cloud__King/app/trq-trading/plugins/king-native/android"
+    name=":king-native"
+    type="LIBRARY"
+    maven="android:king-native:unspecified"
+    agpVersion="8.13.0"
+    buildFolder="build"
+    bootClassPath="/home/appuser/android/platforms/android-36/android.jar:/home/appuser/android/build-tools/35.0.0/core-lambda-stubs.jar"
+    javaSourceLevel="17"
+    compileTarget="android-36"
+    neverShrinking="true">
+  <lintOptions
+      abortOnError="true"
+      absolutePaths="true"
+      checkReleaseBuilds="true"
+      explainIssues="true"/>
+  <variant name="release"/>
+</lint-module>
