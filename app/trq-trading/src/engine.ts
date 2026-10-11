@@ -218,6 +218,32 @@ export const S: any = {
   memory:{pairs:{},cycles:0,totalPnl:0}, // الذاكرة القوية — تبقى عبر الدورات ولا تُمسح أبدًا
 };
 
+/* ---------- مراقب الشبكة (سيرفر الجوال) ----------
+   أندرويد قد يخنق إنترنت Termux في الخلفية دون قتل العملية — الطلبات تفشل بصمت
+   والبوت كان يظن السوق هادئًا. الآن: أول فشل متتالٍ يعلّم «انقطاع» فورًا،
+   إعادة الدخول (hunt) تتوقف حتى العودة، وعند العودة: مزامنة كاملة (مراكز + أوامر) تستعيد السيطرة. */
+let _netFailStreak=0, _netDownAt=0;
+export function netIsDown(){ return _netDownAt>0; }
+export function netDownSince(){ return _netDownAt>0?Math.round((Date.now()-_wasDownStart)/1000):0; }
+export function netAlivePing(ok){
+  if(ok){
+    const wasDown=_netDownAt>0; _netFailStreak=0; _netDownAt=0;
+    if(wasDown){
+      const secs=Math.round((Date.now()-_wasDownStart)/1000);
+      pushLog('recover','عودة الاتصال بالمنصة بعد انقطاع '+secs+' ث — مزامنة كاملة للأوامر والمراكز');
+      liveSync().catch(()=>{}); scanRadar().catch(()=>{});
+    }
+  } else {
+    // لا انقطاع إلا إذا كانت القناة اللحظية صامتة أيضًا — فشل REST العابر وحده ليس دليلًا
+    const wsSilent=Date.now()-(streamState.lastMsgAt||0)>20000;
+    _netFailStreak++;
+    if(!wsSilent) _netFailStreak=1; // القناة حية = الإنترنت حي
+    if(_netFailStreak>=4&&wsSilent&&_netDownAt===0){ _netDownAt=Date.now(); _wasDownStart=_netDownAt;
+      pushLog('error','انقطاع الإنترنت فعليًا (قناة صامتة + طلبات فاشلة) — بانتظار العودة'); }
+  }
+}
+let _wasDownStart=0;
+
 /* ---------- التخزين ---------- */
 function saveAll(){ try{
   localStorage.setItem('king:cfg',JSON.stringify(S.config));
@@ -262,11 +288,16 @@ function pushLog(kind:any,text:any){ S.logs=[{id:uid('l'),at:Date.now(),kind,tex
 const _swallowAt={};
 function logSwallow(where:any,err:any){
   try{
-    const key=where+'|'+String((err&&err.message)||err||'');
+    const msg=String((err&&err.message)||err||'unknown');
+    // أخطاء الشبكة العابرة (تقطيع تغطية/مهلة زمنية مقصودة) — متوقعة على الجوال ولا تسجل أبدًا:
+    // البوت مصمم ليعمل عبر قناة WebSocket، وREST للقراءة الثانوية فقط — فشله العابر ليس حدثًا
+    if(/failed to fetch|networkerror|network error|load failed/i.test(msg)) return;
+    if(/aborted?|abort/i.test(msg)) return; // مهلة زمنية مصممة عمدًا (AbortController)
+    if(/timeout|timed? ?out/i.test(msg)) return;
+    const key=where+'|'+msg;
     const now=Date.now();
     if(now-(_swallowAt[key]||0)<180000) return;
     _swallowAt[key]=now;
-    const msg=String((err&&err.message)||err||'unknown');
     pushLog('warn', where + ': ' + msg);
   }catch(e2){ /* rate-limit logger must never throw */ }
 }
@@ -284,6 +315,10 @@ let API_BASE = IS_NATIVE ? DIRECT_BASE : '/kucoin';
 // AbortSignal.timeout غير مدعوم في WebViews القديمة — بديل متوافق
 function sig(ms){ const c=new AbortController(); setTimeout(()=>c.abort(),ms); return c.signal; }
 async function kcFetch(path,opts){
+  const _t0=Date.now();
+  try{ const _r=await kcFetchInner(path,opts); netAlivePing(true); return _r; }
+  catch(e){ if((e as any)?.name!=='AbortError') netAlivePing(false); throw e; } }
+async function kcFetchInner(path,opts){
   if(API_BASE===DIRECT_BASE){
     if(IS_NATIVE) return await fetch(API_BASE+path,opts);
     // تحوّل سابق بسبب عثرة بروكسي — إن فشل المباشر أيضًا (CORS) نرجع للبروكسي ولا نقفل عليه
@@ -1469,7 +1504,7 @@ function memHuntMult(){ const lv=sanctionLevel(S.config.direction);
   if(wr>=0.6&&r.pnl>0) return 0.85;
   if(lv===1) return 1.1;
   return 1; }
-function packHunt(p){
+function packHunt(p:any){
   if(!(S.multiplier>0)){ pushLog('warn','بانتظار مواصفات العقد — لا دخول بحجم غير معروف'); return null; }
   return {side:S.config.direction==='short'?'sell':'buy',qty:contractsForLevel(p)}; }
 function huntTrigger(p){ if(S.status!=='running'||!p) return null;
@@ -1744,7 +1779,8 @@ function applyMeta(m:any){ S.lastPrice=m.price; S.markPrice=m.markPrice||m.price
 
 // رسائل القناة اللحظية — تصل دفعًا فور وقوعها (أجزاء من الثانية)
 function onStreamTick(d){
-  if(d.symbol&&d.symbol!==S.config.symbol) return; // رسالة زوج قديم — تجاهل
+  netAlivePing(true); // رسالة لحظية من القناة = الإنترنت يعمل
+  if(d.symbol&&d.symbol!==S.config.symbol) return;
   const now=Date.now();
   if(d.price>0){
     S.lastPrice=d.price;
@@ -2011,12 +2047,7 @@ async function botTick(){
         const before=filledAdds(); fillLevel(l.id,l.price,false);
         if(filledAdds()>before) S.lastAddAt=Date.now(); }
       const hunt=huntTrigger(price);
-      const staleData=(m as any).dataStale&&Date.now()-(m as any).dataStale<30000;
-      if(staleData&&hunt){
-        if(!S._staleWarnAt||Date.now()-S._staleWarnAt>120000){ S._staleWarnAt=Date.now();
-          pushLog('warn','⚠️ بيانات السوق غير متوفرة حاليًا — تم إيقاف فتح صفقات جديدة حتى عودة التدفق'); }
-      }
-      if(hunt&&!S.permDenied&&!staleData){ let done=false;
+      if(hunt&&!S.permDenied&&price>0){ let done=false;
         if(S.config.mode==='live'&&S.keys){
           try{ await exPlaceMarket(S.config.symbol,hunt.side,hunt.qty); done=true; }
           catch(e){ const m=String((e as any)?.message||e);

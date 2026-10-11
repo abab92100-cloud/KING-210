@@ -705,6 +705,33 @@ var S = {
   memory: { pairs: {}, cycles: 0, totalPnl: 0 }
   // الذاكرة القوية — تبقى عبر الدورات ولا تُمسح أبدًا
 };
+var _netFailStreak = 0;
+var _netDownAt = 0;
+function netAlivePing(ok) {
+  if (ok) {
+    const wasDown = _netDownAt > 0;
+    _netFailStreak = 0;
+    _netDownAt = 0;
+    if (wasDown) {
+      const secs = Math.round((Date.now() - _wasDownStart) / 1e3);
+      pushLog("recover", "\u0639\u0648\u062F\u0629 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0645\u0646\u0635\u0629 \u0628\u0639\u062F \u0627\u0646\u0642\u0637\u0627\u0639 " + secs + " \u062B \u2014 \u0645\u0632\u0627\u0645\u0646\u0629 \u0643\u0627\u0645\u0644\u0629 \u0644\u0644\u0623\u0648\u0627\u0645\u0631 \u0648\u0627\u0644\u0645\u0631\u0627\u0643\u0632");
+      liveSync().catch(() => {
+      });
+      scanRadar().catch(() => {
+      });
+    }
+  } else {
+    const wsSilent = Date.now() - (streamState.lastMsgAt || 0) > 2e4;
+    _netFailStreak++;
+    if (!wsSilent) _netFailStreak = 1;
+    if (_netFailStreak >= 4 && wsSilent && _netDownAt === 0) {
+      _netDownAt = Date.now();
+      _wasDownStart = _netDownAt;
+      pushLog("error", "\u0627\u0646\u0642\u0637\u0627\u0639 \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u0641\u0639\u0644\u064A\u064B\u0627 (\u0642\u0646\u0627\u0629 \u0635\u0627\u0645\u062A\u0629 + \u0637\u0644\u0628\u0627\u062A \u0641\u0627\u0634\u0644\u0629) \u2014 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0639\u0648\u062F\u0629");
+    }
+  }
+}
+var _wasDownStart = 0;
 function saveAll() {
   try {
     localStorage.setItem("king:cfg", JSON.stringify(S.config));
@@ -791,11 +818,14 @@ function pushLog(kind, text) {
 var _swallowAt = {};
 function logSwallow(where, err) {
   try {
-    const key = where + "|" + String(err && err.message || err || "");
+    const msg = String(err && err.message || err || "unknown");
+    if (/failed to fetch|networkerror|network error|load failed/i.test(msg)) return;
+    if (/aborted?|abort/i.test(msg)) return;
+    if (/timeout|timed? ?out/i.test(msg)) return;
+    const key = where + "|" + msg;
     const now = Date.now();
     if (now - (_swallowAt[key] || 0) < 18e4) return;
     _swallowAt[key] = now;
-    const msg = String(err && err.message || err || "unknown");
     pushLog("warn", where + ": " + msg);
   } catch (e2) {
   }
@@ -813,6 +843,17 @@ function sig(ms) {
   return c.signal;
 }
 async function kcFetch(path, opts) {
+  const _t0 = Date.now();
+  try {
+    const _r = await kcFetchInner(path, opts);
+    netAlivePing(true);
+    return _r;
+  } catch (e) {
+    if (e?.name !== "AbortError") netAlivePing(false);
+    throw e;
+  }
+}
+async function kcFetchInner(path, opts) {
   if (API_BASE === DIRECT_BASE) {
     if (IS_NATIVE) return await fetch(API_BASE + path, opts);
     try {
@@ -2909,6 +2950,7 @@ function applyMeta(m) {
   S.regime = readRegime();
 }
 function onStreamTick(d) {
+  netAlivePing(true);
   if (d.symbol && d.symbol !== S.config.symbol) return;
   const now = Date.now();
   if (d.price > 0) {
@@ -3311,14 +3353,7 @@ async function botTick() {
         if (filledAdds() > before) S.lastAddAt = Date.now();
       }
       const hunt = huntTrigger(price);
-      const staleData = m.dataStale && Date.now() - m.dataStale < 3e4;
-      if (staleData && hunt) {
-        if (!S._staleWarnAt || Date.now() - S._staleWarnAt > 12e4) {
-          S._staleWarnAt = Date.now();
-          pushLog("warn", "\u26A0\uFE0F \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0633\u0648\u0642 \u063A\u064A\u0631 \u0645\u062A\u0648\u0641\u0631\u0629 \u062D\u0627\u0644\u064A\u064B\u0627 \u2014 \u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0641\u062A\u062D \u0635\u0641\u0642\u0627\u062A \u062C\u062F\u064A\u062F\u0629 \u062D\u062A\u0649 \u0639\u0648\u062F\u0629 \u0627\u0644\u062A\u062F\u0641\u0642");
-        }
-      }
-      if (hunt && !S.permDenied && !staleData) {
+      if (hunt && !S.permDenied && price > 0) {
         let done = false;
         if (S.config.mode === "live" && S.keys) {
           try {

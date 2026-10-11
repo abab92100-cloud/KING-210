@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   S, subscribe, initEngine, startBot, pauseBot, stopBot, newCycle,
   saveKeys, clearKeys, saveCfg, equity, desk, pulseAge, fmtPx, fmtUsd, fmtTime,
-  listContracts, effLevels, scanRadar, detectRemoteServer,
+  listContracts, effLevels, scanRadar, detectRemoteServer, netIsDown, netDownSince,
 } from './engine';
 import { streamState } from './ws';
 import Chart from './Chart';
@@ -97,7 +97,14 @@ function WsBar() {
   useEffect(()=>{ const t=setInterval(()=>setTick(Date.now()),1000); return ()=>clearInterval(t); },[]);
   const silentMs = st.lastMsgAt ? now - st.lastMsgAt : null;
   const alive = st.connected && silentMs != null && silentMs < 5000;
+  const netDown = netIsDown();
   return (
+    <div>
+    {netDown && (
+      <div style={{ background:'rgba(244,63,94,.15)', border:'1px solid rgba(244,63,94,.5)', borderRadius:10, padding:'8px 12px', marginBottom:6, color:'#f43f5e', fontWeight:800, fontSize:12, textAlign:'center' }}>
+        ⚠ انقطاع الاتصال بالمنصة {netDownSince()>0?('منذ '+netDownSince()+' ث'):''} — لا أوامر جديدة حتى العودة
+      </div>
+    )}
     <div className="wsbar">
       <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <i className={'wsdot ' + (alive ? 'on' : st.connected ? 'on' : 'off')} />
@@ -107,6 +114,7 @@ function WsBar() {
         {silentMs != null && silentMs < 1000 ? silentMs + ' مللي ث' : pulseAge()}
         {st.reconnects > 0 ? ' · إعادات ' + st.reconnects : ''}
       </span>
+    </div>
     </div>
   );
 }
