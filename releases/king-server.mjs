@@ -309,6 +309,7 @@ function roundTick(p, t) {
 }
 function beep(tone) {
   try {
+    if (typeof window === "undefined") return;
     const c = _kaCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (c.state === "suspended") c.resume().catch(() => {
     });
@@ -355,6 +356,7 @@ function beep(tone) {
 }
 function lnPlugin() {
   try {
+    if (typeof window === "undefined") return null;
     return window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
   } catch (e) {
     return null;
@@ -508,7 +510,7 @@ function notify(txt, kind) {
       beep("alarm");
     } else beep(S.soundTone);
     try {
-      navigator.vibrate && navigator.vibrate(kind === "win" ? [80, 60, 140] : 120);
+      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(kind === "win" ? [80, 60, 140] : 120);
     } catch (e) {
       logSwallow("silent-catch", e);
     }
@@ -670,6 +672,7 @@ var S = {
   realizedPnl: 0,
   feesPaid: 0,
   cycleHarvested: 0,
+  slipCost: 0,
   priceTrail: [],
   emaFast: null,
   emaSlow: null,
@@ -887,7 +890,8 @@ function freshOpts(opts) {
 function normFee(raw, fb) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fb;
-  return n >= 0.05 ? n / 100 : n;
+  const frac = n < 0.05 ? n : n / 100;
+  return Math.min(3e-3, Math.max(1e-5, frac));
 }
 async function hmacB64(secret, payload) {
   const key = await crypto.subtle.importKey(
@@ -1939,9 +1943,6 @@ function sessionOf(ts) {
 function learnTrade(_side, _pnl) {
   return;
 }
-function learnSlippage(_side, _slipPct) {
-  return;
-}
 function memStats() {
   const mem = S.memory;
   const o = { n: 0, w: 0, l: 0, pnl: 0, grossWin: 0, grossLoss: 0, maxLoseStreak: 0, pf: 0, winRate: 0, avgWin: 0, avgLoss: 0 };
@@ -2170,10 +2171,16 @@ function fillLevel(id, fp, taker) {
   if (d.addedQty > 0) {
     const lotId = noteEntry(d.addedQty, fp, fee, l.origin === "hunt" ? "hunt" : "grid");
     l.lotId = l.lotId || lotId;
-    if (l.price > 0) learnSlippage(
-      l.side === "sell" ? "short" : "long",
-      Math.round(Math.abs(fp - l.price) / l.price * 100 * 1e4) / 1e4
-    );
+    if (l.price > 0) {
+      const slipUsd = Math.abs(fp - l.price) * (S.multiplier || 1) * effQty;
+      if (slipUsd > 0) {
+        S.slipCost = (S.slipCost || 0) + slipUsd;
+        if (slipUsd > 1 && (!S._slipLogAt || Date.now() - S._slipLogAt > 6e4)) {
+          S._slipLogAt = Date.now();
+          pushLog("warn", "\u0627\u0646\u0632\u0644\u0627\u0642 \u062A\u0646\u0641\u064A\u0630 " + slipUsd.toFixed(2) + "$ \u0639\u0646\u062F " + fmtPx(fp) + " (\u0627\u0644\u0645\u0637\u0644\u0648\u0628 " + fmtPx(l.price) + ")");
+        }
+      }
+    }
   }
   if (d.closedQty > 0) {
     const src = l.origin === "hunt" ? "\u0635\u0641\u0642\u0629" : "\u0634\u0628\u0643\u0629";
@@ -2367,6 +2374,7 @@ function huntAligned() {
 }
 function dangerVeto(_p) {
   const short = S.config.direction === "short";
+  if (Date.now() - (streamState.bookAt || 0) > 8e3) return null;
   if (!bookQuality()) return "\u062F\u0641\u062A\u0631 \u0623\u0648 \u0633\u0628\u0631\u064A\u062F \u0631\u062F\u064A\u0621";
   if (toxicBlocked(S.config.direction)) return "\u0627\u062A\u062C\u0627\u0647 \u0633\u0627\u0645 \u0641\u064A \u0627\u0644\u0630\u0627\u0643\u0631\u0629 (\u064A\u064F\u0639\u0627\u062F \u0627\u062E\u062A\u0628\u0627\u0631\u0647 \u0643\u0644 \u0633\u0627\u0639\u0629)";
   const r = S.regime || { trend: "range", shock: false }, conf = S.confluence || { momentum: 0 };
@@ -2459,7 +2467,7 @@ function effectiveHuntPct() {
   return scaled;
 }
 function huntTooClose(p) {
-  const need = Math.max(MIN_HUNT_GAP, addStepPct(), effectiveHuntPct() * 0.9);
+  const need = Math.max(MIN_HUNT_GAP * 1.5, addStepPct(), effectiveHuntPct() * 0.9, 0.12);
   for (const g of S.grid) {
     if (g.origin !== "hunt" || g.reduceOnly || g.status !== "filled") continue;
     const fp = g.filledPrice || g.price;
@@ -2616,7 +2624,9 @@ function huntTrigger(p) {
   if (S.lastAddAt && Date.now() - S.lastAddAt < ADD_COOLDOWN) return null;
   trailHuntAnchor(p);
   if (S.lastHuntAt && Date.now() - S.lastHuntAt < HUNT_COOLDOWN) return null;
-  if (openHuntLots() >= MAX_HUNT_OPEN) return null;
+  const volNow = retStdev() || 0.05;
+  const capHunt = S.regime && S.regime.shock ? 2 : volNow > 1.2 ? 2 : volNow < 0.35 ? 4 : MAX_HUNT_OPEN;
+  if (openHuntLots() >= capHunt) return null;
   if (huntTooClose(p)) return null;
   if (S.position) {
     const pk = packHunt(p);
@@ -2758,19 +2768,19 @@ function cancelPendingAdds() {
     }
   }
 }
-function circuitBreak(p) {
+async function circuitBreak(p) {
   if (!p || S.status !== "running") return;
   const limit = Math.max(LOSS_STOP_USD, (S.config.cycleBalance || 0) * 0.08);
-  const cyc = (S.realizedPnl || 0) + (S.position ? S.position.unrealized : 0) - (S.feesPaid || 0);
+  const cyc = (S.realizedPnl || 0) + (S.position ? S.position.unrealized : 0) - (S.feesPaid || 0) - (S.slipCost || 0);
   if (cyc <= -limit) {
-    flattenAt(p, "\u0643\u0627\u0628\u062D \u0627\u0644\u062E\u0633\u0627\u0631\u0629");
+    await flattenAt(p, "\u0643\u0627\u0628\u062D \u0627\u0644\u062E\u0633\u0627\u0631\u0629");
     S._postDisaster = Date.now();
     startStudy(false);
     pushLog("server", "\u26D4 \u0643\u0627\u0628\u062D \u0627\u0644\u062E\u0633\u0627\u0631\u0629: \u0627\u0644\u062F\u0648\u0631\u0629 \u0628\u0644\u063A\u062A " + fmtUsd(cyc) + " \u2014 \u0623\u064F\u063A\u0644\u0642 \u0627\u0644\u0645\u0631\u0643\u0632\u060C \u062F\u0631\u0627\u0633\u0629 60\u062B \u062B\u0645 \u0627\u0644\u0639\u0648\u062F\u0629");
     notify("\u0643\u0627\u0628\u062D \u0627\u0644\u062E\u0633\u0627\u0631\u0629: \u0623\u064F\u063A\u0644\u0642 \u0627\u0644\u0645\u0631\u0643\u0632 \u0639\u0646\u062F \u062D\u062F \u0627\u0644\u0643\u0627\u0631\u062B\u0629 \u0648\u064A\u062F\u0631\u0633 \u0627\u0644\u0648\u0636\u0639 \u0642\u0628\u0644 \u0627\u0644\u0639\u0648\u062F\u0629", "warn");
   }
 }
-function escapeAdverse(p) {
+async function escapeAdverse(p) {
   if (S.status !== "running" || !S.position || !p) return;
   const pos = S.position;
   let danger = liqDanger(p);
@@ -2808,7 +2818,7 @@ function escapeAdverse(p) {
   const cooled = S._flipAt && Date.now() - S._flipAt < 45e3;
   if (cooled && !danger) return;
   const was = pos.side, nextSide = was === "long" ? "short" : "long";
-  flattenAt(p, danger ? "\u0645\u0631\u0643\u0632" : "\u0643\u0627\u0628\u062D \u0627\u0644\u0643\u0627\u0631\u062B\u0629");
+  await flattenAt(p, danger ? "\u0645\u0631\u0643\u0632" : "\u0643\u0627\u0628\u062D \u0627\u0644\u0643\u0627\u0631\u062B\u0629");
   if (S.config.directionMode === "auto") S.config.direction = nextSide;
   S.huntAnchor = p;
   S._flipAt = Date.now();
@@ -2872,7 +2882,7 @@ function ensureGrid() {
   S.gridAnchor = center;
   S.grid.sort((a, b) => b.price - a.price);
 }
-function flattenAt(p, source) {
+async function flattenAt(p, source) {
   const pos = S.position;
   if (pos && S.config.mode === "live" && S.keys) {
     exCancelAll(S.config.symbol).catch(() => {
@@ -2880,7 +2890,25 @@ function flattenAt(p, source) {
     exCancelStops(S.config.symbol).catch(() => {
     });
     S._guardId = null;
-    exCloseQty(S.config.symbol, pos.side, pos.size).catch((e) => pushLog("error", "\u0627\u0644\u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0641\u0634\u0644: " + (e.message || e)));
+    let closed = false;
+    for (let att = 0; att < 5 && !closed; att++) {
+      try {
+        await exCloseQty(S.config.symbol, pos.side, pos.size);
+        closed = true;
+      } catch (e) {
+        pushLog("error", "\u0645\u062D\u0627\u0648\u0644\u0629 \u0625\u063A\u0644\u0627\u0642 " + (att + 1) + " \u0641\u0634\u0644\u062A: " + String(e?.message || e));
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          const live = await exPosition(S.config.symbol);
+          if (live && live.size > 0) pos.size = live.size;
+          else {
+            closed = true;
+          }
+        } catch (e2) {
+        }
+      }
+    }
+    if (!closed) pushLog("error", "\u0627\u0644\u0625\u063A\u0644\u0627\u0642 \u0644\u0645 \u064A\u064F\u0624\u0643\u064E\u0651\u062F \u0628\u0639\u062F 5 \u0645\u062D\u0627\u0648\u0644\u0627\u062A \u2014 \u0627\u0644\u062D\u0627\u0631\u0633 \u0627\u0644\u0637\u0627\u0631\u0626 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u0648 \u0627\u0644\u062D\u0645\u0627\u064A\u0629 \u0627\u0644\u0623\u062E\u064A\u0631\u0629");
   }
   if (pos && p > 0) {
     const cs = pos.side === "short" ? "buy" : "sell";
@@ -3076,6 +3104,7 @@ var _syncErrAt = 0;
 var _syncErrMsg = "";
 var _huntErrAt = 0;
 async function liveSync() {
+  if (R()) return;
   if (S.config.mode !== "live" || !S.keys) return;
   const sym = S.config.symbol;
   try {
@@ -3343,8 +3372,8 @@ async function botTick() {
       }
     }
     if (running && price > 0) {
-      circuitBreak(price);
-      escapeAdverse(price);
+      await circuitBreak(price);
+      await escapeAdverse(price);
       harvestRipe(price);
       const due = S.grid.filter((l) => shouldFill(l, price));
       if (S.config.mode !== "live") for (const l of selectDueAdds(due, price)) {
@@ -3508,7 +3537,7 @@ async function stopBot() {
       notify("\u062A\u062D\u0630\u064A\u0631: \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0645\u0631\u0643\u0632 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u0644\u0645 \u064A\u062A\u0623\u0643\u062F \u2014 \u062A\u062D\u0642\u0642 \u064A\u062F\u0648\u064A\u064B\u0627 \u0641\u0648\u0631\u064B\u0627", "warn");
     }
   }
-  flattenAt(p, "\u0625\u064A\u0642\u0627\u0641");
+  await flattenAt(p, "\u0625\u064A\u0642\u0627\u0641");
   S.status = "stopped";
   clearNativeOngoing();
   pushLog("info", "\u0625\u064A\u0642\u0627\u0641 \u2014 \u0623\u064F\u063A\u0644\u0642\u062A \u0643\u0644 \u0627\u0644\u0635\u0641\u0642\u0627\u062A \u0639\u0646\u062F \u0627\u0644\u0633\u0639\u0631 \u0627\u0644\u062D\u0627\u0644\u064A");
@@ -3730,8 +3759,8 @@ function initEngine() {
   if (R()) {
     pushLog("info", "\u0648\u0636\u0639 \u0633\u064A\u0631\u0641\u0631 \u0627\u0644\u062C\u0648\u0627\u0644 \u2014 \u0627\u0644\u0645\u062D\u0631\u0643 \u064A\u0639\u0645\u0644 \u0641\u064A Termux \u0628\u0644\u0627 \u0646\u0648\u0645");
     remoteSync();
-    setInterval(remoteSync, 2e3);
-    setInterval(emit, 1e3);
+    setInterval(remoteSync, 1200);
+    setInterval(emit, 500);
     return;
   }
   const _detect = setInterval(async () => {
@@ -3754,7 +3783,7 @@ function initEngine() {
         logSwallow("local-stop", e);
       }
       remoteSync();
-      setInterval(remoteSync, 2e3);
+      setInterval(remoteSync, 1200);
     }
   }, 5e3);
   loadAll();
