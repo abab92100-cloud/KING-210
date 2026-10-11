@@ -614,6 +614,23 @@ async function remoteSync() {
     return false;
   }
 }
+async function detectRemoteServer() {
+  if (typeof window === "undefined") return false;
+  try {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 900);
+    const r = await fetch("http://127.0.0.1:8787/state", { signal: c.signal });
+    clearTimeout(t);
+    const j = await r.json();
+    if (j && j.ok) {
+      window.__KING_REMOTE = "http://127.0.0.1:8787";
+      return true;
+    }
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  }
+  return false;
+}
 var S = {
   keys: null,
   config: {
@@ -1556,8 +1573,8 @@ function levelQtys(center, n) {
   const total = Math.max(0, c.cycleBalance) * 0.8;
   const used = S.journal.filter((j) => j.status === "open").reduce((a, j) => a + j.qty * (S.multiplier || 1) * j.entry, 0) / lev;
   let budget = Math.max(0, total - used) * (S.regime ? S.regime.sizeMult : 1) * memSizeMult();
-  if (c.mode === "live" && S.exEquity > 0) budget = Math.min(budget, Math.max(0, S.exEquity * 0.95 - used));
-  else if (c.mode === "live" && S.exAvail > 0) budget = Math.min(budget, S.exAvail * 0.95);
+  if (c.mode === "live" && S.exAvail > 0) budget = Math.min(budget, Math.max(0, S.exAvail * 0.95));
+  else if (c.mode === "live" && S.exEquity > 0) budget = Math.min(budget, Math.max(0, S.exEquity * 0.95 - used));
   const denom = (mm) => mm + 0.25 * mm * (mm - 1);
   let m = Math.max(1, n);
   while (m > 1 && Math.floor(budget / denom(m) * lev / cv) < 1) m--;
@@ -2530,6 +2547,10 @@ function memHuntMult() {
   return 1;
 }
 function packHunt(p) {
+  if (!(S.multiplier > 0)) {
+    pushLog("warn", "\u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0645\u0648\u0627\u0635\u0641\u0627\u062A \u0627\u0644\u0639\u0642\u062F \u2014 \u0644\u0627 \u062F\u062E\u0648\u0644 \u0628\u062D\u062C\u0645 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641");
+    return null;
+  }
   return { side: S.config.direction === "short" ? "sell" : "buy", qty: contractsForLevel(p) };
 }
 function huntTrigger(p) {
@@ -2558,6 +2579,7 @@ function huntTrigger(p) {
   if (huntTooClose(p)) return null;
   if (S.position) {
     const pk = packHunt(p);
+    if (!pk) return null;
     const cover = S.position.side === "short" && pk.side === "buy" || S.position.side === "long" && pk.side === "sell";
     return cover ? null : pk;
   }
@@ -3677,6 +3699,29 @@ function initEngine() {
     setInterval(emit, 1e3);
     return;
   }
+  const _detect = setInterval(async () => {
+    if (R()) {
+      clearInterval(_detect);
+      return;
+    }
+    const found = await detectRemoteServer().catch(() => false);
+    if (found) {
+      clearInterval(_detect);
+      pushLog("info", "\u062A\u0645 \u0627\u0643\u062A\u0634\u0627\u0641 \u0633\u064A\u0631\u0641\u0631 \u0627\u0644\u062C\u0648\u0627\u0644 \u2014 \u0627\u0644\u062A\u062D\u0648\u0644 \u0644\u0648\u0636\u0639 \u0627\u0644\u0645\u0631\u0622\u0629\u060C \u0627\u0644\u0645\u062D\u0631\u0643 \u0627\u0644\u0645\u062D\u0644\u064A \u062A\u0648\u0642\u0641");
+      try {
+        S.status = "idle";
+        if (S.config.mode !== "live") {
+          S.grid = [];
+          S.position = null;
+        }
+        saveAll();
+      } catch (e) {
+        logSwallow("local-stop", e);
+      }
+      remoteSync();
+      setInterval(remoteSync, 2e3);
+    }
+  }, 5e3);
   loadAll();
   if (S.config.symbol === "BTCUSDTM") S.config.symbol = "XBTUSDTM";
   S.config.displaySymbol = S.config.symbol.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");

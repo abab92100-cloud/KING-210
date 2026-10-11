@@ -785,8 +785,9 @@ function levelQtys(center,n){ const c=S.config;
   // الميزانية الحية تُحكَم برصيد الحساب الكلي (equity) لا بـ«المتاح» اللحظي:
   // المتاح ينهار لحظة حجز الأوامر المركونة فيتقلص السلم ثم يتمدد — حلقة هدم
   // وإعادة بناء ورفض «insufficient available margin» عند كل أمر جديد
-  if(c.mode==='live'&&S.exEquity>0) budget=Math.min(budget,Math.max(0,S.exEquity*0.95-used));
-  else if(c.mode==='live'&&S.exAvail>0) budget=Math.min(budget,S.exAvail*0.95);
+  // المتاح الفعلي لدى المنصة أدق من رصيد الحساب الكلي: الهامش المحجوز لا يُنفق منه
+  if(c.mode==='live'&&S.exAvail>0) budget=Math.min(budget,Math.max(0,S.exAvail*0.95));
+  else if(c.mode==='live'&&S.exEquity>0) budget=Math.min(budget,Math.max(0,S.exEquity*0.95-used));
   // مجموع نسب السلم = m + 0.25·m(m−1) — الوحدة = الميزانية ÷ المجموع
   const denom=mm=>mm+0.25*mm*(mm-1);
   let m=Math.max(1,n);
@@ -1468,7 +1469,9 @@ function memHuntMult(){ const lv=sanctionLevel(S.config.direction);
   if(wr>=0.6&&r.pnl>0) return 0.85;
   if(lv===1) return 1.1;
   return 1; }
-function packHunt(p){ return {side:S.config.direction==='short'?'sell':'buy',qty:contractsForLevel(p)}; }
+function packHunt(p){
+  if(!(S.multiplier>0)){ pushLog('warn','بانتظار مواصفات العقد — لا دخول بحجم غير معروف'); return null; }
+  return {side:S.config.direction==='short'?'sell':'buy',qty:contractsForLevel(p)}; }
 function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(!warmedUp()) return null;
   if(studying()) return null; // العملة قيد الدراسة — لا دخول قبل اكتمال بصمتها
@@ -1492,6 +1495,7 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(openHuntLots()>=MAX_HUNT_OPEN) return null;
   if(huntTooClose(p)) return null;
   if(S.position){ const pk=packHunt(p);
+    if(!pk) return null;
     const cover=(S.position.side==='short'&&pk.side==='buy')||
       (S.position.side==='long'&&pk.side==='sell');
     return cover?null:pk; }
@@ -2215,6 +2219,16 @@ export function initEngine(){
   // (تشغيل محركين معًا = أوامر مزدوجة على المنصة، لذلك لا سقوط تلقائي للوضع المحلي أبدًا)
   if(R()){ pushLog('info','وضع سيرفر الجوال — المحرك يعمل في Termux بلا نوم');
     remoteSync(); setInterval(remoteSync,2000); setInterval(emit,1000); return; }
+  // لم يُعثر على السيرفر الآن (مثلاً HTTP محجوب أو Termux لم يبدأ بعد) — جسّ نبض دوريًا:
+  // أول اكتشاف ناجح يوقف المحرك المحلي فورًا ويتحول لوضع المرآة (لا أوامر مزدوجة أبدًا)
+  const _detect=setInterval(async()=>{
+    if(R()){ clearInterval(_detect); return; }
+    const found=await detectRemoteServer().catch(()=>false);
+    if(found){ clearInterval(_detect);
+      pushLog('info','تم اكتشاف سيرفر الجوال — التحول لوضع المرآة، المحرك المحلي توقف');
+      try{ S.status='idle'; if(S.config.mode!=='live'){ S.grid=[]; S.position=null; } saveAll(); }catch(e){ logSwallow("local-stop", e); }
+      remoteSync(); setInterval(remoteSync,2000); }
+  },5000);
   loadAll();
   if(S.config.symbol==='BTCUSDTM') S.config.symbol='XBTUSDTM'; // الرمز الصحيح في عقود KuCoin
   S.config.displaySymbol=S.config.symbol.replace(/USDTM$/i,'').replace(/^XBT$/i,'BTC');
