@@ -1,0 +1,68 @@
+name: Build KING-trading APK
+
+on:
+  push:
+    branches: ["vibe/**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build web + server
+        working-directory: app/trq-trading
+        run: |
+          npm ci
+          npm run build
+          npm run build:server
+
+      - name: Sync Capacitor Android
+        working-directory: app/trq-trading
+        run: npx cap sync android
+
+      - name: Build APK (debug-signed release)
+        working-directory: app/trq-trading/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Rename APK
+        working-directory: app/trq-trading/android
+        run: |
+          mv app/build/outputs/apk/release/app-release.apk KING-trading-v1.0.5.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KING-trading-v1.0.5-apk
+          path: app/trq-trading/android/KING-trading-v1.0.5.apk
+          retention-days: 90
+
+      - name: Create Release and attach APK
+        if: github.ref == 'refs/heads/vibe/v1.0.5-apk'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v1.0.5" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "KING-trading v1.0.5 — مطابقة الربح مع المنصة" \
+            --notes "إصلاح مطابقة الربح الحقيقي مع المنصة: أسعار/رسوم تنفيذ فعلية من سجل التنفيذات، منع الأرباح الوهمية، خصم رسوم التمويل، مزامنة المتوسطات. يتطلب تحديث سيرفر Termux أيضًا." \
+            "app/trq-trading/android/KING-trading-v1.0.5.apk" \
+            "releases/king-server.mjs" \
+            "releases/king-setup.sh" || true
