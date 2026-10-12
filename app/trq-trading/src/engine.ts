@@ -206,7 +206,7 @@ export const S: any = {
   _metaSym:null, maxOrderQty:0, exAvail:null, exLeverage:null, // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
   grid:[], position:null, journal:[], logs:[],
   history:[], linkOk:false, exEquity:null,
-  realizedPnl:0, feesPaid:0, cycleHarvested:0, slipCost:0,
+  realizedPnl:0, feesPaid:0, fundingPaid:0, cycleHarvested:0, slipCost:0,
   priceTrail:[], emaFast:null, emaSlow:null, cvd:0, tape:[],
   biasScore:0, biasReasons:[], regime:null, confluence:null,
   huntAnchor:null, gridAnchor:null, lastHuntAt:0, lastAddAt:0, lastWorkAt:0, huntCount:0,
@@ -251,7 +251,7 @@ function saveAll(){ try{
   localStorage.setItem('king:snd',S.sound?'1':'0');
   localStorage.setItem('king:tone',S.soundTone||'soft');
   const rt={grid:S.grid,position:S.position,journal:S.journal,realizedPnl:S.realizedPnl,
-    feesPaid:S.feesPaid,cycleHarvested:S.cycleHarvested||0,priceTrail:S.priceTrail,cvd:S.cvd,huntCount:S.huntCount,
+    feesPaid:S.feesPaid,fundingPaid:S.fundingPaid||0,cycleHarvested:S.cycleHarvested||0,priceTrail:S.priceTrail,cvd:S.cvd,huntCount:S.huntCount,
     lastPrice:S.lastPrice,markPrice:S.markPrice,activeCycle:S.activeCycle,status:S.status,
     history:S.history,logs:S.logs,savedAt:Date.now()};
   localStorage.setItem('king:rt',JSON.stringify(rt));
@@ -264,7 +264,7 @@ function loadAll(){ try{
   S.soundTone=localStorage.getItem('king:tone')||'soft';
   const rt=JSON.parse(localStorage.getItem('king:rt')||'null');
   if(rt){ Object.assign(S,{grid:rt.grid||[],position:rt.position||null,journal:rt.journal||[],
-    realizedPnl:rt.realizedPnl||0,feesPaid:rt.feesPaid||0,cycleHarvested:rt.cycleHarvested||0,priceTrail:rt.priceTrail||[],
+    realizedPnl:rt.realizedPnl||0,feesPaid:rt.feesPaid||0,fundingPaid:rt.fundingPaid||0,cycleHarvested:rt.cycleHarvested||0,priceTrail:rt.priceTrail||[],
     cvd:rt.cvd||0,huntCount:rt.huntCount||0,lastPrice:rt.lastPrice??null,
     markPrice:rt.markPrice??null,activeCycle:rt.activeCycle||null,status:rt.status||'idle',
     history:rt.history||[],logs:rt.logs||[]});
@@ -522,6 +522,12 @@ const exOrders = symbol => kcPrivate('GET','/api/v1/orders?status=active&symbol=
   .catch(()=>null); // null = فشل القراءة — جولة مزامنة تُتخطى كاملة، لا «لا أوامر» زائفة تفكك الشبكة
 // قائمة أوامر الوقف — قناة منفصلة عن الأوامر العادية لا يطالها كنس اليتيمة
 // العادي، ولهذا تراكمت 9 ستوبات على مركز المالك. null = فشل قراءة = لا كنس أعمى
+const exFills = symbol => kcPrivate('GET','/api/v1/fills?symbol='+encodeURIComponent(symbol)+'&pageSize=100')
+  .then(d=>{const a=Array.isArray(d)?d:(d.items||[]);
+    return a.map(f=>({orderId:f.orderId||'',clientOid:f.clientOid||null,
+      side:f.side==='sell'?'sell':'buy',price:+f.price||0,size:+f.size||0,
+      fee:Math.abs(+f.fee||0),feeCurrency:f.feeCurrency||'',at:+f.createdAt||0,ts:f.tradeId||''}));})
+  .catch(()=>null);
 const exStops = symbol => kcPrivate('GET','/api/v1/stopOrders?symbol='+encodeURIComponent(symbol))
   .then(d=>{const a=Array.isArray(d)?d:(d.items||[]);
     return a.map(o=>({id:o.id||o.orderId||'',stopPrice:+(o.stopPrice??o.price??0)||0}));})
@@ -927,6 +933,16 @@ function shouldFill(l,p){ if(l.status!=='open'&&l.status!=='armed') return false
 function feeFor(notional,taker){ return notional*(taker?S.takerFee:S.makerFee); }
 function lotNet(side,entry,exit,qty,fees){
   return (side==='short'?1:-1)*(entry-exit)*(S.multiplier||1)*qty-fees; }
+function accrueFunding(){ const pos=S.position;
+  if(!pos||!(pos.size>0)||!S.funding) return 0;
+  const now=Date.now(); const last=S._fundAt||now;
+  const hours=Math.min(8,(now-last)/3600000);
+  if(hours<0.25) return 0;
+  const notional=pos.size*(S.multiplier||1)*(pos.entry||S.lastPrice||0);
+  const cost=notional*Math.abs(S.funding)*(hours/8);
+  S._fundAt=now;
+  S.fundingPaid=Math.round(((S.fundingPaid||0)+cost)*10000)/10000;
+  return cost; }
 function applyDelta(side,qty,price){ const dir=side==='sell'?'short':'long';
   if(!S.position){ S.position={side:dir,size:qty,entry:price,leverage:S.config.leverage,
     unrealized:0,openedAt:Date.now(),liquidation:null};
@@ -1123,11 +1139,16 @@ function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
 // السعر المحلي. دخول: يُضاف للمركز والسجل فورًا. جني: يُقفل جزئيًا ويُبنك صافيه،
 // فإن بلغ البنك الهدف بِيع المتبقي بسعر ربحي فورًا، وإلا بقي عند نفس النقطة
 // وعُوّض المُباع بمنطقة دخول جديدة (قواعد المالك حرفيًا)
-function creditExFill(l,delta,fp){ if(!(delta>0)||!(fp>0)) return false;
+function creditExFill(l,delta,fp){ return creditExFillReal(l,delta,fp,null); }
+function creditExFillReal(l,delta,fp,realFee){ if(!(delta>0)||!(fp>0)) return false;
   l.exFilled=(l.exFilled||0)+delta;
   const mult=S.multiplier||1;
   if(!l.reduceOnly){
-    const fee=feeFor(delta*mult*fp,false); S.feesPaid+=fee;
+    const estFee=feeFor(delta*mult*fp,false);
+    if(realFee!=null&&S._realFeesAt&&Math.abs(realFee-estFee)>1e-9){
+      S.feesPaid=Math.max(0,S.feesPaid-estFee); S.feesPaid+=realFee; }
+    else S.feesPaid+=estFee;
+    const fee=realFee!=null&&realFee>0?realFee:estFee;
     const dd=applyDelta(l.side,delta,fp);
     if(dd.addedQty>0){ const lotId=noteEntry(dd.addedQty,fp,fee,l.origin==='hunt'?'hunt':'grid',
       !!l._counted); l._counted=true; l.lotId=l.lotId||lotId; }
@@ -1136,7 +1157,11 @@ function creditExFill(l,delta,fp){ if(!(delta>0)||!(fp>0)) return false;
       ' @ '+fmtPx(fp)+' — الباقي معلّق يُكمل أو يُلغى عند الجني');
     if(S.position&&S.status==='running') syncPositionTp();
     return false; }
-  const fee=feeFor(delta*mult*fp,false); S.feesPaid+=fee;
+  const estFee2=feeFor(delta*mult*fp,false);
+  if(realFee!=null&&S._realFeesAt&&Math.abs(realFee-estFee2)>1e-9){
+    S.feesPaid=Math.max(0,S.feesPaid-estFee2); S.feesPaid+=realFee; }
+  else S.feesPaid+=estFee2;
+  const fee=realFee!=null&&realFee>0?realFee:estFee2;
   const dd=applyDelta(l.side,delta,fp);
   const net=notePartialClose(delta,fp,fee,l.lotId);
   S._tpBanked=Math.round(((S._tpBanked||0)+net)*10000)/10000;
@@ -1651,7 +1676,7 @@ async function circuitBreak(p:any){ if(!p||S.status!=='running') return;
   // حد الكارثة على مستوى الدورة كلها — قاعدة المالك نفسها: لا كابح قبل $16 (أو 8% من الرصيد)
   const limit=Math.max(LOSS_STOP_USD,(S.config.cycleBalance||0)*0.08);
   // الانزلاق المقيس (فرق سعر التنفيذ عن المستوى) يُخصم أيضًا — الكابح يرى الخسارة الحقيقية
-  const cyc=(S.realizedPnl||0)+(S.position?S.position.unrealized:0)-(S.feesPaid||0)-(S.slipCost||0);
+  const cyc=(S.realizedPnl||0)+(S.position?S.position.unrealized:0)-(S.feesPaid||0)-(S.slipCost||0)-(S.fundingPaid||0);
   if(cyc<=-limit){ await flattenAt(p,'كابح الخسارة');
     // لا إيقاف للبوت: دراسة 60 ثانية ثم يعود للعمل — الإيقاف اليدوي كان يقتل الاستمرارية
     S._postDisaster=Date.now(); // علامة ما بعد الكارثة — studyTick يمدّد الانتظار حتى يستقر السوق
@@ -1849,6 +1874,7 @@ function onStreamTick(d){
     // مسار CVD — لكشف انحراف الحيتان (السعر عكس التدفق)
     if(!S._cvdAt||now-S._cvdAt>1500){ S.cvdTrail=[...(S.cvdTrail||[]),{t:now,cvd:S.cvd}].slice(-90); S._cvdAt=now; } }
   S.confluence=readConfluence(); S.regime=readRegime();
+  if(S.position) accrueFunding();
   emitThrottled();
 }
 
@@ -1903,9 +1929,15 @@ async function liveSync(){ if(R()) return; // وضع المرآة: الحالة 
     if(pos){
       if(inGrace&&!S.position){ /* ignore stale center during grace window */ }
       else if(!S.position){ S.position=pos; pushLog('recover','استُعيد مركز '+pos.side+' من المنصة'); }
-      else { S.position.size=pos.size; S.position.entry=pos.entry;
+      else { const prevEntry=S.position.entry, prevSize=S.position.size;
+        S.position.size=pos.size; S.position.entry=pos.entry;
         S.position.unrealized=pos.unrealized; S.position.side=pos.side;
-        if(pos.liquidation) S.position.liquidation=pos.liquidation; } }
+        if(pos.liquidation) S.position.liquidation=pos.liquidation;
+        if(pos.entry>0&&Math.abs(pos.entry-prevEntry)/Math.max(1e-9,prevEntry)>1e-4){
+          const openRow=S.journal.find(j=>j.status==='open');
+          if(openRow){ const oldFees=openRow.fees||0; openRow.entry=pos.entry;
+            if(openRow.qty>0&&S.position.size!==prevSize){ openRow.qty=S.position.size; openRow.fees=oldFees; } }
+          if(S.activeCycle) S.activeCycle.entry=pos.entry; } } }
     else if(S.position&&Date.now()>S.ignoreExchangeUntil){ S.position=null; S._guardPx=0; S._guardId=null; S._tpBanked=0; }
     if(pos&&pos.liquidation) S.exLiqPrice=pos.liquidation;
     // الرصيد المتاح الحقيقي كل 30 ثانية — حدّ الميزانية به يمنع رفض
@@ -1945,26 +1977,53 @@ async function liveSync(){ if(R()) return; // وضع المرآة: الحالة 
     // اعتبار الفشل «قائمة فارغة» كان يعيد تسليح كل مستوى فيضاعف الأوامر على
     // المنصة ويحجز الهامش حتى تنهار الأحجام (كارثة الـ17 أمرًا اليتيمة)
     if(!exs) return;
+    const fills=await exFills(sym);
+    S._fillsOk=!!fills;
+    if(fills){
+      const byOidF=new Map(); const byIdF=new Map();
+      for(const f of fills){ if(!(f.size>0)||!(f.price>0)) continue;
+        if(f.clientOid){ const e1=byOidF.get(f.clientOid)||{size:0,cost:0,fee:0,n:0};
+          e1.size+=f.size; e1.cost+=f.size*f.price; e1.fee+=f.fee; e1.n++; byOidF.set(f.clientOid,e1); }
+        if(f.orderId){ const e2=byIdF.get(f.orderId)||{size:0,cost:0,fee:0,n:0};
+          e2.size+=f.size; e2.cost+=f.size*f.price; e2.fee+=f.fee; e2.n++; byIdF.set(f.orderId,e2); } }
+      const agg=(key,map)=>{ if(!key) return null; const e=map.get(key);
+        if(!e||!(e.size>0)) return null; return {avgPx:e.cost/e.size,size:e.size,fee:e.fee}; };
+      for(const l of S.grid){ if(l.status==='cancelled'||l.status==='filled') continue;
+        const e=agg(l.clientOid,byOidF)||agg(l.exchangeOrderId,byIdF);
+        if(!e) continue;
+        const before=l.exFilled||0;
+        if(e.size>before){ const delta=e.size-before;
+          const actualFee=e.fee*(delta/e.size);
+          l._avgFillPx=e.avgPx; l._realFillFee=(l._realFillFee||0)+actualFee;
+          const done=creditExFillReal(l,delta,e.avgPx,actualFee);
+          if(done) continue; }
+        else l._avgFillPx=e.avgPx; }
+      S._realFeesAt=Date.now(); }
     const byOid=new Map(exs.map(o=>[o.clientOid||'',o]));
     const byId=new Map(exs.map(o=>[o.orderId,o]));
     for(const l of S.grid){ if(l.status==='cancelled'||l.status==='filled') continue;
       const hit=(l.clientOid&&byOid.get(l.clientOid))||
       (l.exchangeOrderId&&byId.get(l.exchangeOrderId));
       if(hit){ l.status='open'; l.exchangeOrderId=hit.orderId;
-        // تنفيذ جزئي أو كامل ورد من المنصة — اعتمده فورًا (دخول أو جني)
         const fs=hit.filledSize||0; let done=false;
-        if(fs>(l.exFilled||0)) done=creditExFill(l,fs-(l.exFilled||0),l.price>0?l.price:hit.price);
+        if(fs>(l.exFilled||0)){ const actualPrice=l._avgFillPx>0?l._avgFillPx:(hit.price>0?hit.price:l.price);
+          done=creditExFill(l,fs-(l.exFilled||0),actualPrice); }
         if(!done&&l.status!=='filled'&&fs>0&&fs>=l.qty-1e-9){ l.status='filled';
           l.filledAt=Date.now(); l.filledPrice=l.price;
           if(l.reduceOnly&&!S.position){ const tb=S._tpBanked; _harvestCleanup(l.price);
             pushLog('server','جني مكتمل ✓ — نُفّذ على المنصة بالكامل، صافي الدورة '+fmtUsd(tb)); } } }
       else if(l.status==='open'&&!shouldFill(l,S.lastPrice||0)){
         l.status='armed'; l.exchangeOrderId=null; l.exFilled=0; }
+      else if(l.status==='open'&&l.exchangeOrderId&&shouldFill(l,S.lastPrice||0)&&S._fillsOk===false){
+        // اختفى من النشطة وسجل التنفيذ غير متاح (شبكة) — لا تحجز ربحًا بغير دليل
+        const fs2=(l.exFilled||0);
+        if(!(fs2>0)){ l.status='cancelled'; l.exchangeOrderId=null; l.exFilled=0;
+          pushLog('warn','\u0623\u0645\u0631 \u0627\u062E\u062A\u0641\u0649 \u0645\u0646 \u0627\u0644\u0645\u0646\u0635\u0629 \u0648\u0644\u0645 \u064A\u064F\u0646\u0641\u0651\u0638 \u0645\u0646\u0647 \u0634\u064A\u0621 \u2014 \u0644\u0627 \u064A\u064F\u062D\u062C\u0632 \u0623\u064A \u0631\u0628\u062D (\u0645\u0633\u062A\u0648\u0649 @ '+fmtPx(l.price)+')'); }
+      }
       else if(l.status==='open'&&l.exchangeOrderId&&shouldFill(l,S.lastPrice||0)){
-        // اختفى من النشطة والسعر عابر موقعه = نُفّذ بالكامل بين مزامنتين — اعتمده
         const rem=l.qty-(l.exFilled||0); let done=false;
-        if(rem>0) done=creditExFill(l,rem,l.price>0?l.price:S.lastPrice||0);
-        if(l.status!=='filled'){ l.status='filled'; l.filledAt=Date.now(); l.filledPrice=l.price; }
+        if(rem>0) done=creditExFill(l,rem,l._avgFillPx>0?l._avgFillPx:(l.price>0?l.price:S.lastPrice||0));
+        if(l.status!=='filled'){ l.status='filled'; l.filledAt=Date.now(); l.filledPrice=l._avgFillPx>0?l._avgFillPx:l.price; }
         if(!done&&l.reduceOnly&&!S.position){ const tb=S._tpBanked; _harvestCleanup(l.price);
           pushLog('server','جني مكتمل ✓ — نُفّذ على المنصة بالكامل، صافي الدورة '+fmtUsd(tb)); } } }
     // أي مستوى أُلغي أو نُفّذ محليًا وله أمر حي على المنصة — ألغِه هناك فورًا
@@ -2163,7 +2222,7 @@ export function newCycle(){ if(R()){ remoteCmd('newCycle').then(()=>remoteSync()
     activeCycle:null,huntCount:0,huntOpen:0,priceTrail:[],emaFast:null,emaSlow:null,
     cvd:0,tape:[],orderBook:{bids:[],asks:[]},status:'idle',startedAt:null,
     huntAnchor:null,gridAnchor:null,liqPrice:null,exLiqPrice:null,_memBlockAt:0,
-    cycleHarvested:0,_tpBanked:0,_posPeakNet:null,_spikeDone:false,_posNetPrev:null,_spikePosId:null});
+    cycleHarvested:0,fundingPaid:0,slipCost:0,_fundAt:0,_tpBanked:0,_posPeakNet:null,_spikeDone:false,_posNetPrev:null,_spikePosId:null});
   S.config=cfg; S.keys=keys; S.sound=snd; S.soundTone=tone;
   pushLog('info','دورة جديدة برصيد $'+rolled.toFixed(2)+' — مُسحت السجلات وبدأت صفحة نظيفة');
   toast('دورة جديدة برصيد $'+rolled.toFixed(2));
@@ -2212,7 +2271,7 @@ export function saveCfg(v){
         .catch(e=>pushLog('error','إغلاق مركز الزوج السابق فشل: '+(e.message||e)));
       pushLog('server','أُلغيت أوامر ووقف '+old+' وأُغلق مركزه قبل الانتقال'); }
     S.grid=[]; S.position=null; S.journal=[]; S._tpBanked=0;
-    S.realizedPnl=0; S.feesPaid=0; S.ignoreExchangeUntil=Date.now()+12000;
+    S.realizedPnl=0; S.feesPaid=0; S.fundingPaid=0; S.slipCost=0; S._fundAt=0; S.ignoreExchangeUntil=Date.now()+12000;
     S.tape=[]; S.priceTrail=[]; S.emaFast=S.emaSlow=null; S._metaAt=0;
     // مضاعف العملة السابقة سمّ زاعف للجديدة (عقد PEPE = 520 ألف وحدة!) —
     // يُصفَّر ويُحجب التداول الحقيقي حتى تُوثَّق مواصفات العقد الجديد
