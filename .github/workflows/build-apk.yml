@@ -33,10 +33,27 @@ jobs:
         working-directory: app/trq-trading
         run: npx cap sync android
 
-      - name: Build APK (debug-signed release)
+      - name: Build APK (stable-signed release)
         working-directory: app/trq-trading/android
+        env:
+          KING_KS_BASE64: ${{ secrets.KING_KEYSTORE_BASE64 }}
+          KING_KS_PASS: ${{ secrets.KING_KEYSTORE_PASSWORD }}
+          KING_KEY_ALIAS: ${{ secrets.KING_KEY_ALIAS }}
+          KING_KEY_PASS: ${{ secrets.KING_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
+          if [ -n "$KING_KS_BASE64" ]; then
+            echo "$KING_KS_BASE64" | base64 -d > king-release.keystore
+            cat >> app/build.gradle <<'EOF'
+          android.signingConfigs.release {
+              storeFile rootProject.file('../king-release.keystore')
+              storePassword System.getenv('KING_KS_PASS')
+              keyAlias System.getenv('KING_KEY_ALIAS')
+              keyPassword System.getenv('KING_KEY_PASS')
+          }
+          android.buildTypes.release.signingConfig = android.signingConfigs.release
+          EOF
+          fi
           ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK
