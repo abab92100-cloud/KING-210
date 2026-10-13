@@ -1129,7 +1129,7 @@ async function maybeSwitchSymbol() {
   if (S.status !== "running") return;
   if (Date.now() - _lastSwitchAt < 6e4) return;
   const idleMs = Date.now() - (S.lastHuntAt || S.startedAt || Date.now());
-  const rotate = idleMs > 45 * 60 * 1e3;
+  const rotate = idleMs > 5 * 60 * 1e3;
   try {
     const r = await scanRadar();
     if (!r || !r.list || !r.list.length) return;

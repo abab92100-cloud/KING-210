@@ -518,7 +518,7 @@ export async function maybeSwitchSymbol(){ if(S.position) return;
   if(Date.now()-_lastSwitchAt<60000) return;
   // دوران زمني: لا صفقة خلال 45 دقيقة = العملة بايرة للبوت — انتقل لأقوى عملة أخرى
   const idleMs=Date.now()-(S.lastHuntAt||S.startedAt||Date.now());
-  const rotate=idleMs>45*60*1000;
+  const rotate=idleMs>5*60*1000; // دوران سريع: 5 دقائق بلا فرصة = العملة بايرة
   try{ const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
     const cur=r.list.find(l=>l.symbol===S.config.symbol);
     let top=r.list[0];
