@@ -38,6 +38,8 @@ const SYMBOL = arg('symbol', 'XBTUSDTM');
 const DAYS = +arg('days', 3);
 const GRAN = +arg('gran', 1);          // 1-minute candles
 const BAL = +arg('balance', 200);
+const LEV = +arg('lev', 3);
+const TP = +arg('tpnet', 0.03);
 const MAKER_FEE = 0.0002, TAKER_FEE = 0.0006;
 
 // ---------- historical data ----------
@@ -70,15 +72,14 @@ S.config.cycleBalance = BAL;
 S.config.levels = 12;
 S.config.leverage = 3;
 S.config.gridStepPct = 0.3;
-S.config.tpNet = 0.03;
+S.config.tpNet = TP;
 S.config.hfMode = process.argv.includes('--hf');
 S.config.gridStepPct = S.config.hfMode ? 0.12 : 0.3;
 S.config.huntPct = S.config.hfMode ? 0.06 : 0.15;
 if (S.config.hfMode) {
-  S.config.levels = 12;           // same as winning run
-  S.config.leverage = 3;
-  // keep full cycle balance — the winning 52-trade run used it
+  S.config.levels = 12;
 }
+S.config.leverage = LEV;   // owner-controlled (lab default 3)
 S.multiplier = 1;
 S.tickSize = Math.pow(10, -Math.ceil(Math.log10(Math.max(1e-12, 1))) - 4);
 S.makerFee = MAKER_FEE; S.takerFee = TAKER_FEE;
