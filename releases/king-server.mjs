@@ -1132,14 +1132,19 @@ async function maybeSwitchSymbol() {
     const r = await scanRadar();
     if (!r || !r.list || !r.list.length) return;
     const top = r.list[0], cur = r.list.find((l) => l.symbol === S.config.symbol);
-    if (!cur) return;
-    if (top.symbol === cur.symbol) return;
-    const curScore = cur.score || 0, topScore = top.score || 0;
-    if (topScore - curScore < 15 || curScore >= 55) return;
+    const topScore = top.score || 0;
+    if (cur && cur.symbol === top.symbol) return;
+    if (!cur) {
+      if (topScore < 55) return;
+    } else {
+      const curScore = cur.score || 0;
+      if (topScore - curScore < 12 || curScore >= 55) return;
+    }
     _lastSwitchAt = Date.now();
-    pushLog("server", "\u{1F4E1} \u062A\u0628\u062F\u064A\u0644 \u0630\u0643\u064A: " + cur.disp + " (" + curScore + ") \u2192 " + top.disp + " (" + topScore + ") \u2014 " + (top.state || "") + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062F\u0627\u0631");
+    const curDisp = cur ? cur.disp : S.config.displaySymbol, curSc = cur ? cur.score : 0;
+    pushLog("server", "\u{1F4E1} \u062A\u0628\u062F\u064A\u0644 \u0630\u0643\u064A: " + curDisp + " (" + curSc + ") \u2192 " + top.disp + " (" + topScore + ") \u2014 " + (top.state || "") + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062F\u0627\u0631");
     toast("\u{1F4E1} \u0627\u0646\u062A\u0642\u0627\u0644 \u0625\u0644\u0649 " + top.disp + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 (" + topScore + ")");
-    nativeNotify("KING \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curScore);
+    nativeNotify("KING \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curSc);
     saveCfg({
       symbol: top.symbol,
       leverage: S.config.leverage,
@@ -2775,6 +2780,12 @@ function huntTrigger(p) {
   }
   const sig2 = huntSignals(p);
   if (!sig2.length) return null;
+  if (sig2.length < 2) {
+    const hasRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0);
+    if (!hasRetrace) return null;
+    const support = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") !== 0);
+    if (!support) return null;
+  }
   S._lastSig = sig2.slice(0, 3).join(" \xB7 ");
   return packHunt(p);
 }
@@ -3571,6 +3582,8 @@ async function botTick() {
     studyTick();
     armProgressive();
     bgRadarTick();
+    if (!S.position && S.status === "running") maybeSwitchSymbol().catch(() => {
+    });
     const _prevDir = S.config.direction;
     resolveDirection(Date.now());
     if (S.config.direction !== _prevDir) {

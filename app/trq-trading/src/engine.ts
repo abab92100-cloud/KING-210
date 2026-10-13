@@ -518,15 +518,19 @@ export async function maybeSwitchSymbol(){ if(S.position) return;
   if(Date.now()-_lastSwitchAt<60000) return;
   try{ const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
     const top=r.list[0], cur=r.list.find(l=>l.symbol===S.config.symbol);
-    if(!cur) return;
-    if(top.symbol===cur.symbol) return;
-    const curScore=cur.score||0, topScore=top.score||0;
-    if(topScore-curScore<15||curScore>=55) return;
+    const topScore=top.score||0;
+    if(cur&&cur.symbol===top.symbol) return;
+    // العملة الحالية لا تحتل مقاعدها في الرادار أصلاً = ضعيفة جدًًا
+    // (خارج أفضل 20) — إن كان الأقوى لا يقترب من أن يكون أفضل بواضح فالتبديل فوري
+    if(!cur){ if(topScore<55) return; }
+    else { const curScore=cur.score||0;
+      if(topScore-curScore<12||curScore>=55) return; }
     _lastSwitchAt=Date.now();
-    pushLog('server','\ud83d\udce1 \u062a\u0628\u062f\u064a\u0644 \u0630\u0643\u064a: '+cur.disp+' ('+curScore+') \u2192 '+top.disp+' ('+topScore+') \u2014 '+
+    const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
+    pushLog('server','\ud83d\udce1 \u062a\u0628\u062f\u064a\u0644 \u0630\u0643\u064a: '+curDisp+' ('+curSc+') \u2192 '+top.disp+' ('+topScore+') \u2014 '+
       (top.state||'')+' \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062f\u0627\u0631');
     toast('\ud83d\udce1 \u0627\u0646\u062a\u0642\u0627\u0644 \u0625\u0644\u0649 '+top.disp+' \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 ('+topScore+')');
-    nativeNotify('KING \u2014 \u062a\u0628\u062f\u064a\u0644 \u0639\u0645\u0644\u0629',top.disp+' \u062f\u0631\u062c\u0629 '+topScore+' \u0645\u0642\u0627\u0628\u0644 '+curScore);
+    nativeNotify('KING \u2014 \u062a\u0628\u062f\u064a\u0644 \u0639\u0645\u0644\u0629',top.disp+' \u062f\u0631\u062c\u0629 '+topScore+' \u0645\u0642\u0627\u0628\u0644 '+curSc);
     saveCfg({symbol:top.symbol,leverage:S.config.leverage,levels:S.config.levels,
       gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
       cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
@@ -1644,6 +1648,13 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(veto){ if(!S._vetoAt||Date.now()-S._vetoAt>120000){ S._vetoAt=Date.now();
       pushLog('info','فيتو خطر منع صفقة: '+veto); } return null; }
   const sig=huntSignals(p); if(!sig.length) return null;
+  // جودة المنطقة: إشارة واحدة لا تكفي — الدخول المدروس يتطلب إشارتين
+  // متوافقتين على الأقل (مرساة + دعم) — يمنع الدخول بقمم الحركة
+  if(sig.length<2){
+    const hasRetrace=sig.some(x=>x.indexOf('مرساة')===0);
+    if(!hasRetrace) return null;
+    const support=sig.some(x=>x.indexOf('مرساة')!==0);
+    if(!support) return null; }
   S._lastSig=sig.slice(0,3).join(' · ');
   return packHunt(p); }
 function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
@@ -2181,6 +2192,7 @@ async function botTick(){
     applyMeta(m);
     studyTick(); // جمع عينات بصمة العملة أثناء الدراسة (ويُنهيها عند اكتمالها)
     armProgressive(); bgRadarTick();
+    if(!S.position&&S.status==='running') maybeSwitchSymbol().catch(()=>{});
     // انضباط الاتجاه: أي انقلاب يلغي فورًا سلم الجهة القديمة المسلّح —
     // بقاؤه بعد الانقلاب كان يملأ مستويات معاكسة فوق مركز جديد فيغلقه
     // بخسارة عابرة ويزرع شورتًا ولونغًا في الوقت نفسه
