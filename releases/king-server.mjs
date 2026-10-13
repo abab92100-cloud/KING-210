@@ -1422,6 +1422,18 @@ function tapeFlow() {
   const tot = b + s || 1, wtot = wb + ws2 || 1;
   return { bias: (b - s) / tot, whale: (wb - ws2) / wtot, whaleVol: (wb + ws2) / tot };
 }
+function lastRealFillPx() {
+  const f = S.grid.filter((g) => g.status === "filled" && g.filledPrice > 0).sort((a, b) => b.filledAt - a.filledAt);
+  if (f.length && Date.now() - (f[0].filledAt || 0) < 30 * 60 * 1e3) return f[0].filledPrice;
+  return 0;
+}
+function spacingGate(p) {
+  if (!(p > 0)) return true;
+  const last = lastRealFillPx();
+  if (!last) return true;
+  const minGap = Math.max(S.config.gridStepPct / 100 * 0.75, 12e-4);
+  return Math.abs(p - last) / last >= minGap;
+}
 function filledAdds() {
   const o = S.journal.filter((j) => j.status === "open");
   const n = o.reduce((a, j) => a + Math.max(1, j.mergedOrders || 1), 0);
@@ -1662,7 +1674,7 @@ function memStepMult() {
   const r = memRec(S.config.direction);
   if (!r || r.n < 6) return 1;
   const wr = smWR(r);
-  if (wr >= 0.6 && r.pnl > 0) return 0.8;
+  if (wr >= 0.6 && r.pnl > 0) return 1;
   if (lv === 1) return 1.25;
   return 1;
 }
@@ -2014,6 +2026,7 @@ function notePartialClose(qty, exit, fee, lotId) {
 function armCompEntry(qty) {
   const pos = S.position;
   if (!pos || !(qty > 0)) return;
+  if (!spacingGate(pos.entry)) return;
   const side = pos.side === "short" ? "sell" : "buy";
   const px = roundTick(pos.entry, S.tickSize || 1e-10);
   if (!(px > 0)) return;
@@ -2768,6 +2781,13 @@ function huntTrigger(p) {
 function maybeHunt(p) {
   const hit = huntTrigger(p);
   if (!hit) return false;
+  if (!spacingGate(p)) {
+    if (Date.now() - (S._gateLogAt || 0) > 12e4) {
+      S._gateLogAt = Date.now();
+      pushLog("server", "\u0642\u0641\u0644 \u0627\u0644\u062A\u0628\u0627\u0639\u062F: \u062A\u064F\u062E\u0651\u0631 \u062F\u062E\u0648\u0644 \u0627\u0644\u0635\u064A\u062F \u2014 \u0644\u0644\u0633\u0639\u0629 \u0642\u0631\u064A\u0628\u0629 \u062C\u062F\u064B\u0627 \u0645\u0646 \u0622\u062E\u0631 \u062A\u0646\u0641\u064A\u0630");
+    }
+    return false;
+  }
   S.lastHuntAt = Date.now();
   S.huntAnchor = p;
   const fee = feeFor(hit.qty * (S.multiplier || 1) * p, true);

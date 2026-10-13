@@ -700,6 +700,16 @@ function tapeFlow(){ const t=S.tape; if(!t||t.length<6) return {bias:0,whale:0,w
    ================================================================ */
 function wavg(f){ let n=0,q=0; for(const x of f){ if(x.qty>0&&x.price>0){n+=x.price*x.qty;q+=x.qty;} }
   return q>0?n/q:0; }
+/* قفل التباعد المركزي: لا دخول جديد (صيد/تعويض/شبكة) إلا إن بعد عن آخر تنفيذ حقيقي
+   مسافة لا تقل عن 0.75×خطوة الشبكة المضبوطة — يمنع تكدس 6 أمراً داخل 0.57% */
+function lastRealFillPx(){ const f=S.grid.filter(g=>g.status==='filled'&&g.filledPrice>0)
+    .sort((a,b)=>b.filledAt-a.filledAt);
+  if(f.length&&Date.now()-(f[0].filledAt||0)<30*60*1000) return f[0].filledPrice;
+  return 0; }
+function spacingGate(p){ if(!(p>0)) return true;
+  const last=lastRealFillPx(); if(!last) return true;
+  const minGap=Math.max(S.config.gridStepPct/100*0.75,0.0012); // حد أدنى مطلق 0.12%
+  return Math.abs(p-last)/last>=minGap; }
 function filledAdds(){ const o=S.journal.filter(j=>j.status==='open');
   const n=o.reduce((a,j)=>a+Math.max(1,j.mergedOrders||1),0); return n>0?n:(S.position?1:0); }
 function addsBlocked(){ if(S.status!=='running') return false;
@@ -836,7 +846,7 @@ export function memStepMult(){ const lv=sanctionLevel(S.config.direction);
   if(lv>=2) return 1.4; // مقيّد/محظور: خطوة أوسع — حذر أكبر
   const r=memRec(S.config.direction); if(!r||r.n<6) return 1;
   const wr=smWR(r);
-  if(wr>=0.6&&r.pnl>0) return 0.8;
+  if(wr>=0.6&&r.pnl>0) return 1; // لا تقليص الخطوة تحت المضبوط — التكدس كان يلتقط 6 أمراً بحركة واحدة
   if(lv===1) return 1.25;
   return 1; }
 function addStepPct(){ return Math.max(0.12,S.config.gridStepPct)*memStepMult()*(S.regime?S.regime.stepMult:1)*profStepMult(); }
@@ -1081,6 +1091,7 @@ function notePartialClose(qty,exit,fee,lotId){
 // تعويض الكمية المُجناة جزئيًا بمنطقة دخول جديدة عند متوسط المركز —
 // إن عاد السعر لمنطقة الخسارة أعاد شراء ما بِيع بنفس الكمية (قاعدة المالك)
 function armCompEntry(qty){ const pos=S.position; if(!pos||!(qty>0)) return;
+  if(!spacingGate(pos.entry)) return; // تعويض قريب جدًا من آخر تنفيذ = تكدس بلا فائدة
   const side=pos.side==='short'?'sell':'buy';
   const px=roundTick(pos.entry,S.tickSize||1e-10); if(!(px>0)) return;
   const q=Math.max(1,Math.round(qty));
@@ -1636,6 +1647,8 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   S._lastSig=sig.slice(0,3).join(' · ');
   return packHunt(p); }
 function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
+  if(!spacingGate(p)){ if(Date.now()-(S._gateLogAt||0)>120000){ S._gateLogAt=Date.now();
+    pushLog('server','قفل التباعد: تُخّر دخول الصيد — للسعة قريبة جدًا من آخر تنفيذ'); } return false; }
   S.lastHuntAt=Date.now(); S.huntAnchor=p;
   const fee=feeFor(hit.qty*(S.multiplier||1)*p,true); S.feesPaid+=fee;
   const d=applyDelta(hit.side,hit.qty,p);
