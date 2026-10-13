@@ -1722,8 +1722,15 @@ function buildGrid(center, wide, initialCount) {
   }
   const reach = Math.max(spanMin, Math.min(step * n * 2, 0.12));
   if (span > reach) span = reach;
+  let prevDist = 0;
   for (let i = 1; i <= n; i++) {
-    const dist = wide ? Math.min(step * i, 0.05) : span * Math.pow(i / n, 1.5);
+    let dist = wide ? Math.min(step * i, 0.05) : span * Math.pow(i / n, 1.5);
+    if (!wide) {
+      const minGap = Math.max(step, stepPct / 100);
+      if (i === 1) dist = Math.max(dist, minGap);
+      else dist = Math.max(dist, prevDist + minGap);
+    }
+    prevDist = dist;
     const raw = c.direction === "short" ? from * (1 + dist) : from * (1 - dist);
     const price = roundTick(raw, tick);
     if (!(price > 0)) continue;
