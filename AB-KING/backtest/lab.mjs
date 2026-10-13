@@ -40,12 +40,14 @@ const GRAN = +arg('gran', 1);          // 1-minute candles
 const BAL = +arg('balance', 200);
 const LEV = +arg('lev', 3);
 const TP = +arg('tpnet', 0.03);
+const CYC = +arg('cycle', 0);   // per-cycle capital override
+const AGO = +arg('ago', 0);     // days ago window offset (out-of-sample)
 const MAKER_FEE = 0.0002, TAKER_FEE = 0.0006;
 
 // ---------- historical data ----------
 async function fetchKlinesAll(symbol, gran, days) {
   const granMs = { 1: 60000, 5: 300000, 15: 900000, 60: 3600000 }[gran] || 60000;
-  const end = Math.floor(Date.now() / granMs) * granMs;
+  const end = Math.floor(Date.now() / granMs) * granMs - AGO * 24 * 3600 * 1000;
   const start = end - days * 24 * 3600 * 1000;
   let from = start, out = [];
   while (from < end) {
@@ -68,7 +70,7 @@ async function fetchKlinesAll(symbol, gran, days) {
 S.config.symbol = SYMBOL;
 S.config.displaySymbol = SYMBOL.replace(/USDTM$/i, '').replace(/^XBT/i, 'BTC');
 S.config.mode = 'paper';
-S.config.cycleBalance = BAL;
+S.config.cycleBalance = CYC > 0 ? CYC : BAL;
 S.config.levels = 12;
 S.config.leverage = 3;
 S.config.gridStepPct = 0.3;
@@ -93,6 +95,7 @@ S.memory = { pairs: {}, cycles: 0, totalPnl: 0,
 const candles = await fetchKlinesAll(SYMBOL, GRAN, DAYS);
 if (candles.length < 50) { console.error('not enough data'); process.exit(1); }
 console.log(`\nAB-KING Lab — ${SYMBOL} — ${candles.length} candles (${DAYS}d @ ${GRAN}m)`);
+console.log('window: ' + new Date(candles[0].t).toISOString().slice(0,10) + ' → ' + new Date(candles[candles.length-1].t).toISOString().slice(0,10));
 
 // contract multiplier & tick from exchange
 try {
@@ -137,14 +140,14 @@ for (let i = 60; i < candles.length; i++) {
   if (i % 100 === 0) console.log('  ...candle', i, 'pos', S.position ? 1 : 0, 'grid', S.grid.length, 'bal', S.config.cycleBalance.toFixed(2));
   const fNow = fillsBefore();
   if (fNow > f0) { stats.fills += fNow - f0; f0 = fNow; }
-  const eq = S.config.cycleBalance + (S.position ? S.position.unrealized : 0);
+  const eq = BAL + (S.config.cycleBalance - (CYC > 0 ? CYC : BAL)) + (S.position ? S.position.unrealized : 0);
   stats.peak = Math.max(stats.peak, eq);
   stats.maxDD = Math.max(stats.maxDD, stats.peak - eq);
   if (S.position) stats.stuck++; else stats.stuck = 0;
 }
 Date.now = nowOrig;
 
-const eq = S.config.cycleBalance + (S.position ? S.position.unrealized : 0);
+const eq = BAL + (S.config.cycleBalance - (CYC > 0 ? CYC : BAL)) + (S.position ? S.position.unrealized : 0);
 const j = S.journal || [];
 const closed = j.filter(r => r.status !== 'open');
 const wins = closed.filter(r => r.pnl > 0), losses = closed.filter(r => r.pnl < 0);
