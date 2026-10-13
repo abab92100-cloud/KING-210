@@ -1804,12 +1804,11 @@ async function circuitBreak(p:any){ if(!p||S.status!=='running') return;
   const limit=Math.max(LOSS_STOP_USD,(S.config.cycleBalance||0)*0.08);
   // الانزلاق المقيس (فرق سعر التنفيذ عن المستوى) يُخصم أيضًا — الكابح يرى الخسارة الحقيقية
   const cyc=(S.realizedPnl||0)+(S.position?S.position.unrealized:0)-(S.feesPaid||0)-(S.slipCost||0)-(S.fundingPaid||0);
-  if(cyc<=-limit){ await flattenAt(p,'كابح الخسارة');
-    // لا إيقاف للبوت: دراسة 60 ثانية ثم يعود للعمل — الإيقاف اليدوي كان يقتل الاستمرارية
-    S._postDisaster=Date.now(); // علامة ما بعد الكارثة — studyTick يمدّد الانتظار حتى يستقر السوق
-    startStudy(false);
-    pushLog('server','⛔ كابح الخسارة: الدورة بلغت '+fmtUsd(cyc)+' — أُغلق المركز، دراسة 60ث ثم العودة');
-    notify('كابح الخسارة: أُغلق المركز عند حد الكارثة ويدرس الوضع قبل العودة','warn'); } }
+  if(cyc<=-limit){
+    // قاعدة المالك: لا إقفال بخسارة أبدًا — الصمود حتى تعود وتُجنى
+    if(!S._holdLoggedAt||Date.now()-S._holdLoggedAt>10*60*1000){ S._holdLoggedAt=Date.now();
+      pushLog('server','🛡️ صمود: الدورة على '+fmtUsd(cyc)+' — لا إقفال بخسارة — الشبكة تعوض عند المناطق المدروسة'); }
+    return; } }
 async function escapeAdverse(p:any){ if(S.status!=='running'||!S.position||!p) return;
   const pos=S.position;
   let danger=liqDanger(p); const flip=reversalAgainst(p);
@@ -1841,11 +1840,8 @@ async function escapeAdverse(p:any){ if(S.status!=='running'||!S.position||!p) r
     ||qty*mult*pos.entry*(S.makerFee||0.0002);
   const netAll=(pos.side==='short'?1:-1)*(pos.entry-p)*mult*qty
     -entryFees-qty*mult*p*(S.takerFee||0.0006);
-  const lossLimit=Math.max(LOSS_STOP_USD,(S.config.cycleBalance||0)*0.08);
-  const disaster=-netAll>=lossLimit&&(flip||whaleWave);
-  if(!danger&&!disaster) return;
-  const cooled=S._flipAt&&Date.now()-S._flipAt<45000;
-  if(cooled&&!danger) return;
+  // قاعدة المالك: كابح الكارثة معطّل — الإقفال الوحيد: خطر تصفية حقيقي من المنصة فقط
+  if(!danger) return;
   const was=pos.side, nextSide=was==='long'?'short':'long';
   await flattenAt(p,danger?'مركز':'كابح الكارثة');
   if(S.config.directionMode==='auto') S.config.direction=nextSide;

@@ -2978,11 +2978,11 @@ async function circuitBreak(p) {
   const limit = Math.max(LOSS_STOP_USD, (S.config.cycleBalance || 0) * 0.08);
   const cyc = (S.realizedPnl || 0) + (S.position ? S.position.unrealized : 0) - (S.feesPaid || 0) - (S.slipCost || 0) - (S.fundingPaid || 0);
   if (cyc <= -limit) {
-    await flattenAt(p, "\u0643\u0627\u0628\u062D \u0627\u0644\u062E\u0633\u0627\u0631\u0629");
-    S._postDisaster = Date.now();
-    startStudy(false);
-    pushLog("server", "\u26D4 \u0643\u0627\u0628\u062D \u0627\u0644\u062E\u0633\u0627\u0631\u0629: \u0627\u0644\u062F\u0648\u0631\u0629 \u0628\u0644\u063A\u062A " + fmtUsd(cyc) + " \u2014 \u0623\u064F\u063A\u0644\u0642 \u0627\u0644\u0645\u0631\u0643\u0632\u060C \u062F\u0631\u0627\u0633\u0629 60\u062B \u062B\u0645 \u0627\u0644\u0639\u0648\u062F\u0629");
-    notify("\u0643\u0627\u0628\u062D \u0627\u0644\u062E\u0633\u0627\u0631\u0629: \u0623\u064F\u063A\u0644\u0642 \u0627\u0644\u0645\u0631\u0643\u0632 \u0639\u0646\u062F \u062D\u062F \u0627\u0644\u0643\u0627\u0631\u062B\u0629 \u0648\u064A\u062F\u0631\u0633 \u0627\u0644\u0648\u0636\u0639 \u0642\u0628\u0644 \u0627\u0644\u0639\u0648\u062F\u0629", "warn");
+    if (!S._holdLoggedAt || Date.now() - S._holdLoggedAt > 10 * 60 * 1e3) {
+      S._holdLoggedAt = Date.now();
+      pushLog("server", "\u{1F6E1}\uFE0F \u0635\u0645\u0648\u062F: \u0627\u0644\u062F\u0648\u0631\u0629 \u0639\u0644\u0649 " + fmtUsd(cyc) + " \u2014 \u0644\u0627 \u0625\u0642\u0641\u0627\u0644 \u0628\u062E\u0633\u0627\u0631\u0629 \u2014 \u0627\u0644\u0634\u0628\u0643\u0629 \u062A\u0639\u0648\u0636 \u0639\u0646\u062F \u0627\u0644\u0645\u0646\u0627\u0637\u0642 \u0627\u0644\u0645\u062F\u0631\u0648\u0633\u0629");
+    }
+    return;
   }
 }
 async function escapeAdverse(p) {
@@ -3017,11 +3017,7 @@ async function escapeAdverse(p) {
   const mult = S.multiplier || 1, qty = pos.size || 0;
   const entryFees = S.journal.filter((j) => j.status === "open").reduce((a, j) => a + (j.fees || 0), 0) || qty * mult * pos.entry * (S.makerFee || 2e-4);
   const netAll = (pos.side === "short" ? 1 : -1) * (pos.entry - p) * mult * qty - entryFees - qty * mult * p * (S.takerFee || 6e-4);
-  const lossLimit = Math.max(LOSS_STOP_USD, (S.config.cycleBalance || 0) * 0.08);
-  const disaster = -netAll >= lossLimit && (flip || whaleWave);
-  if (!danger && !disaster) return;
-  const cooled = S._flipAt && Date.now() - S._flipAt < 45e3;
-  if (cooled && !danger) return;
+  if (!danger) return;
   const was = pos.side, nextSide = was === "long" ? "short" : "long";
   await flattenAt(p, danger ? "\u0645\u0631\u0643\u0632" : "\u0643\u0627\u0628\u062D \u0627\u0644\u0643\u0627\u0631\u062B\u0629");
   if (S.config.directionMode === "auto") S.config.direction = nextSide;
