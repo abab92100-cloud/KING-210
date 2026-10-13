@@ -32,4 +32,4 @@ function persist() {
   clear: () => { data = {}; persist(); },
 };
 
-console.log('[KING] مخزن الحالة: ' + file);
+console.log('[AB-KING] مخزن الحالة: ' + file);

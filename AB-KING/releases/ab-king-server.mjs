@@ -41,7 +41,7 @@ globalThis.localStorage = {
     persist();
   }
 };
-console.log("[KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u0629: " + file);
+console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u0629: " + file);
 
 // src/ws.ts
 var DIRECT = "https://api-futures.kucoin.com";
@@ -1200,6 +1200,40 @@ function gapExitCheck(p) {
   if (dev >= ctx.exitDev) return true;
   return false;
 }
+async function confluenceScore(symbol2, dev) {
+  let score = 0;
+  try {
+    const tr = await kcPublic("/api/v1/trade/history?symbol=" + encodeURIComponent(symbol2), 4e3);
+    const trades = (Array.isArray(tr) ? tr : []).slice(0, 100);
+    let whaleNet = 0;
+    if (trades.length >= 20) {
+      const sizes = trades.map((t) => +t.size).sort((a, b) => a - b);
+      const med = sizes[Math.floor(sizes.length / 2)] || 1;
+      let lastPx = 0;
+      for (const t of trades) {
+        if (+t.price > 0) lastPx = +t.price;
+      }
+      if (lastPx > 0) {
+        for (const t of trades) {
+          if (+t.size > med * 8) whaleNet += (t.side === "buy" ? 1 : -1) * +t.size * lastPx;
+        }
+      }
+    }
+    if (whaleNet > 0) score++;
+    const bk = await kcPublic("/api/v1/level2/depth20?symbol=" + encodeURIComponent(symbol2), 3e3);
+    let imb = 0;
+    if (bk && bk.bids && bk.asks) {
+      const bd = (bk.bids || []).reduce((a, x) => a + +x[1], 0);
+      const ad = (bk.asks || []).reduce((a, x) => a + +x[1], 0);
+      if (bd + ad > 0) imb = (bd - ad) / (bd + ad);
+    }
+    if (imb > 0.05) score++;
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  }
+  if (dev < -0.15) score += 2;
+  return score;
+}
 async function gapHunterTick() {
   if (S._gapHuntBusy) return;
   S._gapHuntBusy = true;
@@ -1209,6 +1243,10 @@ async function gapHunterTick() {
     for (const cand of st.list.slice(0, 3)) {
       const sig2 = await gapSignal(cand.symbol);
       if (sig2 && sig2.ready) {
+        const cs = await confluenceScore(cand.symbol, sig2.dev);
+        if (cs < 3) {
+          continue;
+        }
         if (cand.symbol !== S.config.symbol) {
           pushLog("server", "\u{1F50D} \u0635\u0627\u0626\u062F \u0627\u0644\u0641\u062C\u0648\u0627\u062A: \u062A\u062D\u0648\u064A\u0644 \u0625\u0644\u0649 " + cand.symbol.replace(/USDTM$/, "") + " \u2014 \u0641\u062C\u0648\u0629 " + sig2.dev.toFixed(2) + "% (z=" + sig2.z.toFixed(1) + ")");
           S.config.symbol = cand.symbol;
@@ -4229,7 +4267,7 @@ function initEngine() {
   loadAll();
   if (S.config.symbol === "BTCUSDTM") S.config.symbol = "XBTUSDTM";
   S.config.displaySymbol = S.config.symbol.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");
-  pushLog("info", "KING Trading \u062C\u0627\u0647\u0632 \u2014 " + (S.config.mode === "live" ? "\u0648\u0636\u0639 LIVE" : "\u0648\u0636\u0639 \u0648\u0631\u0642\u064A"));
+  pushLog("info", "AB-KING \u062C\u0627\u0647\u0632 \u2014 " + (S.config.mode === "live" ? "\u0648\u0636\u0639 LIVE" : "\u0648\u0636\u0639 \u0648\u0631\u0642\u064A"));
   startStream(S.config.symbol, { onMessage: onStreamTick, onStatus: () => emitThrottled() });
   setInterval(botTick, TICK_MS);
   setInterval(emit, 1e3);
@@ -4349,8 +4387,8 @@ var srv = createServer(async (req, res) => {
   }
 });
 srv.listen(PORT, "127.0.0.1", () => {
-  console.log("[KING] \u0633\u064A\u0631\u0641\u0631 \u0627\u0644\u062C\u0648\u0627\u0644 \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT);
-  console.log("[KING] \u0627\u0641\u062A\u062D \u062A\u0637\u0628\u064A\u0642 KING \u2014 \u0633\u064A\u0643\u062A\u0634\u0641 \u0627\u0644\u0633\u064A\u0631\u0641\u0631 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0648\u064A\u062A\u062D\u0648\u0644 \u0644\u0648\u0636\u0639 \u0627\u0644\u0648\u0627\u062C\u0647\u0629");
+  console.log("[AB-KING] \u0633\u064A\u0631\u0641\u0631 \u0627\u0644\u062C\u0648\u0627\u0644 \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT);
+  console.log("[AB-KING] \u0627\u0641\u062A\u062D \u062A\u0637\u0628\u064A\u0642 AB-KING \u2014 \u0633\u064A\u0643\u062A\u0634\u0641 \u0627\u0644\u0633\u064A\u0631\u0641\u0631 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0648\u064A\u062A\u062D\u0648\u0644 \u0644\u0648\u0636\u0639 \u0627\u0644\u0648\u0627\u062C\u0647\u0629");
 });
 initEngine();
-console.log("[KING] \u0627\u0644\u0645\u062D\u0631\u0643 \u0628\u062F\u0623 \u2014 \u0623\u0628\u0642\u0650 Termux \u062D\u064A\u064B\u0627 (termux-wake-lock \u0645\u0641\u0639\u0651\u0644)");
+console.log("[AB-KING] \u0627\u0644\u0645\u062D\u0631\u0643 \u0628\u062F\u0623 \u2014 \u0623\u0628\u0642\u0650 Termux \u062D\u064A\u064B\u0627 (termux-wake-lock \u0645\u0641\u0639\u0651\u0644)");

@@ -1,5 +1,5 @@
 /* ================================================================
-   KING Trading — سيرفر الجوال (Termux)
+   AB-KING — سيرفر الجوال (Termux)
    العقل الدائم للبوت: نفس محرك التطبيق يعمل هنا في Node بلا نوم
    ولا خنق خلفية ولا قتل بطارية. التطبيق يكتشفه تلقائيًا ويتحول واجهة.
    التشغيل:  node king-server.mjs
@@ -71,9 +71,9 @@ const srv = createServer(async (req, res) => {
 });
 
 srv.listen(PORT, '127.0.0.1', () => {
-  console.log('[KING] سيرفر الجوال يعمل على http://127.0.0.1:' + PORT);
-  console.log('[KING] افتح تطبيق KING — سيكتشف السيرفر تلقائيًا ويتحول لوضع الواجهة');
+  console.log('[AB-KING] سيرفر الجوال يعمل على http://127.0.0.1:' + PORT);
+  console.log('[AB-KING] افتح تطبيق AB-KING — سيكتشف السيرفر تلقائيًا ويتحول لوضع الواجهة');
 });
 
 initEngine();
-console.log('[KING] المحرك بدأ — أبقِ Termux حيًا (termux-wake-lock مفعّل)');
+console.log('[AB-KING] المحرك بدأ — أبقِ Termux حيًا (termux-wake-lock مفعّل)');

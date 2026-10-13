@@ -1,5 +1,5 @@
 /* ================================================================
-   KING Trading — بوت تداول عقود KuCoin الآجلة
+   AB-KING — بوت تداول عقود KuCoin الآجلة
    النسخة المتصلة: بيانات لحظية عبر WebSocket (دفع مستمر) +
    REST عبر بروكسي محلي (/kucoin) لتجاوز CORS.
    منطق المحرك مطابق للنسخة الأصلية: شبكة + صيد + جني +
@@ -588,6 +588,40 @@ function gapExitCheck(p:number):boolean{
 }
 
 /* \u0646\u0628\u0636\u0629 \u0635\u0627\u0626\u062f \u0627\u0644\u0641\u062c\u0648\u0627\u062a: \u062a\u0645\u0633\u062d \u0643\u0644 \u062f\u0642\u064a\u0642\u0629\u060c \u0648\u0625\u0646 \u0648\u062c\u062f\u062a \u0641\u062c\u0648\u0629 \u0645\u062c\u0647\u0632\u0629 (z<-2\u03c3 + \u0627\u0633\u062a\u0642\u0631\u0627\u0631) \u062a\u062d\u0648\u0644 \u0644\u0644\u0639\u0645\u0644\u0629 \u0648\u062a\u062f\u062e\u0644 \u0637\u0648\u064a\u0644 */
+/* التوافق السبعي: الحيتان + الفجوة + الدفتر (0-4) */
+async function confluenceScore(symbol:string,dev:number){
+  let score=0;
+  try{
+    // 1) جريان الحيتان: آخر 100 صفقات
+    const tr=await kcPublic('/api/v1/trade/history?symbol='+encodeURIComponent(symbol),4000);
+    const trades=(Array.isArray(tr)?tr:[]).slice(0,100);
+    let whaleNet=0;
+    if(trades.length>=20){
+      const sizes=trades.map((t:any)=>+t.size).sort((a:number,b:number)=>a-b);
+      const med=sizes[Math.floor(sizes.length/2)]||1;
+      let lastPx=0;
+      for(const t of trades){ if(+t.price>0) lastPx=+t.price; }
+      if(lastPx>0){
+        for(const t of trades){
+          if(+t.size>med*8) whaleNet+=(t.side==='buy'?1:-1)*+t.size*lastPx;
+        }
+      }
+    }
+    if(whaleNet>0) score++;
+    // 2) الدفتر (أعمق 20)
+    const bk=await kcPublic('/api/v1/level2/depth20?symbol='+encodeURIComponent(symbol),3000);
+    let imb=0;
+    if(bk&&bk.bids&&bk.asks){
+      const bd=(bk.bids||[]).reduce((a:number,x:any)=>a+ +x[1],0);
+      const ad=(bk.asks||[]).reduce((a:number,x:any)=>a+ +x[1],0);
+      if(bd+ad>0) imb=(bd-ad)/(bd+ad);
+    }
+    if(imb>0.05) score++;
+  }catch(e){ logSwallow('silent-catch',e); }
+  if(dev<-0.15) score+=2;
+  return score;
+}
+
 export async function gapHunterTick(){
   if(S._gapHuntBusy) return; S._gapHuntBusy=true;
   try{
@@ -597,6 +631,8 @@ export async function gapHunterTick(){
     for(const cand of st.list.slice(0,3)){
       const sig=await gapSignal(cand.symbol);
       if(sig&&sig.ready){
+        const cs=await confluenceScore(cand.symbol,sig.dev);
+        if(cs<3){ continue; } // التوافق أقل من 3/4 — انتظر فرصة أفضل
         // ت\u062d\u0648\u064a\u0644 ا\u0644\u0631\u0645\u0632 إ\u0646 ل\u0632\u0645 + د\u062e\u0648\u0644 ط\u0648\u064a\u0644 ب\u0627\u0644\u0633\u0639\u0631 ا\u0644\u062d\u0627\u0644\u064a
         if(cand.symbol!==S.config.symbol){
           pushLog('server','\ud83d\udd0d \u0635\u0627\u0626\u062f \u0627\u0644\u0641\u062c\u0648\u0627\u062a: \u062a\u062d\u0648\u064a\u0644 \u0625\u0644\u0649 '+cand.symbol.replace(/USDTM$/,'')+' \u2014 \u0641\u062c\u0648\u0629 '+sig.dev.toFixed(2)+'% (z='+sig.z.toFixed(1)+')');
@@ -2616,7 +2652,7 @@ export function initEngine(){
   loadAll();
   if(S.config.symbol==='BTCUSDTM') S.config.symbol='XBTUSDTM'; // الرمز الصحيح في عقود KuCoin
   S.config.displaySymbol=S.config.symbol.replace(/USDTM$/i,'').replace(/^XBT$/i,'BTC');
-  pushLog('info','KING Trading جاهز — '+(S.config.mode==='live'?'وضع LIVE':'وضع ورقي'));
+  pushLog('info','AB-KING جاهز — '+(S.config.mode==='live'?'وضع LIVE':'وضع ورقي'));
   // قناة الدفع المستمرة — تتصل فورًا وتعيد الاتصال تلقائيًا عند أي انقطاع
   startStream(S.config.symbol,{ onMessage:onStreamTick, onStatus:()=>emitThrottled() });
   setInterval(botTick,TICK_MS);
