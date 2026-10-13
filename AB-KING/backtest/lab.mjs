@@ -42,6 +42,8 @@ const LEV = +arg('lev', 3);
 const TP = +arg('tpnet', 0.03);
 const CYC = +arg('cycle', 0);   // per-cycle capital override
 const AGO = +arg('ago', 0);     // days ago window offset (out-of-sample)
+const PH = +arg('phrs', 0);     // patience hours (0=off)
+const PU = +arg('pusd', 0);     // patience USD (0=off)
 const MAKER_FEE = 0.0002, TAKER_FEE = 0.0006;
 
 // ---------- historical data ----------
@@ -76,6 +78,8 @@ S.config.leverage = 3;
 S.config.gridStepPct = 0.3;
 S.config.tpNet = TP;
 S.config.hfMode = process.argv.includes('--hf');
+S.config.patienceHrs = PH;
+S.config.patienceUsd = PU;
 S.config.gridStepPct = S.config.hfMode ? 0.12 : 0.3;
 S.config.huntPct = S.config.hfMode ? 0.06 : 0.15;
 if (S.config.hfMode) {
@@ -106,11 +110,13 @@ try {
   }
 } catch (e) {}
 
+S.orderBook = { bids: [], asks: [] };
 const feedTick = (price, ts) => {
   S.lastPrice = price; S.markPrice = price; S.lastTickAt = ts;
   S.priceTrail = [...(S.priceTrail || []), price].slice(-120);
   S._tradeTs = [...(S._tradeTs || []), ts].slice(-300);
   S.tape = [{ side: price % 2 < 1 ? 'buy' : 'sell', size: 1, price }, ...(S.tape || [])].slice(0, 32);
+  // no synthetic book — warmup relies on tape only (as in the original good matrix)
 };
 
 let t0 = Date.now();

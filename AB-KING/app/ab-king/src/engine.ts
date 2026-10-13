@@ -201,7 +201,7 @@ export async function detectRemoteServer(){ if(typeof window==='undefined') retu
 export const S: any = {
   keys:null,
   config:{symbol:'XBTUSDTM',displaySymbol:'BTC',leverage:3,gridStepPct:0.3,huntPct:0.15,
-    levels:12,direction:'short',directionMode:'auto',cycleBalance:100,mode:'paper',tpNet:0.12},
+    levels:12,direction:'short',directionMode:'auto',cycleBalance:100,mode:'paper',tpNet:0.12,patienceHrs:24,patienceUsd:0},
   status:'idle', heartbeat:0, lastPrice:null, markPrice:null,
   multiplier:1, tickSize:0.1, makerFee:0.0002, takerFee:0.0006, funding:0,
   _metaSym:null, maxOrderQty:0, exAvail:null, exLeverage:null, // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
@@ -1802,6 +1802,33 @@ function cancelPendingAdds(){ const live=S.config.mode==='live'&&S.keys;
     // يترك الأمر حيًا يُكنس في الموجة نفسها التي سحبناه من أجلها
     if(live&&g.exchangeOrderId){ const id=g.exchangeOrderId; g.exchangeOrderId=null; exCancelOne(id); }
     else g.exchangeOrderId=null; } } }
+/* حد الصبر: إغلاق المركز العالق بعد مدة أو انحدار محددين — يمنع العلوق الطويل
+   الذي يأكل أرباح الأسابيع الفاشل (مطلوب المالك بعد قياس المختبر) */
+async function patienceLimit(p:any){
+  if(!p||S.status!=='running'||!S.position) return;
+  const hrs=Number(S.config.patienceHrs);
+  const usd=Number(S.config.patienceUsd);
+  if(!(hrs>0)&&!(usd>0)) return; // معطّل
+  const ageMs=Date.now()-(S.position.openedAt||Date.now());
+  const adv=adversePct(p);
+  const floatUsd=-(S.position.unrealized||0);
+  const aged=hrs>0&&ageMs>hrs*3600*1000;
+  const sunk=usd>0&&floatUsd>=usd;
+  if(!aged&&!sunk) return;
+  // صبر ذكي: لا إغلاق إن كان الاتجاه معنا — السوق العرضي يعود أغلب الوقت
+  // إنما الإغلاق عند اتجاه قوي مضاد للمركز (قياس المختبر: يقلب الأسبوع الفاشل إلى ربح ويحفظ الرابح)
+  if(S.regime&&!S.regime.shock){
+    const against=(S.position.side==='short'&&S.regime.trend==='down'&&adv>0.6)
+      ||(S.position.side==='long'&&S.regime.trend==='up'&&adv>0.6);
+    if(!against){
+      // اتجاه معنا أو عرضي — الصمود للجني أفضل
+      return; } }
+  const why=aged?('\u0639\u0644\u0642 '+Math.round(ageMs/3600000)+' \u0633'):( '\u0627\u0646\u062d\u062f\u0627\u0631 '+fmtUsd(floatUsd));
+  pushLog('server','\u23f0 \u062d\u062f \u0627\u0644\u0635\u0628\u0631: \u0625\u063a\u0644\u0627\u0642 \u0627\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u0639\u0627\u0644\u0642 ('+why+') \u2014 \u062a\u0639\u0648\u062f \u0627\u0644\u062f\u0648\u0631\u0629 \u0645\u0646 \u062c\u062f\u064a\u062f \u0645\u0639 \u062f\u0631\u0627\u0633\u0629');
+  await flattenAt(p,'\u062d\u062f \u0627\u0644\u0635\u0628\u0631');
+  S._postDisaster=Date.now();
+  startStudy(false);
+}
 async function circuitBreak(p:any){ if(!p||S.status!=='running') return;
   // حد الكارثة على مستوى الدورة كلها — قاعدة المالك نفسها: لا كابح قبل $16 (أو 8% من الرصيد)
   const limit=Math.max(LOSS_STOP_USD,(S.config.cycleBalance||0)*0.08);
@@ -2249,6 +2276,7 @@ export async function botTick(){
         const gs=g.side==='sell'?'short':'long';
         if(gs!==S.config.direction){ g.status='cancelled'; g.exchangeOrderId=null; } } }
     if(running&&price>0){
+      await patienceLimit(price);
       await circuitBreak(price);
       await escapeAdverse(price);
       harvestRipe(price);
