@@ -1,0 +1,7 @@
+node_modules/
+dist/
+server-dist/
+android/.gradle/
+android/app/build/
+*.apk.sign
+backtest/_*.mjs
