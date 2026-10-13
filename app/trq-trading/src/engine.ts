@@ -516,12 +516,35 @@ let _lastSwitchAt=0;
 export async function maybeSwitchSymbol(){ if(S.position) return;
   if(S.status!=='running') return;
   if(Date.now()-_lastSwitchAt<60000) return;
+  // دوران زمني: لا صفقة خلال 45 دقيقة = العملة بايرة للبوت — انتقل لأقوى عملة أخرى
+  const idleMs=Date.now()-(S.lastHuntAt||S.startedAt||Date.now());
+  const rotate=idleMs>45*60*1000;
   try{ const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
-    const top=r.list[0], cur=r.list.find(l=>l.symbol===S.config.symbol);
+    const cur=r.list.find(l=>l.symbol===S.config.symbol);
+    let top=r.list[0];
+    if(rotate){
+      // اختر أقوى عملة مختلفة عن الحالية (أول القائمة خارج الأخيرة محاولات تدوير متتالية)
+      const skipN=1+(S._rotCount||0);
+      const cands=r.list.filter(l=>l.symbol!==S.config.symbol);
+      if(cands.length){ top=cands[Math.min(skipN-1,cands.length-1)];
+        // إن كان المرشح هو الحالي تمامًا بعد التدوير → خذ التالي
+        if(top.symbol===S.config.symbol) top=cands[0]||top; }
+      const topScore=top.score||0;
+      if(topScore<45) return; // لا تدوير لعملة ضعيفة
+      S._rotCount=((S._rotCount||0)+1)%5;
+      _lastSwitchAt=Date.now();
+      const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
+      pushLog('server','\ud83d\udd04 \u062fوران زمني ('+Math.round(idleMs/60000)+' د بلا فرصة): '+curDisp+' → '+top.disp+' ('+topScore+') — '+
+        (top.state||'')+' — البحث مستمر عن فرصة أفضل');
+      toast('\ud83d\udd04 دوران: '+top.disp+' — بحث عن فرصة');
+      nativeNotify('KING — دوران إلى عملة أخرى',top.disp+' درجة '+topScore);
+      saveCfg({symbol:top.symbol,leverage:S.config.leverage,levels:S.config.levels,
+        gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+        cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
+        mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
+      startBot(); return; }
     const topScore=top.score||0;
     if(cur&&cur.symbol===top.symbol) return;
-    // العملة الحالية لا تحتل مقاعدها في الرادار أصلاً = ضعيفة جدًًا
-    // (خارج أفضل 20) — إن كان الأقوى لا يقترب من أن يكون أفضل بواضح فالتبديل فوري
     if(!cur){ if(topScore<55) return; }
     else { const curScore=cur.score||0;
       if(topScore-curScore<12||curScore>=55) return; }
@@ -1669,10 +1692,15 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   // جودة المنطقة: إشارة واحدة لا تكفي — الدخول المدروس يتطلب إشارتين
   // متوافقتين على الأقل (مرساة + دعم) — يمنع الدخول بقمم الحركة
   if(sig.length<2){
-    const hasRetrace=sig.some(x=>x.indexOf('مرساة')===0);
-    if(!hasRetrace) return null;
-    const support=sig.some(x=>x.indexOf('مرساة')!==0);
-    if(!support) return null; }
+    // إشارة واحدة تكفي إن كانت قوية: مرساة كبيرة (≥1.5×عتبة الصيد) أو فجوة مارك واضحة
+    const need=effectiveHuntPct();
+    const bigRetrace=sig.some(x=>x.indexOf('مرساة')===0&&parseFloat(x.replace(/[^٠-٩.]/g,''))>=need*1.5);
+    const markGap=sig.some(x=>x.indexOf('فجوة مارك')===0);
+    if(!bigRetrace&&!markGap){
+      const hasRetrace=sig.some(x=>x.indexOf('مرساة')===0);
+      if(!hasRetrace) return null;
+      const support=sig.some(x=>x.indexOf('مرساة')!==0);
+      if(!support) return null; } }
   S._lastSig=sig.slice(0,3).join(' · ');
   return packHunt(p); }
 function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;

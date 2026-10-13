@@ -1128,10 +1128,44 @@ async function maybeSwitchSymbol() {
   if (S.position) return;
   if (S.status !== "running") return;
   if (Date.now() - _lastSwitchAt < 6e4) return;
+  const idleMs = Date.now() - (S.lastHuntAt || S.startedAt || Date.now());
+  const rotate = idleMs > 45 * 60 * 1e3;
   try {
     const r = await scanRadar();
     if (!r || !r.list || !r.list.length) return;
-    const top = r.list[0], cur = r.list.find((l) => l.symbol === S.config.symbol);
+    const cur = r.list.find((l) => l.symbol === S.config.symbol);
+    let top = r.list[0];
+    if (rotate) {
+      const skipN = 1 + (S._rotCount || 0);
+      const cands = r.list.filter((l) => l.symbol !== S.config.symbol);
+      if (cands.length) {
+        top = cands[Math.min(skipN - 1, cands.length - 1)];
+        if (top.symbol === S.config.symbol) top = cands[0] || top;
+      }
+      const topScore2 = top.score || 0;
+      if (topScore2 < 45) return;
+      S._rotCount = ((S._rotCount || 0) + 1) % 5;
+      _lastSwitchAt = Date.now();
+      const curDisp2 = cur ? cur.disp : S.config.displaySymbol, curSc2 = cur ? cur.score : 0;
+      pushLog("server", "\u{1F504} \u062F\u0648\u0631\u0627\u0646 \u0632\u0645\u0646\u064A (" + Math.round(idleMs / 6e4) + " \u062F \u0628\u0644\u0627 \u0641\u0631\u0635\u0629): " + curDisp2 + " \u2192 " + top.disp + " (" + topScore2 + ") \u2014 " + (top.state || "") + " \u2014 \u0627\u0644\u0628\u062D\u062B \u0645\u0633\u062A\u0645\u0631 \u0639\u0646 \u0641\u0631\u0635\u0629 \u0623\u0641\u0636\u0644");
+      toast("\u{1F504} \u062F\u0648\u0631\u0627\u0646: " + top.disp + " \u2014 \u0628\u062D\u062B \u0639\u0646 \u0641\u0631\u0635\u0629");
+      nativeNotify("KING \u2014 \u062F\u0648\u0631\u0627\u0646 \u0625\u0644\u0649 \u0639\u0645\u0644\u0629 \u0623\u062E\u0631\u0649", top.disp + " \u062F\u0631\u062C\u0629 " + topScore2);
+      saveCfg({
+        symbol: top.symbol,
+        leverage: S.config.leverage,
+        levels: S.config.levels,
+        gridStepPct: S.config.gridStepPct,
+        huntPct: S.config.huntPct,
+        tpNet: S.config.tpNet,
+        cycleBalance: S.config.cycleBalance,
+        directionMode: S.config.directionMode,
+        mode: S.config.mode,
+        sound: S.sound,
+        soundTone: S.soundTone
+      });
+      startBot();
+      return;
+    }
     const topScore = top.score || 0;
     if (cur && cur.symbol === top.symbol) return;
     if (!cur) {
@@ -2798,10 +2832,15 @@ function huntTrigger(p) {
   const sig2 = huntSignals(p);
   if (!sig2.length) return null;
   if (sig2.length < 2) {
-    const hasRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0);
-    if (!hasRetrace) return null;
-    const support = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") !== 0);
-    if (!support) return null;
+    const need = effectiveHuntPct();
+    const bigRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0 && parseFloat(x.replace(/[^٠-٩.]/g, "")) >= need * 1.5);
+    const markGap = sig2.some((x) => x.indexOf("\u0641\u062C\u0648\u0629 \u0645\u0627\u0631\u0643") === 0);
+    if (!bigRetrace && !markGap) {
+      const hasRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0);
+      if (!hasRetrace) return null;
+      const support = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") !== 0);
+      if (!support) return null;
+    }
   }
   S._lastSig = sig2.slice(0, 3).join(" \xB7 ");
   return packHunt(p);
