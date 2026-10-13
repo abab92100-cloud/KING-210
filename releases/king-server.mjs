@@ -1114,6 +1114,50 @@ async function scanRadar() {
     S._radarBusy = false;
   }
 }
+var _bgScanAt = 0;
+function bgRadarTick() {
+  if (!R()) {
+    if (Date.now() - _bgScanAt < 5 * 60 * 1e3) return;
+    _bgScanAt = Date.now();
+    scanRadar().catch(() => {
+    });
+  }
+}
+var _lastSwitchAt = 0;
+async function maybeSwitchSymbol() {
+  if (S.position) return;
+  if (S.status !== "running") return;
+  if (Date.now() - _lastSwitchAt < 6e4) return;
+  try {
+    const r = await scanRadar();
+    if (!r || !r.list || !r.list.length) return;
+    const top = r.list[0], cur = r.list.find((l) => l.symbol === S.config.symbol);
+    if (!cur) return;
+    if (top.symbol === cur.symbol) return;
+    const curScore = cur.score || 0, topScore = top.score || 0;
+    if (topScore - curScore < 15 || curScore >= 55) return;
+    _lastSwitchAt = Date.now();
+    pushLog("server", "\u{1F4E1} \u062A\u0628\u062F\u064A\u0644 \u0630\u0643\u064A: " + cur.disp + " (" + curScore + ") \u2192 " + top.disp + " (" + topScore + ") \u2014 " + (top.state || "") + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062F\u0627\u0631");
+    toast("\u{1F4E1} \u0627\u0646\u062A\u0642\u0627\u0644 \u0625\u0644\u0649 " + top.disp + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 (" + topScore + ")");
+    nativeNotify("KING \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curScore);
+    saveCfg({
+      symbol: top.symbol,
+      leverage: S.config.leverage,
+      levels: S.config.levels,
+      gridStepPct: S.config.gridStepPct,
+      huntPct: S.config.huntPct,
+      tpNet: S.config.tpNet,
+      cycleBalance: S.config.cycleBalance,
+      directionMode: S.config.directionMode,
+      mode: S.config.mode,
+      sound: S.sound,
+      soundTone: S.soundTone
+    });
+    startBot();
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  }
+}
 async function exPosition(symbol2) {
   const raw = await kcPrivate("GET", "/api/v1/position?symbol=" + encodeURIComponent(symbol2));
   const p = Array.isArray(raw) ? raw[0] : raw;
@@ -1652,7 +1696,7 @@ function levelQtys(center, n) {
   }
   return out;
 }
-function buildGrid(center, wide) {
+function buildGrid(center, wide, initialCount) {
   const c = S.config, tick = S.tickSize || 1e-10;
   const vol = retStdev() || 0.05;
   const volF = wide ? 1 : Math.max(1, Math.min(3, vol * 10));
@@ -1692,13 +1736,14 @@ function buildGrid(center, wide) {
     if (c.direction === "long" && price >= center * (1 - step * 0.4)) continue;
     const qi = Math.min(filledN + i - 1, qtys.length - 1);
     const qty = qtys.length ? qtys[Math.max(0, qi)] : contractsForLevel(center);
+    const staged = initialCount != null && i > initialCount;
     grid.push({
       id: uid("lvl"),
       clientOid: uid("oid"),
       side: c.direction === "short" ? "sell" : "buy",
       price,
       qty,
-      status: "armed",
+      status: staged ? "staged" : "armed",
       reduceOnly: false,
       exchangeOrderId: null,
       filledAt: null,
@@ -1707,6 +1752,25 @@ function buildGrid(center, wide) {
     });
   }
   return grid.sort((a, b) => b.price - a.price);
+}
+function armProgressive() {
+  if (S.status !== "running") return;
+  const armed = S.grid.filter((g) => g.status === "armed" || g.status === "open");
+  const staged = S.grid.filter((g) => g.status === "staged");
+  if (!staged.length) return;
+  if (armed.length > 1) return;
+  let toArm = armed.length === 0 ? 3 : 2;
+  const side = S.config.direction === "short" ? "sell" : "buy";
+  for (const g of staged) {
+    if (g.side !== side) {
+      g.status = "cancelled";
+      continue;
+    }
+    if (toArm <= 0) continue;
+    g.status = "armed";
+    g.createdAt = Date.now();
+    toArm--;
+  }
 }
 function sanitizeAdds() {
   const cap = effLevels();
@@ -2111,7 +2175,7 @@ function _harvestCleanup(fp) {
   S._guardId = null;
   S._tpBanked = 0;
   for (const g of S.grid) {
-    if (g.status === "armed" || g.status === "open") {
+    if (g.status === "armed" || g.status === "open" || g.status === "staged") {
       g.status = "cancelled";
       g.exchangeOrderId = null;
     }
@@ -2166,6 +2230,8 @@ function creditExFillReal(l, delta, fp, realFee) {
     const tb = S._tpBanked;
     _harvestCleanup(fp);
     pushLog("server", "\u062C\u0646\u064A \u0645\u0643\u062A\u0645\u0644 \u2713 \u2014 \u0635\u0627\u0641\u064A \u0627\u0644\u062F\u0648\u0631\u0629 " + fmtUsd(tb) + " \u2014 \u0623\u064F\u0644\u063A\u064A\u062A \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0648\u062A\u064F\u062F\u0631\u0633 \u0635\u0641\u0642\u0629 \u062C\u062F\u064A\u062F\u0629");
+    if (S.status === "running") maybeSwitchSymbol().catch(() => {
+    });
     return true;
   }
   const rem = Math.max(0, l.qty - (l.exFilled || 0));
@@ -2187,6 +2253,8 @@ function creditExFillReal(l, delta, fp, realFee) {
       const tb = S._tpBanked;
       _harvestCleanup(fp);
       pushLog("server", "\u062C\u0646\u064A \u0645\u0643\u062A\u0645\u0644 \u2713 \u2014 \u0628\u0646\u0643 " + fmtUsd(tb) + " \u0648\u0627\u0644\u0645\u062A\u0628\u0642\u064A \u0628\u0650\u064A\u0639 \u0628\u0633\u0639\u0631 \u0631\u0628\u062D\u064A");
+      if (S.status === "running") maybeSwitchSymbol().catch(() => {
+      });
       return true;
     }
     return false;
@@ -2250,6 +2318,8 @@ function fillLevel(id, fp, taker) {
       if (!S.position) {
         _harvestCleanup(fp);
         pushLog("server", "\u062C\u0646\u064A \u0645\u0643\u062A\u0645\u0644 \u2713 \u2014 \u0623\u064F\u063A\u0644\u0642\u062A \u0627\u0644\u0635\u0641\u0642\u0629 \u062D\u0642\u064A\u0642\u064A\u064B\u0627 \u0648\u0623\u064F\u0644\u063A\u064A\u062A \u0623\u0648\u0627\u0645\u0631\u0647\u0627\u060C \u062A\u064F\u062F\u0631\u0633 \u0635\u0641\u0642\u0629 \u062C\u062F\u064A\u062F\u0629");
+        if (S.status === "running") maybeSwitchSymbol().catch(() => {
+        });
       }
     }
   }
@@ -2879,7 +2949,7 @@ function ensureGrid() {
   if (S.grid.length > 400) {
     let dead = 0;
     S.grid = S.grid.filter((g) => {
-      if (g.status === "armed" || g.status === "open" || g.status === "filled") return true;
+      if (g.status === "armed" || g.status === "open" || g.status === "filled" || g.status === "staged") return true;
       dead++;
       return dead <= 100;
     });
@@ -2905,8 +2975,9 @@ function ensureGrid() {
   const chasing = !!(sameSide && S.gridAnchor) && (short && center > S.gridAnchor || !short && center < S.gridAnchor);
   const jump = lastJumpPct();
   const live = S.grid.filter((g) => !g.reduceOnly && (g.status === "armed" || g.status === "open"));
+  const stagedN = S.grid.filter((g) => g.status === "staged").length;
   const drift = S.gridAnchor ? Math.abs(center - S.gridAnchor) / S.gridAnchor : 1;
-  const empty = live.length === 0, away = drift > S.config.gridStepPct / 100 * 2.2;
+  const empty = live.length === 0 && stagedN === 0, away = drift > S.config.gridStepPct / 100 * 2.2;
   if (chasing && jump > 0.18) return;
   if (!empty && !away && jump < 0.12) return;
   if (chasing && !empty) {
@@ -2918,8 +2989,8 @@ function ensureGrid() {
     return;
   }
   cancelPendingAdds();
-  const keep = S.grid.filter((g) => g.status === "filled" || g.status === "cancelled" || g.reduceOnly && (g.status === "open" || g.status === "armed"));
-  S.grid = [...keep, ...buildGrid(center)].filter((g) => keep.includes(g) || g.reduceOnly || g.status !== "armed" || !shouldFill(g, center));
+  const keep = S.grid.filter((g) => g.status === "filled" || g.status === "cancelled" || g.status === "staged" || g.reduceOnly && (g.status === "open" || g.status === "armed"));
+  S.grid = [...keep, ...buildGrid(center, false, 4)].filter((g) => keep.includes(g) || g.reduceOnly || g.status !== "armed" || !shouldFill(g, center));
   S.gridAnchor = center;
   S.grid.sort((a, b) => b.price - a.price);
 }
@@ -3308,6 +3379,8 @@ async function liveSync() {
             const tb = S._tpBanked;
             _harvestCleanup(l.price);
             pushLog("server", "\u062C\u0646\u064A \u0645\u0643\u062A\u0645\u0644 \u2713 \u2014 \u0646\u064F\u0641\u0651\u0630 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u0628\u0627\u0644\u0643\u0627\u0645\u0644\u060C \u0635\u0627\u0641\u064A \u0627\u0644\u062F\u0648\u0631\u0629 " + fmtUsd(tb));
+            if (S.status === "running") maybeSwitchSymbol().catch(() => {
+            });
           }
         }
       } else if (l.status === "open" && !shouldFill(l, S.lastPrice || 0)) {
@@ -3469,6 +3542,8 @@ async function botTick() {
     S.heartbeat++;
     applyMeta(m);
     studyTick();
+    armProgressive();
+    bgRadarTick();
     const _prevDir = S.config.direction;
     resolveDirection(Date.now());
     if (S.config.direction !== _prevDir) {
@@ -3581,7 +3656,7 @@ function startBot() {
   if (!S.grid.filter((g) => !g.reduceOnly && (g.status === "armed" || g.status === "open")).length) {
     S.grid = [
       ...S.grid.filter((g) => g.reduceOnly && (g.status === "open" || g.status === "armed")),
-      ...buildGrid(S.position ? S.position.entry : p)
+      ...buildGrid(S.position ? S.position.entry : p, false, 4)
     ];
   }
   pushLog("server", "\u062F\u0648\u0631\u0629 \u062C\u062F\u064A\u062F\u0629 " + (S.config.direction === "short" ? "\u0634\u0648\u0631\u062A" : "\u0644\u0648\u0646\u063A") + (S.regime ? " \xB7 " + S.regime.label : "") + " \u2014 \u0634\u0628\u0643\u0629 \u0641\u0639\u0651\u0627\u0644\u0629 " + effLevels() + " \u0645\u0646 " + S.config.levels + " (\u062A\u0631\u0643\u064A\u0632 \u064A\u0646\u0627\u0633\u0628 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644) \u0648\u0627\u0644\u0635\u064A\u062F \u064A\u0639\u0645\u0644");
@@ -3849,7 +3924,7 @@ function saveCfg(v) {
     const c = S.lastPrice || S.gridAnchor || (S.position ? S.position.entry : 0);
     if (c > 0) {
       const keep = S.grid.filter((g) => g.status === "filled" || g.status === "cancelled" || g.reduceOnly && (g.status === "open" || g.status === "armed"));
-      S.grid = [...keep, ...buildGrid(c)];
+      S.grid = [...keep, ...buildGrid(c, false, 4)];
       S.gridAnchor = c;
       S.grid.sort((a, b) => b.price - a.price);
     }
