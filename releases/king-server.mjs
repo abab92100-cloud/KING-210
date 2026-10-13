@@ -1884,6 +1884,7 @@ function applyDelta(side, qty, price) {
     };
     S._exc = { mae: 0, mfe: 0 };
     S._tpBanked = 0;
+    S._trailFloor = 0;
     return { realized: 0, closedQty: 0, addedQty: qty };
   }
   const pos = S.position;
@@ -1913,6 +1914,7 @@ function applyDelta(side, qty, price) {
     };
     S._exc = { mae: 0, mfe: 0 };
     S._tpBanked = 0;
+    S._trailFloor = 0;
     return { realized: pnl, closedQty: closeQty, addedQty: leftover };
   }
   return { realized: pnl, closedQty: closeQty, addedQty: 0 };
@@ -2137,6 +2139,14 @@ function maybeReport() {
   pushLog("info", "\u062A\u0642\u0631\u064A\u0631 \u062F\u0648\u0631\u064A \u2014 " + msg);
   nativeNotify("KING \u2014 \u062A\u0642\u0631\u064A\u0631 \u0627\u0644\u0623\u062F\u0627\u0621", msg);
 }
+function trailTarget(base, floating) {
+  if (!(floating > 0)) return base;
+  let t = base;
+  while (floating >= t * 2) {
+    t = t + Math.max(0.01, t * 0.25);
+  }
+  return t;
+}
 function syncPositionTp() {
   if (S.status !== "running" || !S.position) return;
   const pos = S.position, mult = S.multiplier || 1;
@@ -2144,8 +2154,14 @@ function syncPositionTp() {
   const entryFees = S.journal.filter((j) => j.status === "open").reduce((a, j) => a + (j.fees || 0), 0) || pos.size * mult * pos.entry * (S.makerFee || 2e-4);
   const exitFee = pos.size * mult * pos.entry * (S.takerFee || 6e-4);
   const notional = Math.max(1e-9, pos.size * mult * pos.entry);
-  const need = Math.max(0, tpBase() - (S._tpBanked || 0));
-  const cov = (entryFees + exitFee + need) / notional;
+  const base = tpBase();
+  const floatNet = (pos.unrealized || 0) - S.journal.filter((j) => j.status === "open").reduce((a, j) => a + (j.fees || 0), 0) - pos.size * mult * (pos.entry || 0) * (S.takerFee || 6e-4);
+  S._trailFloor = Math.max(S._trailFloor || 0, trailTarget(base, floatNet));
+  const need = Math.max(S._trailFloor, tpBase()) - (S._tpBanked || 0);
+  if (need < 0) {
+  }
+  const needPos = Math.max(0, need);
+  const cov = (entryFees + exitFee + needPos) / notional;
   const want = roundTick(pos.side === "long" ? pos.entry * (1 + cov) : pos.entry * (1 - cov), S.tickSize);
   if (!(want > 0)) return;
   const tickTol = S.tickSize > 0 ? S.tickSize * 0.5 : Math.abs(want) * 1e-9;
@@ -2199,6 +2215,7 @@ function _harvestCleanup(fp) {
   }
   S._guardId = null;
   S._tpBanked = 0;
+  S._trailFloor = 0;
   for (const g of S.grid) {
     if (g.status === "armed" || g.status === "open" || g.status === "staged") {
       g.status = "cancelled";
@@ -3082,6 +3099,7 @@ async function flattenAt(p, source) {
   S.position = null;
   S.huntOpen = 0;
   S._tpBanked = 0;
+  S._trailFloor = 0;
   for (const l of S.grid) if (l.status === "open" || l.status === "armed") {
     l.status = "cancelled";
     l.exchangeOrderId = null;
@@ -3291,6 +3309,7 @@ async function liveSync() {
       S._guardPx = 0;
       S._guardId = null;
       S._tpBanked = 0;
+      S._trailFloor = 0;
     }
     if (pos && pos.liquidation) S.exLiqPrice = pos.liquidation;
     if (!S._accAt || Date.now() - S._accAt > 3e4) {
@@ -3582,6 +3601,7 @@ async function botTick() {
     studyTick();
     armProgressive();
     bgRadarTick();
+    if (S.position && S.status === "running") syncPositionTp();
     if (!S.position && S.status === "running") maybeSwitchSymbol().catch(() => {
     });
     const _prevDir = S.config.direction;
@@ -3909,6 +3929,7 @@ function saveCfg(v) {
     S.position = null;
     S.journal = [];
     S._tpBanked = 0;
+    S._trailFloor = 0;
     S.realizedPnl = 0;
     S.feesPaid = 0;
     S.fundingPaid = 0;

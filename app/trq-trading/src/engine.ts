@@ -1015,7 +1015,7 @@ function applyDelta(side,qty,price){ const dir=side==='sell'?'short':'long';
   if(!S.position){ S.position={side:dir,size:qty,entry:price,leverage:S.config.leverage,
     unrealized:0,openedAt:Date.now(),liquidation:null};
     S._exc={mae:0,mfe:0}; // انحرافات تُقاس من ولادة المركز
-    S._tpBanked=0; // بنك الجني الجزئي يخص المركز الوليد فقط — لا يُرث من سابق
+    S._tpBanked=0; S._trailFloor=0; // بنك الجني الجزئي يخص المركز الوليد فقط — لا يُرث من سابق
     return {realized:0,closedQty:0,addedQty:qty}; }
   const pos=S.position;
   const same=(pos.side==='short'&&side==='sell')||(pos.side==='long'&&side==='buy');
@@ -1029,7 +1029,7 @@ function applyDelta(side,qty,price){ const dir=side==='sell'?'short':'long';
   const leftover=qty-closeQty;
   if(leftover>1e-9){ S.position={side:dir,size:leftover,entry:price,
     leverage:S.config.leverage,unrealized:0,openedAt:Date.now(),liquidation:null};
-    S._exc={mae:0,mfe:0}; S._tpBanked=0;
+    S._exc={mae:0,mfe:0}; S._tpBanked=0; S._trailFloor=0;
     return {realized:pnl,closedQty:closeQty,addedQty:leftover}; }
   return {realized:pnl,closedQty:closeQty,addedQty:0}; }
 function noteEntry(qty:any,price:any,fee:any,source?:any,noCount?:any){ const side=S.position?S.position.side:(source==='hunt'?S.config.direction:'short');
@@ -1162,6 +1162,16 @@ function maybeReport(){ const now=Date.now();
 // يُوضع فور فتح الصفقة ويُعاد حسابه مع كل إضافة: متوسط الدخول الفعلي + رسوم
 // الدخول المدفوعة فعلًا من السجل + رسوم الخروج taker المقدّرة + صافي TP_BASE_NET
 // ($0.12) — تنفيذه يحجز $0.12 صافية للمركز كاملًا مهما بلغ عدد أوامره (1 أو 25).
+/* جني تتبعي تصاعدي سريع: الهدف يبدأ من ثبابي البوت (مثال 0.03)؛ كلما وصل الربح العائم إلى
+   الضعين من هدفين للبوت (مثال: هدف 0.03 → عند 0.06 يرتفع الهدف إلى 0.04؛ عند 0.09 → 0.05)
+   — يُحدّث كل نبضة (ثانية) فيرفع التبع مع الربح العائم ولا ينخط أبدًا */
+function trailTarget(base,floating){
+  if(!(floating>0)) return base;
+  let t=base;
+  // مثال المالك: base 0.03 — عند 0.06 → 0.04؛ عند 0.09 → 0.05؛ عند 0.12 → 0.06
+  // الصيغة: كلما بلغ الربح 2×الهدف يُرفع الهدف بالنصف
+  while(floating>=t*2){ t=t+Math.max(0.01,t*0.25); }
+  return t; }
 function syncPositionTp(){ if(S.status!=='running'||!S.position) return;
   const pos=S.position, mult=S.multiplier||1;
   if(!(pos.size>0)) return;
@@ -1170,8 +1180,16 @@ function syncPositionTp(){ if(S.status!=='running'||!S.position) return;
   const exitFee=pos.size*mult*pos.entry*(S.takerFee||0.0006);
   const notional=Math.max(1e-9,pos.size*mult*pos.entry);
   // ما جُني جزئيًا يُخصم من الهدف: المتبقي يكمل الصافي الكلي للمجموع لا هدفًا جديدًا
-  const need=Math.max(0,tpBase()-(S._tpBanked||0));
-  const cov=(entryFees+exitFee+need)/notional; // النسبة فوق المتوسط التي تضمن الصافي
+  // التبع التصاعدي: الهدف يتبع الربح العائم فوق الأساس
+  const base=tpBase();
+  const floatNet=(pos.unrealized||0)
+    -S.journal.filter(j=>j.status==='open').reduce((a,j)=>a+(j.fees||0),0)
+    -pos.size*mult*(pos.entry||0)*(S.takerFee||0.0006);
+  S._trailFloor=Math.max(S._trailFloor||0,trailTarget(base,floatNet));
+  const need=Math.max(S._trailFloor,tpBase())-(S._tpBanked||0);
+  if(need<0){ /* الهدف مجني بالك\u0627\u0645\u0644 */ }
+  const needPos=Math.max(0,need);
+  const cov=(entryFees+exitFee+needPos)/notional; // النسبة فوق المتوسط التي تضمن الصافي
   const want=roundTick(pos.side==='long'?pos.entry*(1+cov):pos.entry*(1-cov),S.tickSize);
   if(!(want>0)) return;
   const tickTol=S.tickSize>0?S.tickSize*0.5:Math.abs(want)*1e-9;
@@ -1200,7 +1218,7 @@ function coveringLoser(l,p){ const pos=S.position; if(!pos||l.reduceOnly) return
 function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
     exCancelAll(S.config.symbol).catch(()=>{});
     exCancelStops(S.config.symbol).catch(()=>{}); }
-  S._guardId=null; S._tpBanked=0;
+  S._guardId=null; S._tpBanked=0; S._trailFloor=0;
   for(const g of S.grid){ if(g.status==='armed'||g.status==='open'||g.status==='staged'){
     g.status='cancelled'; g.exchangeOrderId=null; } }
   S.gridAnchor=null; if(fp>0) S.huntAnchor=fp; }
@@ -1879,7 +1897,7 @@ async function flattenAt(p:any,source:any){ const pos=S.position;
   for(const row of S.journal){ if(row.status==='open'){ row.status='closed';
     row.exit=p; row.closedAt=Date.now(); if(source==='إيقاف') row.source='إيقاف';
     if(!row.pnl) row.pnl=lotNet(row.side,row.entry,p,row.qty,row.fees); } }
-  S.position=null; S.huntOpen=0; S._tpBanked=0;
+  S.position=null; S.huntOpen=0; S._tpBanked=0; S._trailFloor=0;
   for(const l of S.grid) if(l.status==='open'||l.status==='armed'){
     l.status='cancelled'; l.exchangeOrderId=null; } }
 function pruneGhosts(){ if(S.position) return;
@@ -2020,7 +2038,7 @@ async function liveSync(){ if(R()) return; // وضع المرآة: الحالة 
           if(openRow){ const oldFees=openRow.fees||0; openRow.entry=pos.entry;
             if(openRow.qty>0&&S.position.size!==prevSize){ openRow.qty=S.position.size; openRow.fees=oldFees; } }
           if(S.activeCycle) S.activeCycle.entry=pos.entry; } } }
-    else if(S.position&&Date.now()>S.ignoreExchangeUntil){ S.position=null; S._guardPx=0; S._guardId=null; S._tpBanked=0; }
+    else if(S.position&&Date.now()>S.ignoreExchangeUntil){ S.position=null; S._guardPx=0; S._guardId=null; S._tpBanked=0; S._trailFloor=0; }
     if(pos&&pos.liquidation) S.exLiqPrice=pos.liquidation;
     // الرصيد المتاح الحقيقي كل 30 ثانية — حدّ الميزانية به يمنع رفض
     // «insufficient available margin» عندما يكون الهامش محجوزًا كله بالأوامر
@@ -2192,6 +2210,7 @@ async function botTick(){
     applyMeta(m);
     studyTick(); // جمع عينات بصمة العملة أثناء الدراسة (ويُنهيها عند اكتمالها)
     armProgressive(); bgRadarTick();
+    if(S.position&&S.status==='running') syncPositionTp(); // تبع سريع: يتحدّث كل ثانية مع الربح العائم
     if(!S.position&&S.status==='running') maybeSwitchSymbol().catch(()=>{});
     // انضباط الاتجاه: أي انقلاب يلغي فورًا سلم الجهة القديمة المسلّح —
     // بقاؤه بعد الانقلاب كان يملأ مستويات معاكسة فوق مركز جديد فيغلقه
@@ -2355,7 +2374,7 @@ export function saveCfg(v){
       if(S.position) exCloseQty(old,S.position.side,S.position.size)
         .catch(e=>pushLog('error','إغلاق مركز الزوج السابق فشل: '+(e.message||e)));
       pushLog('server','أُلغيت أوامر ووقف '+old+' وأُغلق مركزه قبل الانتقال'); }
-    S.grid=[]; S.position=null; S.journal=[]; S._tpBanked=0;
+    S.grid=[]; S.position=null; S.journal=[]; S._tpBanked=0; S._trailFloor=0;
     S.realizedPnl=0; S.feesPaid=0; S.fundingPaid=0; S.slipCost=0; S._fundAt=0; S.ignoreExchangeUntil=Date.now()+12000;
     S.tape=[]; S.priceTrail=[]; S.emaFast=S.emaSlow=null; S._metaAt=0;
     // مضاعف العملة السابقة سمّ زاعف للجديدة (عقد PEPE = 520 ألف وحدة!) —
