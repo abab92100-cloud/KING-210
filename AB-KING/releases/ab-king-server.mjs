@@ -649,7 +649,8 @@ var S = {
     mode: "paper",
     tpNet: 0.12,
     patienceHrs: 24,
-    patienceUsd: 0
+    patienceUsd: 0,
+    gapMode: false
   },
   status: "idle",
   heartbeat: 0,
@@ -1127,6 +1128,116 @@ function bgRadarTick() {
   }
 }
 var _lastSwitchAt = 0;
+var GAP_MODE_ON = () => !!S.config.gapMode;
+var _gapScanAt = 0;
+var _gapStats = null;
+async function gapScan() {
+  if (!GAP_MODE_ON()) return null;
+  if (Date.now() - _gapScanAt < 60 * 1e3) return _gapStats;
+  _gapScanAt = Date.now();
+  try {
+    const all = await kcPublic("/api/v1/contracts/active", 6e3);
+    const liq = (all || []).filter((c) => /USDTM$/.test(c.symbol) && c.status === "Open" && +(c.turnoverOf24h || 0) > 3e6 && +(c.lastTradePrice || 0) > 0 && +(c.indexPrice || 0) > 0);
+    const out = [];
+    for (const c of liq.slice(0, 60)) {
+      const dev = (+c.lastTradePrice - +c.indexPrice) / +c.indexPrice * 100;
+      if (dev < -0.15) {
+        out.push({
+          symbol: c.symbol,
+          dev,
+          oi: +c.openInterest || 0,
+          turn: +c.turnoverOf24h,
+          fund: +c.fundingFeeRate || 0,
+          last: +c.lastTradePrice,
+          idx: +c.indexPrice
+        });
+      }
+    }
+    out.sort((a, b) => a.dev - b.dev);
+    _gapStats = { at: Date.now(), list: out };
+    return _gapStats;
+  } catch (e) {
+    logSwallow("silent-catch", e);
+    return _gapStats;
+  }
+}
+async function gapSignal(symbol2) {
+  try {
+    const [ixr, pkr] = await Promise.all([
+      kcPublic("/api/v1/kline/query?symbol=.K" + symbol2.replace("USDTM", "USDT") + "&granularity=5", 6e3),
+      kcPublic("/api/v1/kline/query?symbol=" + symbol2 + "&granularity=5", 6e3)
+    ]);
+    const idx = {}, perp = {};
+    (ixr || []).forEach((k) => idx[k[0]] = +k[4]);
+    (pkr || []).forEach((k) => perp[k[0]] = +k[4]);
+    const devs = [];
+    for (const t in perp) {
+      if (idx[t] > 0 && perp[t] > 0) devs.push({ t: +t, d: (perp[t] - idx[t]) / idx[t] * 100, p: perp[t], idx: idx[t] });
+    }
+    if (devs.length < 27) return null;
+    devs.sort((a, b) => a.t - b.t);
+    const win = devs.slice(-25, -1);
+    const mean = win.reduce((a, b) => a + b.d, 0) / win.length;
+    const sd = Math.sqrt(win.reduce((a, b) => a + (b.d - mean) ** 2, 0) / win.length);
+    if (!(sd > 1e-3)) return null;
+    const cur = devs[devs.length - 1];
+    const z = (cur.d - mean) / sd;
+    const stable = devs.length > 3 && cur.p >= devs[devs.length - 4].p * 0.9985;
+    const deep = cur.d < -0.15 && z < -2;
+    const idxNow = cur.idx || cur.p;
+    const idx6h = devs.length > 6 ? devs[devs.length - 7].idx || idxNow : idxNow;
+    const idxFlat = Math.abs((idxNow - idx6h) / idx6h * 100) < 1.5;
+    const ready = deep && stable && idxFlat;
+    return { z, dev: cur.d, ready, price: cur.p, exitDev: mean };
+  } catch (e) {
+    return null;
+  }
+}
+function gapExitCheck(p) {
+  const ctx = S._gapCtx;
+  if (!ctx) return false;
+  const dev = (p - ctx.idx) / ctx.idx * 100;
+  if (dev >= ctx.exitDev) return true;
+  return false;
+}
+async function gapHunterTick() {
+  if (S._gapHuntBusy) return;
+  S._gapHuntBusy = true;
+  try {
+    const st = await gapScan();
+    if (!st || !st.list || !st.list.length) return;
+    for (const cand of st.list.slice(0, 3)) {
+      const sig2 = await gapSignal(cand.symbol);
+      if (sig2 && sig2.ready) {
+        if (cand.symbol !== S.config.symbol) {
+          pushLog("server", "\u{1F50D} \u0635\u0627\u0626\u062F \u0627\u0644\u0641\u062C\u0648\u0627\u062A: \u062A\u062D\u0648\u064A\u0644 \u0625\u0644\u0649 " + cand.symbol.replace(/USDTM$/, "") + " \u2014 \u0641\u062C\u0648\u0629 " + sig2.dev.toFixed(2) + "% (z=" + sig2.z.toFixed(1) + ")");
+          S.config.symbol = cand.symbol;
+          S.config.displaySymbol = cand.symbol.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");
+          S.multiplier = 1;
+          S.tickSize = 0.1;
+          S._metaSym = null;
+          S._metaAt = 0;
+          setStreamSymbol(cand.symbol);
+          S.grid = [];
+          S.journal = [];
+          S.tape = [];
+          S.priceTrail = [];
+          S.emaFast = S.emaSlow = null;
+        }
+        S._gapCtx = { idx: cand.idx, exitDev: sig2.exitDev, entryAt: Date.now() };
+        S.lastPrice = sig2.price;
+        const q = Math.max(1, Math.floor(S.config.cycleBalance * 0.25 * (S.config.leverage || 3) / Math.max(1e-12, 1 * sig2.price)));
+        maybeHunt(sig2.price);
+        pushLog("server", "\u2696\uFE0F \u0641\u062C\u0648\u0629 \u0645\u062C\u0647\u0632\u0629: \u062F\u062E\u0648\u0644 \u0637\u0648\u064A\u0644 @ " + fmtPx(sig2.price) + " \u2014 \u062E\u0631\u0648\u062C \u0639\u0646\u062F \u0639\u0648\u062F\u0629 \u0627\u0644\u0641\u062C\u0648\u0629");
+        break;
+      }
+    }
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  } finally {
+    S._gapHuntBusy = false;
+  }
+}
 async function maybeSwitchSymbol() {
   if (S.position) return;
   if (S.status !== "running") return;
@@ -2443,6 +2554,13 @@ function inAddZone(p) {
 }
 function harvestRipe(p) {
   if (!p || S.status === "idle") return;
+  if (S._gapCtx && S.position && gapExitCheck(p)) {
+    pushLog("server", "\u{1F3AF} \u0635\u0627\u0626\u062F \u0627\u0644\u0641\u062C\u0648\u0627\u062A: \u0639\u0627\u062F\u0629 \u0627\u0644\u0625\u0646\u062F\u064A\u0643\u0633 \u062A\u0645\u062A \u2014 \u062C\u0646\u064A \u0627\u0644\u0645\u0631\u0643\u0632 \u0643\u0627\u0645\u0644\u0627");
+    flattenAt(p, "\u0639\u0648\u062F\u0629 \u0625\u0646\u062F\u064A\u0643\u0633").catch(() => {
+    });
+    S._gapCtx = null;
+    return;
+  }
   for (const tp of S.grid.filter((g) => g.reduceOnly && (g.status === "open" || g.status === "armed"))) {
     const tol = Math.min(S.tickSize > 0 ? S.tickSize * 0.5 : 1e-12, Math.abs(tp.price) * 5e-4);
     const crossed = tp.side === "sell" ? p >= tp.price - tol : p <= tp.price + tol;
@@ -3664,6 +3782,10 @@ async function botTick() {
     studyTick();
     armProgressive();
     bgRadarTick();
+    if (S.config.gapMode && !S.position && S.status === "running") {
+      gapHunterTick().catch(() => {
+      });
+    }
     if (S.position && S.status === "running") syncPositionTp();
     if (!S.position && S.status === "running") maybeSwitchSymbol().catch(() => {
     });
