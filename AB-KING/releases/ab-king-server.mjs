@@ -284,7 +284,8 @@ var MIN_HUNT_GAP = 0.08;
 var TP_BASE_NET = 0.12;
 var LOSS_STOP_USD = 16;
 function tpBase() {
-  return Math.max(0.03, Number(S && S.config && S.config.tpNet) || TP_BASE_NET);
+  const hf = S && S.config && S.config.hfMode;
+  return Math.max(0.03, Number(S && S.config && S.config.tpNet) || (hf ? 0.03 : TP_BASE_NET));
 }
 var clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 var uid = (p) => p + "_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -646,7 +647,9 @@ var S = {
     directionMode: "auto",
     cycleBalance: 100,
     mode: "paper",
-    tpNet: 0.12
+    tpNet: 0.12,
+    patienceHrs: 24,
+    patienceUsd: 0
   },
   status: "idle",
   heartbeat: 0,
@@ -1470,7 +1473,8 @@ function spacingGate(p) {
   if (!(p > 0)) return true;
   const last = lastRealFillPx();
   if (!last) return true;
-  const minGap = Math.max(S.config.gridStepPct / 100 * 0.75, 12e-4);
+  const hfMin = S.config.hfMode ? 4e-4 : 12e-4;
+  const minGap = Math.max(S.config.gridStepPct / 100 * (S.config.hfMode ? 0.25 : 0.75), hfMin);
   return Math.abs(p - last) / last >= minGap;
 }
 function filledAdds() {
@@ -1777,7 +1781,7 @@ function buildGrid(center, wide, initialCount) {
   for (let i = 1; i <= n; i++) {
     let dist = wide ? Math.min(step * i, 0.05) : span * Math.pow(i / n, 1.5);
     if (!wide) {
-      const minGap = Math.max(step, stepPct / 100);
+      const minGap = Math.max(step * (S.config.hfMode ? 0.3 : 1), stepPct / 100 * (S.config.hfMode ? 0.3 : 1));
       if (i === 1) dist = Math.max(dist, minGap);
       else dist = Math.max(dist, prevDist + minGap);
     }
@@ -2628,10 +2632,11 @@ function huntSignals(p) {
   return sig2;
 }
 function effectiveHuntPct() {
+  const hf = S.config.hfMode;
   const base = Math.max(
-    0.14,
-    S.config.huntPct,
-    profOf() && profOf().spread ? profOf().spread * 2.5 : 0
+    hf ? 0.05 : 0.14,
+    S.config.huntPct * (hf ? 0.4 : 1),
+    profOf() && profOf().spread ? profOf().spread * (hf ? 1.5 : 2.5) : 0
   );
   const mag = Math.abs(S.biasScore);
   const stalled = S.lastWorkAt && Date.now() - S.lastWorkAt > 6e4;
@@ -2810,7 +2815,7 @@ function huntTrigger(p) {
   if (S.startedAt && Date.now() - S.startedAt < SCOUT_MS && filledAdds() >= 1) return null;
   if (S.lastAddAt && Date.now() - S.lastAddAt < ADD_COOLDOWN) return null;
   trailHuntAnchor(p);
-  if (S.lastHuntAt && Date.now() - S.lastHuntAt < HUNT_COOLDOWN) return null;
+  if (S.lastHuntAt && Date.now() - S.lastHuntAt < (S.config.hfMode ? 3e3 : HUNT_COOLDOWN)) return null;
   const volNow = retStdev() || 0.05;
   const capHunt = S.regime && S.regime.shock ? 2 : volNow > 1.2 ? 2 : volNow < 0.35 ? 4 : MAX_HUNT_OPEN;
   if (openHuntLots() >= capHunt) return null;
@@ -2972,6 +2977,29 @@ function cancelPendingAdds() {
       } else g.exchangeOrderId = null;
     }
   }
+}
+async function patienceLimit(p) {
+  if (!p || S.status !== "running" || !S.position) return;
+  const hrs = Number(S.config.patienceHrs);
+  const usd = Number(S.config.patienceUsd);
+  if (!(hrs > 0) && !(usd > 0)) return;
+  const ageMs = Date.now() - (S.position.openedAt || Date.now());
+  const adv = adversePct(p);
+  const floatUsd = -(S.position.unrealized || 0);
+  const aged = hrs > 0 && ageMs > hrs * 3600 * 1e3;
+  const sunk = usd > 0 && floatUsd >= usd;
+  if (!aged && !sunk) return;
+  if (S.regime && !S.regime.shock) {
+    const against = S.position.side === "short" && S.regime.trend === "down" && adv > 0.6 || S.position.side === "long" && S.regime.trend === "up" && adv > 0.6;
+    if (!against) {
+      return;
+    }
+  }
+  const why = aged ? "\u0639\u0644\u0642 " + Math.round(ageMs / 36e5) + " \u0633" : "\u0627\u0646\u062D\u062F\u0627\u0631 " + fmtUsd(floatUsd);
+  pushLog("server", "\u23F0 \u062D\u062F \u0627\u0644\u0635\u0628\u0631: \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u0639\u0627\u0644\u0642 (" + why + ") \u2014 \u062A\u0639\u0648\u062F \u0627\u0644\u062F\u0648\u0631\u0629 \u0645\u0646 \u062C\u062F\u064A\u062F \u0645\u0639 \u062F\u0631\u0627\u0633\u0629");
+  await flattenAt(p, "\u062D\u062F \u0627\u0644\u0635\u0628\u0631");
+  S._postDisaster = Date.now();
+  startStudy(false);
 }
 async function circuitBreak(p) {
   if (!p || S.status !== "running") return;
@@ -3654,6 +3682,7 @@ async function botTick() {
       }
     }
     if (running && price > 0) {
+      await patienceLimit(price);
       await circuitBreak(price);
       await escapeAdverse(price);
       harvestRipe(price);
