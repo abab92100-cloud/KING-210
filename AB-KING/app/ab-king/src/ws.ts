@@ -164,6 +164,30 @@ function scheduleRetry(){
   retryTimer=setTimeout(connect,wait);
 }
 
+// المراقب الأصلي (Java ConnectivityManager) — يعمل حتى مع التطبيق في الخلفية
+// لأنه حدث نظام لا مؤقت WebView. يبث "netChange" من KingNative.startWatchdog().
+if(typeof window!=='undefined'&&window.Capacitor){
+  const KN=(window.Capacitor.Plugins||{}).KingNative;
+  if(KN&&KN.addListener){
+    KN.addListener('netChange',(d:any)=>{
+      const online=!!(d&&d.online);
+      if(online){
+        offline=false;
+        if(stopped) return;
+        forceReconnect('المراقب الأصلي: عاد الإنترنت — وصل فوري');
+      }else{
+        offline=true;
+        if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
+        streamState.connected=false;
+        streamState.error='انقطع الإنترنت — المراقب الأصلي ينتظر عودة الشبكة';
+        if(onStatus) onStatus({...streamState});
+      }
+    }).catch(()=>{});
+    // الحالة الأولية من نظام التشغيل مباشرة
+    if(KN.isOnline) KN.isOnline().then((r:any)=>{ offline=!(r&&r.online); }).catch(()=>{});
+  }
+}
+
 export function startStream(sym,handlers){
   stopStream();
   stopped=false; attempts=0;
