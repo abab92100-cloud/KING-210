@@ -622,6 +622,51 @@ async function confluenceScore(symbol:string,dev:number){
   return score;
 }
 
+/* PEAK-HOUR WINDOW: gaps spawn/revert around US open (13-19 UTC, measured 15:00 peak) */
+function inPeakWindow():boolean{
+  const h=new Date().getUTCHours();
+  return h>=13&&h<=19;
+}
+
+/* BTC LEAD: BTC moves 1min ahead of alts (correlation 0.117 measured) */
+let _btcLead:{t:number,ret:number}|null=null;
+async function btcLead():Promise<number>{
+  try{
+    const now=Date.now();
+    if(_btcLead&&now-_btcLead.t<60000) return _btcLead.ret;
+    const k=await kcPublic('/api/v1/kline/query?symbol=XBTUSDTM&granularity=1',3000);
+    const rows=(Array.isArray(k)?k:[]).slice(-3);
+    if(rows.length<2) return 0;
+    const last=+rows[rows.length-1][4], prev=+rows[0][4];
+    const ret=prev>0?(last-prev)/prev*100:0;
+    _btcLead={t:now,ret};
+    return ret;
+  }catch(e){ return 0; }
+}
+
+/* WALL PERSISTENCE: real support wall survives two snapshots 15s apart */
+async function wallReal(symbol:string):Promise<boolean>{
+  try{
+    const snap=async()=>{
+      const b=await kcPublic('/api/v1/level2/depth20?symbol='+encodeURIComponent(symbol),3000);
+      if(!b||!b.bids||!b.bids.length) return null;
+      let mx=0,mxP=0;
+      for(const x of b.bids.slice(0,15)){
+        if(+x[1]>mx){mx=+x[1];mxP=+x[0];}
+      }
+      return {wallP:mxP,wallS:mx};
+    };
+    const s1=await snap();
+    if(!s1||!(s1.wallS>0)) return true;
+    await new Promise(r=>setTimeout(r,15000));
+    const s2=await snap();
+    if(!s2) return true;
+    const sameZone=Math.abs(s2.wallP-s1.wallP)/Math.max(1e-12,s1.wallP)<0.004;
+    const stillSized=s2.wallS>=s1.wallS*0.5;
+    return sameZone&&stillSized;
+  }catch(e){ return true; }
+}
+
 export async function gapHunterTick(){
   if(S._gapHuntBusy) return; S._gapHuntBusy=true;
   try{
@@ -632,7 +677,11 @@ export async function gapHunterTick(){
       const sig=await gapSignal(cand.symbol);
       if(sig&&sig.ready){
         const cs=await confluenceScore(cand.symbol,sig.dev);
-        if(cs<3){ continue; } // التوافق أقل من 3/4 — انتظر فرصة أفضل
+        if(cs<3){ continue; }
+        if(!inPeakWindow()){ continue; }
+        const lead=await btcLead();
+        if(lead<-0.08){ continue; }
+        if(!(await wallReal(cand.symbol))){ continue; } // التوافق أقل من 3/4 — انتظر فرصة أفضل
         // ت\u062d\u0648\u064a\u0644 ا\u0644\u0631\u0645\u0632 إ\u0646 ل\u0632\u0645 + د\u062e\u0648\u0644 ط\u0648\u064a\u0644 ب\u0627\u0644\u0633\u0639\u0631 ا\u0644\u062d\u0627\u0644\u064a
         if(cand.symbol!==S.config.symbol){
           pushLog('server','\ud83d\udd0d \u0635\u0627\u0626\u062f \u0627\u0644\u0641\u062c\u0648\u0627\u062a: \u062a\u062d\u0648\u064a\u0644 \u0625\u0644\u0649 '+cand.symbol.replace(/USDTM$/,'')+' \u2014 \u0641\u062c\u0648\u0629 '+sig.dev.toFixed(2)+'% (z='+sig.z.toFixed(1)+')');
@@ -643,9 +692,13 @@ export async function gapHunterTick(){
           S.grid=[]; S.journal=[]; S.tape=[]; S.priceTrail=[]; S.emaFast=S.emaSlow=null;
         }
         S._gapCtx={idx:cand.idx,exitDev:sig.exitDev,entryAt:Date.now()};
-        // د\u062e\u0648\u0644 ط\u0648\u064a\u0644 م\u0628\u0627\u0634\u0631 ب\u0627\u0644\u0633\u0639\u0631 (ا\u0644\u0635\u064a\u062f ا\u0644\u0645\u062d\u0644\u064a د\u0627\u062e\u0644 ش\u0628\u0643\u0629 خ\u0641\u064a\u0641\u0629 م\u062b\u0644 ح\u0627\u0644\u0629 ا\u0644\u062f\u0631\u0648\u0633)
+        // الحجم = نف معايير تطبيق KING النهائي (contractsForLevel):
+        // 80% من رصيد الدورة ÷ المستويات × الرافعة — ليس كمية مخترعة صغيرة
         S.lastPrice=sig.price;
-        const q=Math.max(1,Math.floor((S.config.cycleBalance*0.25)*(S.config.leverage||3)/(Math.max(1e-12,1*sig.price))));
+        S._metaSym=null; S._metaAt=0; // يجب قراءة مواصفات العقد الجديد قبل الحجم
+        try{ const ct=await kcPublic('/api/v1/contracts/'+encodeURIComponent(cand.symbol),4000);
+          if(ct&&ct.multiplier){ S.multiplier=+ct.multiplier; S.tickSize=+ct.tickSize||S.tickSize; S._metaSym=cand.symbol; S._metaAt=Date.now(); }
+        }catch(e){ logSwallow('silent-catch',e); }
         maybeHunt(sig.price);
         pushLog('server','\u2696\ufe0f \u0641\u062c\u0648\u0629 \u0645\u062c\u0647\u0632\u0629: \u062f\u062e\u0648\u0644 \u0637\u0648\u064a\u0644 @ '+fmtPx(sig.price)+' \u2014 \u062e\u0631\u0648\u062c \u0639\u0646\u062f \u0639\u0648\u062f\u0629 \u0627\u0644\u0641\u062c\u0648\u0629');
         break;

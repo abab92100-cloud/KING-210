@@ -1234,6 +1234,52 @@ async function confluenceScore(symbol2, dev) {
   if (dev < -0.15) score += 2;
   return score;
 }
+function inPeakWindow() {
+  const h = (/* @__PURE__ */ new Date()).getUTCHours();
+  return h >= 13 && h <= 19;
+}
+var _btcLead = null;
+async function btcLead() {
+  try {
+    const now = Date.now();
+    if (_btcLead && now - _btcLead.t < 6e4) return _btcLead.ret;
+    const k = await kcPublic("/api/v1/kline/query?symbol=XBTUSDTM&granularity=1", 3e3);
+    const rows = (Array.isArray(k) ? k : []).slice(-3);
+    if (rows.length < 2) return 0;
+    const last = +rows[rows.length - 1][4], prev = +rows[0][4];
+    const ret = prev > 0 ? (last - prev) / prev * 100 : 0;
+    _btcLead = { t: now, ret };
+    return ret;
+  } catch (e) {
+    return 0;
+  }
+}
+async function wallReal(symbol2) {
+  try {
+    const snap = async () => {
+      const b = await kcPublic("/api/v1/level2/depth20?symbol=" + encodeURIComponent(symbol2), 3e3);
+      if (!b || !b.bids || !b.bids.length) return null;
+      let mx = 0, mxP = 0;
+      for (const x of b.bids.slice(0, 15)) {
+        if (+x[1] > mx) {
+          mx = +x[1];
+          mxP = +x[0];
+        }
+      }
+      return { wallP: mxP, wallS: mx };
+    };
+    const s1 = await snap();
+    if (!s1 || !(s1.wallS > 0)) return true;
+    await new Promise((r) => setTimeout(r, 15e3));
+    const s2 = await snap();
+    if (!s2) return true;
+    const sameZone = Math.abs(s2.wallP - s1.wallP) / Math.max(1e-12, s1.wallP) < 4e-3;
+    const stillSized = s2.wallS >= s1.wallS * 0.5;
+    return sameZone && stillSized;
+  } catch (e) {
+    return true;
+  }
+}
 async function gapHunterTick() {
   if (S._gapHuntBusy) return;
   S._gapHuntBusy = true;
@@ -1245,6 +1291,16 @@ async function gapHunterTick() {
       if (sig2 && sig2.ready) {
         const cs = await confluenceScore(cand.symbol, sig2.dev);
         if (cs < 3) {
+          continue;
+        }
+        if (!inPeakWindow()) {
+          continue;
+        }
+        const lead = await btcLead();
+        if (lead < -0.08) {
+          continue;
+        }
+        if (!await wallReal(cand.symbol)) {
           continue;
         }
         if (cand.symbol !== S.config.symbol) {
@@ -1264,7 +1320,19 @@ async function gapHunterTick() {
         }
         S._gapCtx = { idx: cand.idx, exitDev: sig2.exitDev, entryAt: Date.now() };
         S.lastPrice = sig2.price;
-        const q = Math.max(1, Math.floor(S.config.cycleBalance * 0.25 * (S.config.leverage || 3) / Math.max(1e-12, 1 * sig2.price)));
+        S._metaSym = null;
+        S._metaAt = 0;
+        try {
+          const ct = await kcPublic("/api/v1/contracts/" + encodeURIComponent(cand.symbol), 4e3);
+          if (ct && ct.multiplier) {
+            S.multiplier = +ct.multiplier;
+            S.tickSize = +ct.tickSize || S.tickSize;
+            S._metaSym = cand.symbol;
+            S._metaAt = Date.now();
+          }
+        } catch (e) {
+          logSwallow("silent-catch", e);
+        }
         maybeHunt(sig2.price);
         pushLog("server", "\u2696\uFE0F \u0641\u062C\u0648\u0629 \u0645\u062C\u0647\u0632\u0629: \u062F\u062E\u0648\u0644 \u0637\u0648\u064A\u0644 @ " + fmtPx(sig2.price) + " \u2014 \u062E\u0631\u0648\u062C \u0639\u0646\u062F \u0639\u0648\u062F\u0629 \u0627\u0644\u0641\u062C\u0648\u0629");
         break;
