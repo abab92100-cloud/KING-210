@@ -208,6 +208,7 @@ function HomeScreen() {
 /* ---------- رادار الفرص ---------- */
 function RadarScreen() {
   const r = S.radar, list = r ? r.list : [];
+  const intel = S.intel;
   const cur = list.find(l => l.symbol === S.config.symbol);
   const [busy, setBusy] = useState(false);
   const scan = async () => { setBusy(true); try { await scanRadar(); } finally { setBusy(false); } };
@@ -230,6 +231,50 @@ function RadarScreen() {
           </div>
         ) : null}
       </div>
+      {intel ? (
+        <div className="card">
+          <div className="row"><b>🧠 استخبارات التمويل والمركزات المفتوحة</b>
+            <span className="subtle">{fmtTime(intel.at)}</span></div>
+          {intel.squeeze && intel.squeeze.length ? (
+            <div style={{ marginTop: 8, padding: '6px 8px', border: '1px solid #f87171', borderRadius: 8 }}>
+              <b style={{ color: '#f87171' }}>🔥 انضغاط لونغ (تمويل مرتفع + صعود قوي)</b>
+              {intel.squeeze.map((f: any) => (
+                <div className="subtle" key={'sq' + f.symbol}>
+                  {f.disp + ' — تمويل +' + f.fundAnnPct + '%/س · 24س +' + f.chg + '% — ارتداد هابط مرجّح'}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {intel.rebound && intel.rebound.length ? (
+            <div style={{ marginTop: 8, padding: '6px 8px', border: '1px solid #4ade80', borderRadius: 8 }}>
+              <b style={{ color: '#4ade80' }}>💫 مرشح انعكاس صاعد (شورتات متكدسة)</b>
+              {intel.rebound.map((f: any) => (
+                <div className="subtle" key={'rb' + f.symbol}>
+                  {f.disp + ' — تمويل ' + f.fundAnnPct + '%/س · 24س ' + f.chg + '% — تصفية شورتات محتملة'}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="subtle" style={{ marginTop: 8 }}>أعلى تمويل سنوي الآن:</div>
+          {intel.hottest.map((f: any) => (
+            <div className="row" key={'hot' + f.symbol} style={{ marginTop: 2 }}>
+              <span style={{ fontSize: 13 }}>{f.disp}</span>
+              <span className={'badge ' + (f.fundAnnPct >= 0 ? 'b' : 'g')} style={{ fontSize: 11 }}>
+                {(f.fundAnnPct >= 0 ? '+' : '') + f.fundAnnPct + '%/س'}
+              </span>
+            </div>
+          ))}
+          <div className="subtle" style={{ marginTop: 8 }}>أكبر مراكز مفتوحة (OI):</div>
+          {intel.biggestOi.map((f: any) => (
+            <div className="row" key={'oi' + f.symbol} style={{ marginTop: 2 }}>
+              <span style={{ fontSize: 13 }}>{f.disp}</span>
+              <span className="subtle" style={{ fontSize: 12 }}>
+                {'$' + (f.oiUsd >= 1e6 ? (f.oiUsd / 1e6).toFixed(1) + 'م' : Math.round(f.oiUsd / 1000) + 'أ')}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {list.slice(0, 10).map((l, i) => (
         <div className="card" key={l.symbol} style={{ padding: '10px 12px' }}>
           <div className="row">
@@ -237,8 +282,16 @@ function RadarScreen() {
             <span className={'badge ' + (l.grade === '🟢' ? 'g' : l.grade === '🟡' ? 'b' : '')}>{l.grade + ' ' + l.score}</span>
           </div>
           <div className="subtle" style={{ marginTop: 4 }}>
-            {l.state + ' · تذبذب ' + l.vol + '% · 24س ' + (l.chg >= 0 ? '+' : '') + l.chg + '%' + (l.why.length ? ' · ' + l.why.join('، ') : '')}
+            {l.state + ' · تذبذب ' + l.vol + '% · 24س ' + (l.chg >= 0 ? '+' : '') + l.chg + '%' +
+              ' · تمويل ' + (l.fundAnnPct >= 0 ? '+' : '') + l.fundAnnPct + '%/س' +
+              ' · OI $' + (l.oiUsd >= 1e6 ? (l.oiUsd / 1e6).toFixed(1) + 'م' : Math.round(l.oiUsd / 1000) + 'أ') +
+              (l.why.length ? ' · ' + l.why.join('، ') : '')}
           </div>
+          {l.skew && l.skew !== '—' ? (
+            <div className="subtle" style={{ marginTop: 2, color: l.skew.includes('صاعد') ? '#4ade80' : l.skew.includes('هابط') ? '#f87171' : undefined }}>
+              {'📡 ' + l.skew}
+            </div>
+          ) : null}
           {l.symbol !== S.config.symbol && l.score >= 65 ? (
             <button className="btn acc" style={{ marginTop: 8, width: '100%', padding: '6px' }}
               onClick={() => {

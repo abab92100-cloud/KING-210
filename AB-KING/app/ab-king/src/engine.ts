@@ -206,7 +206,7 @@ export const S: any = {
   multiplier:1, tickSize:0.1, makerFee:0.0002, takerFee:0.0006, funding:0,
   _metaSym:null, maxOrderQty:0, exAvail:null, exLeverage:null, // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
   grid:[], position:null, journal:[], logs:[],
-  history:[], linkOk:false, exEquity:null,
+  history:[], linkOk:false, intel:null, exEquity:null,
   realizedPnl:0, feesPaid:0, fundingPaid:0, cycleHarvested:0, slipCost:0,
   priceTrail:[], emaFast:null, emaSlow:null, cvd:0, tape:[],
   biasScore:0, biasReasons:[], regime:null, confluence:null,
@@ -456,7 +456,12 @@ export async function scanRadar(){
       .map(c=>({symbol:c.symbol,
         turnover:+(c.turnoverOf24h??c.turnover24h??c.volumeOf24h??c.volume24h??0)||0,
         price:+(c.lastTradePrice??c.markPrice??0)||0,
-        chg:+(c.priceChgPct??0)*100||0}))
+        chg:+(c.priceChgPct??0)*100||0,
+        funding:+(c.fundingFeeRate??0)||0,
+        fundHrs:+(c.fundingRateGranularity??28800000)/3600000||8,
+        nextFundMs:+(c.nextFundingRateTime??0)||0,
+        oi:+(c.openInterest??0)||0,
+        maxLev:+(c.maxLeverage??0)||0}))
       .filter(r=>r.turnover>0&&r.price>0);
     // قاعدة المرشحين: الصفرية أولًا — رأس مال صغير يحتاج عملات رخيصة بسيولة،
     // مع إبقاء بضع عملات كبيرة للمقارنة فقط
@@ -477,13 +482,26 @@ export async function scanRadar(){
         if(!out.price) out.price=+t.price||0; }catch(e){ logSwallow("silent-catch", e); }
       return out; }));
     const list=det.filter((d:any)=>d.price>0).map((d:any)=>{ const s=radarScore(d);
+      const fundAnn=(d.funding||0)*(24/(d.fundHrs||8))*100;
+      const oiUsd=(d.oi||0)*(d.price||0);
+      const skew=d.chg<0&&d.funding<0?'شورت متكدس — مرشح انعكاس صاعد':d.chg>0&&d.funding>0?'لونغ متكدس — حذر من انعكاس هابط':(d.funding||0)!==0?'محايد':'—';
       return {symbol:d.symbol,disp:d.symbol.replace(/USDTM$/i,'').replace(/^XBT/i,'BTC'),
         price:d.price,score:s.score,why:s.why,state:d.state||'—',
         vol:+d.vol.toFixed(2),chg:Math.round(d.chg*10)/10,turnover:d.turnover,
+        funding:+(d.funding||0).toFixed(6),fundHrs:d.fundHrs||8,fundAnnPct:+fundAnn.toFixed(3),
+        nextFundMs:d.nextFundMs||0,oi:+d.oi||0,oiUsd,oiLev:d.maxLev||0,skew,
         grade:s.score>=65?'🟢':s.score>=45?'🟡':'🔴'}; })
       // الأفضل أولًا بلا تعادل مربك: الدرجة، ثم العرضي المتذبذب يتقدم، ثم الأعلى سيولة
       .sort((a:any,b:any)=>b.score-a.score||
         ((b.state==='عرضي متذبذب')?1:0)-((a.state==='عرضي متذبذب')?1:0)||b.turnover-a.turnover);
+    const fundRanked=[...list].sort((a:any,b:any)=>b.fundAnnPct-a.fundAnnPct);
+    const oiRanked=[...list].sort((a:any,b:any)=>b.oiUsd-a.oiUsd).slice(0,5);
+    S.intel={at:Date.now(),
+      hottest:fundRanked.slice(0,5),
+      coldest:fundRanked.slice(-3).reverse(),
+      biggestOi:oiRanked,
+      squeeze:fundRanked.filter((f:any)=>f.fundAnnPct>=0.05&&f.chg>3).slice(0,3),
+      rebound:fundRanked.filter((f:any)=>f.fundAnnPct<=-0.03&&f.chg<-3).slice(0,3)};
     S.radar={at:Date.now(),list};
     // توصية التبديل: عملتي الحالية ضعيفة وأخرى أقوى منها بفارق واضح
     const cur=list.find(l=>l.symbol===S.config.symbol);
@@ -1225,10 +1243,12 @@ function accrueFunding(){ const pos=S.position;
   const hours=Math.min(8,(now-last)/3600000);
   if(hours<0.25) return 0;
   const notional=pos.size*(S.multiplier||1)*(pos.entry||S.lastPrice||0);
-  const cost=notional*Math.abs(S.funding)*(hours/8);
+  const rate=S.funding; // موجب: اللونغ يدفع للشورت؛ سالب: الشورت يدفع للونغ
+  const payDir=(pos.side==='long'?1:-1)*(rate>=0?1:-1);
+  const signed=notional*Math.abs(rate)*(hours/8)*payDir; // موجب = ندفع، سالب = نتلقى
   S._fundAt=now;
-  S.fundingPaid=Math.round(((S.fundingPaid||0)+cost)*10000)/10000;
-  return cost; }
+  S.fundingPaid=Math.round(((S.fundingPaid||0)+signed)*10000)/10000;
+  return signed; }
 function applyDelta(side,qty,price){ const dir=side==='sell'?'short':'long';
   if(!S.position){ S.position={side:dir,size:qty,entry:price,leverage:S.config.leverage,
     unrealized:0,openedAt:Date.now(),liquidation:null};
