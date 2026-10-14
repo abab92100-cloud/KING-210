@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.abking.trading',
-  appName: 'AB-KING',
+  appName: 'KING-trading',
   webDir: 'dist',
   backgroundColor: '#0a0e14',
   plugins: {
