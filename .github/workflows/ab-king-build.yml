@@ -31,12 +31,35 @@ jobs:
         working-directory: AB-KING/app/ab-king
         run: npx cap sync android
 
+      # ── أيقونة التطبيق من صورة المستخدم (assets/app-icon.png) ──
+      # تحويل الصورة إلى كل المقاسات المطلوبة بأندرويد مع الحفاظ على الجودة (LANCZOS)
+      - name: Install ImageMagick
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick >/dev/null 2>&1 || true
+
+      - name: Generate launcher icons from assets/app-icon.png
+        working-directory: AB-KING/app/ab-king/android/app/src/main/res
+        run: |
+          ICON="$GITHUB_WORKSPACE/assets/app-icon.png"
+          if [ ! -f "$ICON" ]; then echo "no custom icon found — keeping current"; exit 0; fi
+          # مربّع بجودة عالية 1024 ثم كل المقاسات
+          convert "$ICON" -resize 1024x1024^ -gravity center -extent 1024x1024 -quality 100 /tmp/icon-master.png
+          for size in 48 72 96 144 192 512; do
+            dir="mipmap-$([ $size -le 48 ] && echo mdpi || ([ $size -le 72 ] && echo hdpi || ([ $size -le 96 ] && echo xhdpi || ([ $size -le 144 ] && echo xxhdpi || echo xxxhdpi))))"
+            convert /tmp/icon-master.png -resize ${size}x${size} -quality 100 "$dir/ic_launcher.png"
+            convert /tmp/icon-master.png -resize ${size}x${size} -quality 100 "$dir/ic_launcher_round.png"
+          done
+          # foreground بأمان هامشي (الأدaptive icon يقصه)
+          for dir in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            size=$(case $dir in *mdpi) echo 108;; *hdpi) echo 162;; *xhdpi) echo 216;; *xxhdpi) echo 324;; *) echo 432;; esac)
+            convert "$ICON" -resize ${size}x${size}^ -gravity center -extent ${size}x${size} -quality 100 "$dir/ic_launcher_foreground.png"
+          done
+          echo "✓ icons generated at all densities"
+
       # ── توقيع ثابت للأبد ──
       # المشكلة السابقة: assembleRelease بدون مخزن مفاتيح يوقع بمفتاح debug
       # عشوائي جديد في كل بناء → أندرويد يرفض التحديث فوق النسخة (توقيع مختلف).
       # الحل: مولّد مرة واحدة (أول بناء فقط) ويُحفظ داخل المستودع،
-      # ثم كل بناء لاحق يستخدم نفس المفتاح → التحديث يعمل فوق المثبت دائمًا.
-      - name: Ensure stable release keystore (generate once, commit forever)
+      # ثم كل بناء لاحق يستخدم نفس المفتاح → التحديث يعمل فوق المثبت دائمًا.      - name: Ensure stable release keystore (generate once, commit forever)
         working-directory: AB-KING/app/ab-king/android
         run: |
           if [ ! -f king-release.keystore ]; then

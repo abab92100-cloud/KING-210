@@ -317,7 +317,7 @@ let API_BASE = IS_NATIVE ? DIRECT_BASE : '/kucoin';
 // AbortSignal.timeout غير مدعوم في WebViews القديمة — بديل متوافق
 function sig(ms){ const c=new AbortController(); setTimeout(()=>c.abort(),ms); return c.signal; }
 async function kcFetch(path,opts){
-  const _t0=Date.now();
+  
   try{ const _r=await kcFetchInner(path,opts); netAlivePing(true); return _r; }
   catch(e){ if((e as any)?.name!=='AbortError') netAlivePing(false); throw e; } }
 async function kcFetchInner(path,opts){
@@ -380,7 +380,7 @@ async function kcPrivate(method:any,path:any,body?:any){
   if(j.code!=='200000') throw new Error(j.msg||('KuCoin '+res.status));
   return j.data;
 }
-export async function getApiBase(){ return API_BASE; }
+
 const fetchTicker  = s => kcPublic('/api/v1/ticker?symbol='+encodeURIComponent(s),2500);
 const fetchContract= s => kcPublic('/api/v1/contracts/'+encodeURIComponent(s),3500);
 let _bookFailsAt:any=0, _tapeFailsAt:any=0;
@@ -759,7 +759,7 @@ export async function maybeSwitchSymbol(){ if(S.position) return;
       if(topScore<45) return; // لا تدوير لعملة ضعيفة
       S._rotCount=((S._rotCount||0)+1)%5;
       _lastSwitchAt=Date.now();
-      const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
+      const curDisp=cur?cur.disp:S.config.displaySymbol;
       pushLog('server','\ud83d\udd04 \u062fوران زمني ('+Math.round(idleMs/60000)+' د بلا فرصة): '+curDisp+' → '+top.disp+' ('+topScore+') — '+
         (top.state||'')+' — البحث مستمر عن فرصة أفضل');
       toast('\ud83d\udd04 دوران: '+top.disp+' — بحث عن فرصة');
@@ -1324,7 +1324,13 @@ function noteClose(qty:any,exit:any,fee:any,source?:any,pnl?:any,lotId?:any){ co
     S.cycleHarvested=Math.round(((S.cycleHarvested||0)+pnl)*10000)/10000;
     S.config.cycleBalance=Math.max(1,Math.round((S.config.cycleBalance+pnl)*100)/100); }
   // تعلّم من نتيجة الصفقة — يُخزَّن في الذاكرة القوية التي لا تُمسح مع الدورات
-  learnTrade(row?row.side:(S.position?S.position.side:S.config.direction), pnl);
+  { const mem=S.memory; if(mem&&mem.pairs){ const pk=S.config.symbol;
+      const pr=mem.pairs[pk]||(mem.pairs[pk]={n:0,w:0,l:0,pnl:0,grossWin:0,grossLoss:0,maxLoseStreak:0,loseStreak:0});
+      pr.n++; pr.pnl=Math.round(((pr.pnl||0)+pnl)*10000)/10000;
+      if(pnl>=0){ pr.w++; pr.grossWin=Math.round(((pr.grossWin||0)+pnl)*10000)/10000; pr.loseStreak=0; }
+      else { pr.grossLoss=Math.round(((pr.grossLoss||0)-pnl)*10000)/10000;
+        pr.loseStreak=(pr.loseStreak||0)+1; pr.maxLoseStreak=Math.max(pr.maxLoseStreak||0,pr.loseStreak); }
+      saveAll(); } }
   return pnl; }
 // إقفال جزئي لكمية من صفقة مفتوحة (جني مجزّأ على المنصة) —
 // يُبقي سجل الصفقة مفتوحًا بالكمية المتبقية ويراكم صافي الجزء في partPnl،
@@ -1364,9 +1370,9 @@ function armCompEntry(qty){ const pos=S.position; if(!pos||!(qty>0)) return;
 // فترة اليوم (UTC): آسيا 0-8 · أوروبا 8-16 · أمريكا 16-24
 function sessionOf(ts:any):any { const h=new Date(ts).getUTCHours(); return h<8?'آسيا':h<16?'أوروبا':'أمريكا'; }
 // التعلّم من نتائج الصفقات معطّل نهائيًا بطلب المالك — لا كتابة ولا قيود
-function learnTrade(_side:any,_pnl:any){ return; }
+
 // قياس الانزلاق معطّل مع التعلم — لا كتابة في الذاكرة
-function learnSlippage(_side:any,_slipPct:any){ return; }
+
 // إحصاءات مجمعة من الذاكرة القوية — للوحة الأداء والتقارير
 export function memStats(){ const mem=S.memory; const o={n:0,w:0,l:0,pnl:0,grossWin:0,grossLoss:0,maxLoseStreak:0,pf:0,winRate:0,avgWin:0,avgLoss:0};
   if(!mem||!mem.pairs) return o;
@@ -2074,7 +2080,7 @@ async function circuitBreak(p:any){ if(!p||S.status!=='running') return;
     return; } }
 async function escapeAdverse(p:any){ if(S.status!=='running'||!S.position||!p) return;
   const pos=S.position;
-  let danger=liqDanger(p); const flip=reversalAgainst(p);
+  let danger=liqDanger(p); reversalAgainst(p);
   // تأكيد المنصة قبل الإقفال الطارئ: سعر تصفية معلن من KuCoin سليم الجهة
   // وبعيد عن السعر = الإنذار المحلي كاذب (قراءة وهمية أقفلت صفقات بخسارة) — لا إقفال
   if(danger){ const exl=S.exLiqPrice||0, e0=pos.entry||0;
