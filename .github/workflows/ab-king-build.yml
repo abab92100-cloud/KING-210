@@ -39,21 +39,26 @@ jobs:
       - name: Generate launcher icons from assets/app-icon.png
         working-directory: AB-KING/app/ab-king/android/app/src/main/res
         run: |
-          ICON="$GITHUB_WORKSPACE/assets/app-icon.png"
+          set -e
+          ICON="${GITHUB_WORKSPACE}/assets/app-icon.png"
           if [ ! -f "$ICON" ]; then echo "no custom icon found — keeping current"; exit 0; fi
-          # مربّع بجودة عالية 1024 ثم كل المقاسات
-          convert "$ICON" -resize 1024x1024^ -gravity center -extent 1024x1024 -quality 100 /tmp/icon-master.png
-          for size in 48 72 96 144 192 512; do
-            dir="mipmap-$([ $size -le 48 ] && echo mdpi || ([ $size -le 72 ] && echo hdpi || ([ $size -le 96 ] && echo xhdpi || ([ $size -le 144 ] && echo xxhdpi || echo xxxhdpi))))"
-            convert /tmp/icon-master.png -resize ${size}x${size} -quality 100 "$dir/ic_launcher.png"
-            convert /tmp/icon-master.png -resize ${size}x${size} -quality 100 "$dir/ic_launcher_round.png"
-          done
-          # foreground بأمان هامشي (الأدaptive icon يقصه)
-          for dir in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
-            size=$(case $dir in *mdpi) echo 108;; *hdpi) echo 162;; *xhdpi) echo 216;; *xxhdpi) echo 324;; *) echo 432;; esac)
-            convert "$ICON" -resize ${size}x${size}^ -gravity center -extent ${size}x${size} -quality 100 "$dir/ic_launcher_foreground.png"
-          done
-          echo "✓ icons generated at all densities"
+          convert "$ICON" -resize 1024x1024^ -gravity center -extent 1024x1024 /tmp/icon-master.png
+          convert /tmp/icon-master.png -resize 48x48   mipmap-mdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 72x72   mipmap-hdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 96x96   mipmap-xhdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 144x144 mipmap-xxhdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 192x192 mipmap-xxxhdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 48x48   mipmap-mdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 72x72   mipmap-hdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 96x96   mipmap-xhdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 144x144 mipmap-xxhdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 192x192 mipmap-xxxhdpi/ic_launcher_round.png
+          convert "$ICON" -resize 108x108^ -gravity center -extent 108x108 mipmap-mdpi/ic_launcher_foreground.png
+          convert "$ICON" -resize 162x162^ -gravity center -extent 162x162 mipmap-hdpi/ic_launcher_foreground.png
+          convert "$ICON" -resize 216x216^ -gravity center -extent 216x216 mipmap-xhdpi/ic_launcher_foreground.png
+          convert "$ICON" -resize 324x324^ -gravity center -extent 324x324 mipmap-xxhdpi/ic_launcher_foreground.png
+          convert "$ICON" -resize 432x432^ -gravity center -extent 432x432 mipmap-xxxhdpi/ic_launcher_foreground.png
+          echo "icons generated at all densities"
 
       # ── توقيع ثابت للأبد ──
       # المشكلة السابقة: assembleRelease بدون مخزن مفاتيح يوقع بمفتاح debug
