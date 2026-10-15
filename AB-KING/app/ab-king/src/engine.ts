@@ -462,7 +462,11 @@ export async function scanRadar(){
         fundHrs:+(c.fundingRateGranularity??28800000)/3600000||8,
         nextFundMs:+(c.nextFundingRateTime??0)||0,
         oi:+(c.openInterest??0)||0,
-        maxLev:+(c.maxLeverage??0)||0}))
+        maxLev:+(c.maxLeverage??0)||0,
+        markP:+(c.markPrice??0)||0,
+        idxP:+(c.indexPrice??0)||0,
+        lowP:+(c.lowPrice??0)||0,
+        highP:+(c.highPrice??0)||0}))
       .filter(r=>r.turnover>0&&r.price>0);
     // قاعدة المرشحين: الصفرية أولًا — رأس مال صغير يحتاج عملات رخيصة بسيولة،
     // مع إبقاء بضع عملات كبيرة للمقارنة فقط
@@ -486,21 +490,30 @@ export async function scanRadar(){
       const fundAnn=(d.funding||0)*(24/(d.fundHrs||8))*100;
       const oiUsd=(d.oi||0)*(d.price||0);
       const skew=d.chg<0&&d.funding<0?'شورت متكدس — مرشح انعكاس صاعد':d.chg>0&&d.funding>0?'لونغ متكدس — حذر من انعكاس هابط':(d.funding||0)!==0?'محايد':'—';
+      const basis=(d.markP>0&&d.idxP>0)?((d.markP-d.idxP)/d.idxP)*100:0;
+      const range=(d.lowP>0)?((d.highP-d.lowP)/d.lowP)*100:0;
+      const oiToVol=(d.turnover>0)?oiUsd/d.turnover:0;
       return {symbol:d.symbol,disp:d.symbol.replace(/USDTM$/i,'').replace(/^XBT/i,'BTC'),
         price:d.price,score:s.score,why:s.why,state:d.state||'—',
         vol:+d.vol.toFixed(2),chg:Math.round(d.chg*10)/10,turnover:d.turnover,
         funding:+(d.funding||0).toFixed(6),fundHrs:d.fundHrs||8,fundAnnPct:+fundAnn.toFixed(3),
         nextFundMs:d.nextFundMs||0,oi:+d.oi||0,oiUsd,oiLev:d.maxLev||0,skew,
+        basisPct:+basis.toFixed(3),rangePct:+range.toFixed(1),oiToVolPct:+(oiToVol*100).toFixed(0),
         grade:s.score>=65?'🟢':s.score>=45?'🟡':'🔴'}; })
       // الأفضل أولًا بلا تعادل مربك: الدرجة، ثم العرضي المتذبذب يتقدم، ثم الأعلى سيولة
       .sort((a:any,b:any)=>b.score-a.score||
         ((b.state==='عرضي متذبذب')?1:0)-((a.state==='عرضي متذبذب')?1:0)||b.turnover-a.turnover);
     const fundRanked=[...list].sort((a:any,b:any)=>b.fundAnnPct-a.fundAnnPct);
     const oiRanked=[...list].sort((a:any,b:any)=>b.oiUsd-a.oiUsd).slice(0,5);
+    const gridRanked=[...list].filter((x:any)=>x.turnover>2e6).sort((a:any,b:any)=>b.rangePct-a.rangePct).slice(0,5);
+    const basisRanked=[...list].filter((x:any)=>x.turnover>2e6&&Math.abs(x.basisPct)>0.1)
+      .sort((a:any,b:any)=>Math.abs(b.basisPct)-Math.abs(a.basisPct)).slice(0,5);
     S.intel={at:Date.now(),
       hottest:fundRanked.slice(0,5),
       coldest:fundRanked.slice(-3).reverse(),
       biggestOi:oiRanked,
+      bestGrid:gridRanked,
+      extremeBasis:basisRanked,
       squeeze:fundRanked.filter((f:any)=>f.fundAnnPct>=0.05&&f.chg>3).slice(0,3),
       rebound:fundRanked.filter((f:any)=>f.fundAnnPct<=-0.03&&f.chg<-3).slice(0,3)};
     S.radar={at:Date.now(),list};

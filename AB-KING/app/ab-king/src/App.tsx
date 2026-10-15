@@ -273,6 +273,26 @@ function RadarScreen() {
               </span>
             </div>
           ))}
+          <div className="subtle" style={{ marginTop: 8 }}>🎯 أوسع مدى يومي (الأفضل لشبكة الجنريل):</div>
+          {intel.bestGrid && intel.bestGrid.map((f: any) => (
+            <div className="row" key={'gr' + f.symbol} style={{ marginTop: 2 }}>
+              <span style={{ fontSize: 13 }}>{f.disp}</span>
+              <span className="badge b" style={{ fontSize: 11 }}>{f.rangePct + '% مدى'}</span>
+            </div>
+          ))}
+          {intel.extremeBasis && intel.extremeBasis.length ? (
+            <>
+              <div className="subtle" style={{ marginTop: 8 }}>⚖️ أقصى انحراف مارك/إنديكس (basis):</div>
+              {intel.extremeBasis.map((f: any) => (
+                <div className="row" key={'ba' + f.symbol} style={{ marginTop: 2 }}>
+                  <span style={{ fontSize: 13 }}>{f.disp}</span>
+                  <span className={'badge ' + (f.basisPct < 0 ? 'g' : 'b')} style={{ fontSize: 11 }}>
+                    {(f.basisPct >= 0 ? '+' : '') + f.basisPct + '%'}
+                  </span>
+                </div>
+              ))}
+            </>
+          ) : null}
         </div>
       ) : null}
       {list.slice(0, 10).map((l, i) => (
