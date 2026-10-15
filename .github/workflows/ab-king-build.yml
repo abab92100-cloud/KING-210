@@ -64,7 +64,8 @@ jobs:
       # المشكلة السابقة: assembleRelease بدون مخزن مفاتيح يوقع بمفتاح debug
       # عشوائي جديد في كل بناء → أندرويد يرفض التحديث فوق النسخة (توقيع مختلف).
       # الحل: مولّد مرة واحدة (أول بناء فقط) ويُحفظ داخل المستودع،
-      # ثم كل بناء لاحق يستخدم نفس المفتاح → التحديث يعمل فوق المثبت دائمًا.      - name: Ensure stable release keystore (generate once, commit forever)
+      # ثم كل بناء لاحق يستخدم نفس المفتاح → التحديث يعمل فوق المثبت دائمًا.
+      - name: Ensure stable release keystore (generate once, commit forever)
         working-directory: AB-KING/app/ab-king/android
         run: |
           if [ ! -f king-release.keystore ]; then
