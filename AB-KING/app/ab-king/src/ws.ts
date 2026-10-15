@@ -169,22 +169,26 @@ function scheduleRetry(){
 if(typeof window!=='undefined'&&window.Capacitor){
   const KN=(window.Capacitor.Plugins||{}).KingNative;
   if(KN&&KN.addListener){
-    KN.addListener('netChange',(d:any)=>{
-      const online=!!(d&&d.online);
-      if(online){
-        offline=false;
-        if(stopped) return;
-        forceReconnect('المراقب الأصلي: عاد الإنترنت — وصل فوري');
-      }else{
-        offline=true;
-        if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
-        streamState.connected=false;
-        streamState.error='انقطع الإنترنت — المراقب الأصلي ينتظر عودة الشبكة';
-        if(onStatus) onStatus({...streamState});
-      }
-    }).catch(()=>{});
+    try{
+      const sub=KN.addListener('netChange',(d:any)=>{
+        const online=!!(d&&d.online);
+        if(online){
+          offline=false;
+          if(stopped) return;
+          forceReconnect('المراقب الأصلي: عاد الإنترنت — وصل فوري');
+        }else{
+          offline=true;
+          if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
+          streamState.connected=false;
+          streamState.error='انقطع الإنترنت — المراقب الأصلي ينتظر عودة الشبكة';
+          if(onStatus) onStatus({...streamState});
+        }
+      });
+      // addListener يُرجع Promise على بعض المنصات وكائن اشتراك مباشر على أخرى — نتعامل مع الحالتين
+      if(sub&&typeof (sub as any).catch==='function') (sub as any).catch(()=>{});
+    }catch{ /* intentional: optional step */ }
     // الحالة الأولية من نظام التشغيل مباشرة
-    if(KN.isOnline) KN.isOnline().then((r:any)=>{ offline=!(r&&r.online); }).catch(()=>{});
+    try{ if(KN.isOnline) KN.isOnline().then((r:any)=>{ offline=!(r&&r.online); }).catch(()=>{}); }catch{ /* intentional: optional step */ }
   }
 }
 
