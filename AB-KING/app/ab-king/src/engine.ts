@@ -96,7 +96,8 @@ function startForegroundSvc(){ if(!(typeof window!=='undefined'&&window.Capacito
     const FS=P.ForegroundService;
     if(FS&&FS.startForegroundService)
       FS.startForegroundService({id:7,title:'KING يعمل',
-        body:'متصل بالمنصة ويراقب الصفقات باستمرار',smallIcon:'ic_launcher',silent:true}).catch(()=>{});
+        body:'متصل بالمنصة ويراقب الصفقات باستمرار',smallIcon:'ic_launcher',silent:true,
+        serviceType:1}).catch(()=>{});
     const BO=P.BatteryOptimization;
     if(BO&&BO.isBatteryOptimizationEnabled&&!(localStorage.getItem('abking_bo_asked')))
       BO.isBatteryOptimizationEnabled().then(r=>{
