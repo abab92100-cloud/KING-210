@@ -56,13 +56,15 @@ jobs:
         working-directory: AB-KING/app/ab-king/android
         run: |
           cat >> app/build.gradle <<'EOF'
-          android.signingConfigs.release {
-              storeFile rootProject.file('king-release.keystore')
-              storePassword 'KINGtrading2024'
-              keyAlias 'king-release'
-              keyPassword 'KINGtrading2024'
+          android.signingConfigs {
+              kingRelease {
+                  storeFile rootProject.file('king-release.keystore')
+                  storePassword 'KINGtrading2024'
+                  keyAlias 'king-release'
+                  keyPassword 'KINGtrading2024'
+              }
           }
-          android.buildTypes.release.signingConfig = android.signingConfigs.release
+          android.buildTypes.release.signingConfig = android.signingConfigs.kingRelease
           EOF
 
       - name: Build APK (stable-signed release)
