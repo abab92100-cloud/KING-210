@@ -3,6 +3,7 @@ on:
   push:
     branches: ["main", "vibe/**"]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -12,29 +13,80 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
+
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
+
       - name: Build web + server
         working-directory: AB-KING/app/ab-king
         run: |
           npm ci
           npm run build
           npm run build:server
+
       - name: Sync Capacitor Android
         working-directory: AB-KING/app/ab-king
         run: npx cap sync android
-      - name: Build APK
+
+      # ── توقيع ثابت للأبد ──
+      # المشكلة السابقة: assembleRelease بدون مخزن مفاتيح يوقع بمفتاح debug
+      # عشوائي جديد في كل بناء → أندرويد يرفض التحديث فوق النسخة (توقيع مختلف).
+      # الحل: مولّد مرة واحدة (أول بناء فقط) ويُحفظ داخل المستودع،
+      # ثم كل بناء لاحق يستخدم نفس المفتاح → التحديث يعمل فوق المثبت دائمًا.
+      - name: Ensure stable release keystore (generate once, commit forever)
+        working-directory: AB-KING/app/ab-king/android
+        run: |
+          if [ ! -f king-release.keystore ]; then
+            echo "• generating PERMANENT release keystore (first and only time)..."
+            keytool -genkeypair -v \
+              -keystore king-release.keystore \
+              -alias king-release \
+              -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass KINGtrading2024 -keypass KINGtrading2024 \
+              -dname "CN=KING-trading, OU=Mobile, O=KING, L=Riyadh, C=SA"
+            echo "✓ keystore created — will be committed to the repo"
+          else
+            echo "✓ stable keystore found — reusing (same signature as all previous builds)"
+          fi
+
+      - name: Sign with stable keystore
+        working-directory: AB-KING/app/ab-king/android
+        run: |
+          cat >> app/build.gradle <<'EOF'
+          android.signingConfigs.release {
+              storeFile rootProject.file('king-release.keystore')
+              storePassword 'KINGtrading2024'
+              keyAlias 'king-release'
+              keyPassword 'KINGtrading2024'
+          }
+          android.buildTypes.release.signingConfig = android.signingConfigs.release
+          EOF
+
+      - name: Build APK (stable-signed release)
         working-directory: AB-KING/app/ab-king/android
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
-      - name: Commit APK to repo (direct download link)
+
+      - name: Rename APK
+        working-directory: AB-KING/app/ab-king/android
+        run: cp app/build/outputs/apk/release/app-release.apk KING-trading-signed.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KING-trading-signed-apk
+          path: AB-KING/app/ab-king/android/KING-trading-signed.apk
+
+      - name: Commit APK + keystore to repo (direct download link)
         run: |
           git config user.name "ci-bot"
           git config user.email "ci@users.noreply.github.com"
-          cp AB-KING/app/ab-king/android/app/build/outputs/apk/release/app-release.apk releases/AB-KING-latest.apk
+          cp AB-KING/app/ab-king/android/KING-trading-signed.apk releases/AB-KING-latest.apk
           git add releases/AB-KING-latest.apk
-          git commit -m "ci: update AB-KING-latest.apk [skip ci]" || echo "no change"
+          git add AB-KING/app/ab-king/android/king-release.keystore
+          git commit -m "ci: update AB-KING-latest.apk (stable signature) [skip ci]" || echo "no change"
           git push
