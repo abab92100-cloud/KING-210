@@ -470,10 +470,20 @@ export async function scanRadar(){
       .filter(r=>r.turnover>0&&r.price>0);
     // قاعدة المرشحين: الصفرية أولًا — رأس مال صغير يحتاج عملات رخيصة بسيولة،
     // مع إبقاء بضع عملات كبيرة للمقارنة فقط
-    const cheap=rows0.filter(r=>r.price<1).sort((a,b)=>b.turnover-a.turnover).slice(0,16);
-    const big=rows0.filter(r=>r.price>=1).sort((a,b)=>b.turnover-a.turnover).slice(0,4);
-    const rows=[...cheap,...big];
-    const det=await Promise.all(rows.map(async r=>{
+    const rows=rows0; // full universe - every contract is ranked and watched
+    // instant pre-ranking of ALL contracts from the single aggregate response
+    const preScored=rows.map(r=>{
+      let sc=50;
+      if(r.turnover>=5e7) sc+=10; else if(r.turnover>=1e7) sc+=6; else if(r.turnover<3e5) sc-=25; else if(r.turnover<1e6) sc-=12;
+      const a=Math.abs(r.chg); if(a<1.2) sc+=8; else if(a<3.5) sc+=4; else if(a>8) sc-=8; else sc-=3;
+      const range=r.lowP>0?((r.highP-r.lowP)/r.lowP*100):0; if(range>=4) sc+=10; else if(range>=2) sc+=6; else if(range>0&&range<0.6) sc-=6;
+      const basis=(r.markP>0&&r.idxP>0)?((r.markP-r.idxP)/r.idxP*100):0; if(Math.abs(basis)>0.2) sc+=6;
+      if(r.price>0&&r.price<0.01) sc+=6; else if(r.price>100) sc-=10;
+      const oiUsd=r.oi*r.price; if(r.oi>0&&r.turnover>0){ const rto=oiUsd/r.turnover; if(rto<0.5) sc+=4; else if(rto>5) sc-=4; }
+      return {...r, preScore: Math.max(0, Math.min(100, Math.round(sc))) };
+    }).sort((a,b)=>b.preScore-a.preScore);
+    // only the top 30 candidates get the deep check (candles + ticker) - fast AND precise
+    const det=await Promise.all(preScored.slice(0,30).map(async r=>{
       const out={...r,vol:0,spread:0,trendPct:0,price:0};
       try{ const ks=await fetchKlines(r.symbol,15);
         if(ks.length>=20){ const last=ks.slice(-24);
@@ -486,7 +496,7 @@ export async function scanRadar(){
         if(bb>0&&ba>0) out.spread=(ba-bb)/((ba+bb)/2)*100;
         if(!out.price) out.price=+t.price||0; }catch(e){ logSwallow("silent-catch", e); }
       return out; }));
-    const list=det.filter((d:any)=>d.price>0).map((d:any)=>{ const s=radarScore(d);
+    const deepList=det.filter((d:any)=>d.price>0).map((d:any)=>{ const s=radarScore(d);
       const fundAnn=(d.funding||0)*(24/(d.fundHrs||8))*100;
       const oiUsd=(d.oi||0)*(d.price||0);
       const skew=d.chg<0&&d.funding<0?'شورت متكدس — مرشح انعكاس صاعد':d.chg>0&&d.funding>0?'لونغ متكدس — حذر من انعكاس هابط':(d.funding||0)!==0?'محايد':'—';
@@ -503,6 +513,18 @@ export async function scanRadar(){
       // الأفضل أولًا بلا تعادل مربك: الدرجة، ثم العرضي المتذبذب يتقدم، ثم الأعلى سيولة
       .sort((a:any,b:any)=>b.score-a.score||
         ((b.state==='عرضي متذبذب')?1:0)-((a.state==='عرضي متذبذب')?1:0)||b.turnover-a.turnover);
+    // the rest of the universe (no deep fetch) - watched every 45s with live pre-scores
+    const deepSyms=new Set(deepList.map((x:any)=>x.symbol));
+    const rest=preScored.filter((r:any)=>!deepSyms.has(r.symbol)).map((r:any)=>({
+      symbol:r.symbol,disp:r.symbol.replace(/USDTM$/i,'').replace(/^XBT/i,'BTC'),
+      price:r.price,score:r.preScore,why:['full-universe watch'],state:'watch',
+      vol:0,chg:Math.round(r.chg*10)/10,turnover:r.turnover,
+      funding:+(r.funding||0).toFixed(6),fundHrs:r.fundHrs||8,
+      fundAnnPct:+((r.funding||0)*(24/(r.fundHrs||8))*100).toFixed(3),
+      nextFundMs:r.nextFundMs||0,oi:+r.oi||0,oiUsd:(r.oi||0)*(r.price||0),oiLev:r.maxLev||0,
+      skew:'-',basisPct:0,rangePct:0,oiToVolPct:0,
+      grade:r.preScore>=65?'\ud83d\udfe2':r.preScore>=45?'\ud83d\udfe1':'\ud83d\udd34'}));
+    const list=[...deepList,...rest];
     const fundRanked=[...list].sort((a:any,b:any)=>b.fundAnnPct-a.fundAnnPct);
     const oiRanked=[...list].sort((a:any,b:any)=>b.oiUsd-a.oiUsd).slice(0,5);
     const gridRanked=[...list].filter((x:any)=>x.turnover>2e6).sort((a:any,b:any)=>b.rangePct-a.rangePct).slice(0,5);
@@ -739,9 +761,14 @@ export async function gapHunterTick(){
   }catch(e){ logSwallow('silent-catch',e); }
   finally{ S._gapHuntBusy=false; }
 }
-export async function maybeSwitchSymbol(){ if(S.position) return;
+export async function maybeSwitchSymbol(){
   if(S.status!=='running') return;
-  if(Date.now()-_lastSwitchAt<60000) return;
+  // continuous watch: the scan runs while a position is OPEN too - keeps the live best-opportunities list,
+  // so the moment the position closes the bot jumps to the strongest contract with no waiting
+  if(S.position){
+    try{ await scanRadar(); }catch(e){ logSwallow('silent-catch', e); }
+    return; }
+  if(Date.now()-_lastSwitchAt<20000) return;
   // دوران زمني: لا صفقة خلال 45 دقيقة = العملة بايرة للبوت — انتقل لأقوى عملة أخرى
   const idleMs=Date.now()-(S.lastHuntAt||S.startedAt||Date.now());
   const rotate=idleMs>5*60*1000; // دوران سريع: 5 دقائق بلا فرصة = العملة بايرة
@@ -2506,7 +2533,7 @@ export async function botTick(){
     if(S.config.gapMode&&!S.position&&S.status==='running'){
       gapHunterTick().catch(()=>{}); }
     if(S.position&&S.status==='running') syncPositionTp(); // تبع سريع: يتحدّث كل ثانية مع الربح العائم
-    if(!S.position&&S.status==='running') maybeSwitchSymbol().catch(()=>{});
+    if(!S.position&&S.status==='running'){ _lastSwitchAt=0; maybeSwitchSymbol().catch(()=>{}); }
     // انضباط الاتجاه: أي انقلاب يلغي فورًا سلم الجهة القديمة المسلّح —
     // بقاؤه بعد الانقلاب كان يملأ مستويات معاكسة فوق مركز جديد فيغلقه
     // بخسارة عابرة ويزرع شورتًا ولونغًا في الوقت نفسه
@@ -2757,8 +2784,9 @@ export function initEngine(){
       .catch(()=>{ S.linkOk=false; }); };
   refreshBal(); setInterval(refreshBal,20000);
   // رادار الفرص: مسح شامل كل 3 دقائق — أول قراءة بعد استقرار القناة
-  setTimeout(()=>{ scanRadar().catch(()=>{}); },22000);
-  setInterval(()=>{ scanRadar().catch(()=>{}); },180000);
+  setTimeout(()=>{ scanRadar().catch(()=>{}); },15000);
+  // continuous full-universe scan every 45s - every contract on the platform is watched nonstop
+  setInterval(()=>{ scanRadar().catch(()=>{}); },45000);
   // البقاء الصوتي الصامت: يعمل دائمًا على الجوال حتى لا يُخنق المحرك بإطفاء الشاشة
   startSilentKeepAlive();
   // خدمة أمامية + استثناء البطارية — بقاء حقيقي في الخلفية لا يعتمد على الحيل الصوتية وحدها
