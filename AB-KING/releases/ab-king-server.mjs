@@ -66,6 +66,29 @@ var onStatus = null;
 var stopped = true;
 var attempts = 0;
 var connectSeq = 0;
+var offline = false;
+function forceReconnect(reason) {
+  if (stopped) return;
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  connectSeq++;
+  clearTimers();
+  if (ws) {
+    try {
+      ws.close();
+    } catch {
+    }
+    ws = null;
+  }
+  streamState.connected = false;
+  streamState.connecting = false;
+  streamState.error = String(reason || "reconnect");
+  attempts = 0;
+  connect();
+  if (onStatus) onStatus({ ...streamState });
+}
 async function getBullet() {
   async function tryFetch(base) {
     const res2 = await fetch(base + "/api/v1/bullet-public", { method: "POST", cache: "no-store" });
@@ -214,12 +237,51 @@ async function connect() {
 }
 function scheduleRetry() {
   if (stopped) return;
+  if (offline) {
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = null;
+    return;
+  }
   attempts++;
   streamState.reconnects++;
   const base = Math.min(15e3, 1e3 * Math.pow(1.6, Math.min(attempts, 8)));
   const wait = base + Math.floor(Math.random() * 750);
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = setTimeout(connect, wait);
+}
+if (typeof window !== "undefined" && window.Capacitor) {
+  const KN = (window.Capacitor.Plugins || {}).KingNative;
+  if (KN && KN.addListener) {
+    try {
+      const sub = KN.addListener("netChange", (d) => {
+        const online = !!(d && d.online);
+        if (online) {
+          offline = false;
+          if (stopped) return;
+          forceReconnect("\u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A: \u0639\u0627\u062F \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0648\u0635\u0644 \u0641\u0648\u0631\u064A");
+        } else {
+          offline = true;
+          if (retryTimer) {
+            clearTimeout(retryTimer);
+            retryTimer = null;
+          }
+          streamState.connected = false;
+          streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A \u064A\u0646\u062A\u0638\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
+          if (onStatus) onStatus({ ...streamState });
+        }
+      });
+      if (sub && typeof sub.catch === "function") sub.catch(() => {
+      });
+    } catch {
+    }
+    try {
+      if (KN.isOnline) KN.isOnline().then((r) => {
+        offline = !(r && r.online);
+      }).catch(() => {
+      });
+    } catch {
+    }
+  }
 }
 function startStream(sym, handlers) {
   stopStream();
@@ -267,11 +329,51 @@ if (typeof document !== "undefined") {
     if (!document.hidden && !stopped) {
       const silent = Date.now() - streamState.lastMsgAt;
       if (!ws || ws.readyState !== 1 || silent > 3e4) {
-        if (retryTimer) clearTimeout(retryTimer);
-        connect();
+        forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0644\u0644\u0648\u0627\u062C\u0647\u0629 \u0648\u0627\u0644\u0642\u0646\u0627\u0629 \u0635\u0627\u0645\u062A\u0629");
       }
     }
   });
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("online", () => {
+    offline = false;
+    if (stopped) return;
+    forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0625\u0639\u0627\u062F\u0629 \u0648\u0635\u0644 \u0627\u0644\u0642\u0646\u0627\u0629 \u0641\u0648\u0631\u064B\u0627");
+  });
+  window.addEventListener("offline", () => {
+    offline = true;
+    streamState.connected = false;
+    streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0641\u064A \u0627\u0646\u062A\u0638\u0627\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
+    if (onStatus) onStatus({ ...streamState });
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  });
+}
+if (typeof navigator !== "undefined" && navigator.onLine !== void 0) {
+  setInterval(() => {
+    if (stopped) return;
+    const online = typeof navigator.onLine === "boolean" ? navigator.onLine : true;
+    if (online && offline) {
+      offline = false;
+      forceReconnect("\u0634\u064F\u0648\u0647\u062F\u062A \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629 (\u0641\u062D\u0635 \u062F\u0648\u0631\u064A)");
+    }
+    if (!online && !offline) {
+      offline = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      streamState.connected = false;
+      streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A";
+      if (onStatus) onStatus({ ...streamState });
+    }
+    if (online && !offline && ws && ws.readyState === 1) {
+      const silent = Date.now() - streamState.lastMsgAt;
+      if (silent > 45e3) forceReconnect("\u0635\u0645\u062A \u0627\u0644\u0642\u0646\u0627\u0629 \u0623\u0643\u062B\u0631 \u0645\u0646 45 \u062B\u0627\u0646\u064A\u0629 \u0623\u062B\u0646\u0627\u0621 \u0627\u0644\u0639\u0645\u0644 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629");
+    }
+  }, 1e4);
 }
 
 // src/engine.ts
@@ -436,7 +538,8 @@ function startForegroundSvc() {
         title: "KING \u064A\u0639\u0645\u0644",
         body: "\u0645\u062A\u0635\u0644 \u0628\u0627\u0644\u0645\u0646\u0635\u0629 \u0648\u064A\u0631\u0627\u0642\u0628 \u0627\u0644\u0635\u0641\u0642\u0627\u062A \u0628\u0627\u0633\u062A\u0645\u0631\u0627\u0631",
         smallIcon: "ic_launcher",
-        silent: true
+        silent: true,
+        serviceType: 1
       }).catch(() => {
       });
     const BO = P.BatteryOptimization;
@@ -517,7 +620,7 @@ function notify(txt, kind) {
     }
   }
   pushLog(kind === "warn" ? "error" : "fill", txt);
-  nativeNotify("AB-KING", txt);
+  nativeNotify("KING-trading", txt);
 }
 var listeners = /* @__PURE__ */ new Set();
 var emitTimer = null;
@@ -591,7 +694,7 @@ function relayServerLogs() {
         logSwallow("silent-catch", e);
       }
     }
-    nativeNotify("AB-KING", l.text);
+    nativeNotify("KING-trading", l.text);
   }
 }
 async function remoteSync() {
@@ -672,6 +775,7 @@ var S = {
   logs: [],
   history: [],
   linkOk: false,
+  intel: null,
   exEquity: null,
   realizedPnl: 0,
   feesPaid: 0,
@@ -810,7 +914,7 @@ function loadAll() {
     if (S.status === "running") {
       if (S._savedAt && Date.now() - S._savedAt < 30 * 60 * 1e3) {
         pushLog("server", "\u26A1 \u0623\u0648\u0642\u0641 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0644\u062D\u0638\u064A\u064B\u0627 \u2014 \u0627\u0633\u062A\u064F\u0624\u0646\u0641 \u0627\u0644\u0635\u064A\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0645\u0646 \u062D\u064A\u062B \u062A\u0648\u0642\u0641");
-        nativeNotify("AB-KING \u0639\u0627\u062F \u0644\u0644\u0639\u0645\u0644 \u2713", "\u0623\u0648\u0642\u0641 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629 \u2014 \u0627\u0633\u062A\u064F\u0624\u0646\u0641 \u0627\u0644\u0635\u064A\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627", true);
+        nativeNotify("KING-trading \u0639\u0627\u062F \u0644\u0644\u0639\u0645\u0644 \u2713", "\u0623\u0648\u0642\u0641 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629 \u2014 \u0627\u0633\u062A\u064F\u0624\u0646\u0641 \u0627\u0644\u0635\u064A\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627", true);
       } else {
         S.status = "paused";
         pushLog("info", "\u0627\u0633\u062A\u064F\u0639\u064A\u062F\u062A \u0627\u0644\u062C\u0644\u0633\u0629 \u0645\u062A\u0648\u0642\u0641\u0629 \u0645\u0624\u0642\u062A\u064B\u0627 \u2014 \u0627\u0636\u063A\u0637 \xAB\u062A\u0634\u063A\u064A\u0644\xBB \u0644\u0644\u0628\u062F\u0621");
@@ -853,7 +957,6 @@ function sig(ms) {
   return c.signal;
 }
 async function kcFetch(path, opts) {
-  const _t0 = Date.now();
   try {
     const _r = await kcFetchInner(path, opts);
     netAlivePing(true);
@@ -1048,12 +1151,46 @@ async function scanRadar() {
       symbol: c.symbol,
       turnover: +(c.turnoverOf24h ?? c.turnover24h ?? c.volumeOf24h ?? c.volume24h ?? 0) || 0,
       price: +(c.lastTradePrice ?? c.markPrice ?? 0) || 0,
-      chg: +(c.priceChgPct ?? 0) * 100 || 0
+      chg: +(c.priceChgPct ?? 0) * 100 || 0,
+      funding: +(c.fundingFeeRate ?? 0) || 0,
+      fundHrs: +(c.fundingRateGranularity ?? 288e5) / 36e5 || 8,
+      nextFundMs: +(c.nextFundingRateTime ?? 0) || 0,
+      oi: +(c.openInterest ?? 0) || 0,
+      maxLev: +(c.maxLeverage ?? 0) || 0,
+      markP: +(c.markPrice ?? 0) || 0,
+      idxP: +(c.indexPrice ?? 0) || 0,
+      lowP: +(c.lowPrice ?? 0) || 0,
+      highP: +(c.highPrice ?? 0) || 0
     })).filter((r) => r.turnover > 0 && r.price > 0);
-    const cheap = rows0.filter((r) => r.price < 1).sort((a, b) => b.turnover - a.turnover).slice(0, 16);
-    const big = rows0.filter((r) => r.price >= 1).sort((a, b) => b.turnover - a.turnover).slice(0, 4);
-    const rows = [...cheap, ...big];
-    const det = await Promise.all(rows.map(async (r) => {
+    const rows = rows0;
+    const preScored = rows.map((r) => {
+      let sc = 50;
+      if (r.turnover >= 5e7) sc += 10;
+      else if (r.turnover >= 1e7) sc += 6;
+      else if (r.turnover < 3e5) sc -= 25;
+      else if (r.turnover < 1e6) sc -= 12;
+      const a = Math.abs(r.chg);
+      if (a < 1.2) sc += 8;
+      else if (a < 3.5) sc += 4;
+      else if (a > 8) sc -= 8;
+      else sc -= 3;
+      const range = r.lowP > 0 ? (r.highP - r.lowP) / r.lowP * 100 : 0;
+      if (range >= 4) sc += 10;
+      else if (range >= 2) sc += 6;
+      else if (range > 0 && range < 0.6) sc -= 6;
+      const basis = r.markP > 0 && r.idxP > 0 ? (r.markP - r.idxP) / r.idxP * 100 : 0;
+      if (Math.abs(basis) > 0.2) sc += 6;
+      if (r.price > 0 && r.price < 0.01) sc += 6;
+      else if (r.price > 100) sc -= 10;
+      const oiUsd = r.oi * r.price;
+      if (r.oi > 0 && r.turnover > 0) {
+        const rto = oiUsd / r.turnover;
+        if (rto < 0.5) sc += 4;
+        else if (rto > 5) sc -= 4;
+      }
+      return { ...r, preScore: Math.max(0, Math.min(100, Math.round(sc))) };
+    }).sort((a, b) => b.preScore - a.preScore);
+    const det = await Promise.all(preScored.slice(0, 30).map(async (r) => {
       const out = { ...r, vol: 0, spread: 0, trendPct: 0, price: 0 };
       try {
         const ks = await fetchKlines(r.symbol, 15);
@@ -1078,8 +1215,14 @@ async function scanRadar() {
       }
       return out;
     }));
-    const list = det.filter((d) => d.price > 0).map((d) => {
+    const deepList = det.filter((d) => d.price > 0).map((d) => {
       const s = radarScore(d);
+      const fundAnn = (d.funding || 0) * (24 / (d.fundHrs || 8)) * 100;
+      const oiUsd = (d.oi || 0) * (d.price || 0);
+      const skew = d.chg < 0 && d.funding < 0 ? "\u0634\u0648\u0631\u062A \u0645\u062A\u0643\u062F\u0633 \u2014 \u0645\u0631\u0634\u062D \u0627\u0646\u0639\u0643\u0627\u0633 \u0635\u0627\u0639\u062F" : d.chg > 0 && d.funding > 0 ? "\u0644\u0648\u0646\u063A \u0645\u062A\u0643\u062F\u0633 \u2014 \u062D\u0630\u0631 \u0645\u0646 \u0627\u0646\u0639\u0643\u0627\u0633 \u0647\u0627\u0628\u0637" : (d.funding || 0) !== 0 ? "\u0645\u062D\u0627\u064A\u062F" : "\u2014";
+      const basis = d.markP > 0 && d.idxP > 0 ? (d.markP - d.idxP) / d.idxP * 100 : 0;
+      const range = d.lowP > 0 ? (d.highP - d.lowP) / d.lowP * 100 : 0;
+      const oiToVol = d.turnover > 0 ? oiUsd / d.turnover : 0;
       return {
         symbol: d.symbol,
         disp: d.symbol.replace(/USDTM$/i, "").replace(/^XBT/i, "BTC"),
@@ -1090,9 +1233,59 @@ async function scanRadar() {
         vol: +d.vol.toFixed(2),
         chg: Math.round(d.chg * 10) / 10,
         turnover: d.turnover,
+        funding: +(d.funding || 0).toFixed(6),
+        fundHrs: d.fundHrs || 8,
+        fundAnnPct: +fundAnn.toFixed(3),
+        nextFundMs: d.nextFundMs || 0,
+        oi: +d.oi || 0,
+        oiUsd,
+        oiLev: d.maxLev || 0,
+        skew,
+        basisPct: +basis.toFixed(3),
+        rangePct: +range.toFixed(1),
+        oiToVolPct: +(oiToVol * 100).toFixed(0),
         grade: s.score >= 65 ? "\u{1F7E2}" : s.score >= 45 ? "\u{1F7E1}" : "\u{1F534}"
       };
     }).sort((a, b) => b.score - a.score || (b.state === "\u0639\u0631\u0636\u064A \u0645\u062A\u0630\u0628\u0630\u0628" ? 1 : 0) - (a.state === "\u0639\u0631\u0636\u064A \u0645\u062A\u0630\u0628\u0630\u0628" ? 1 : 0) || b.turnover - a.turnover);
+    const deepSyms = new Set(deepList.map((x) => x.symbol));
+    const rest = preScored.filter((r) => !deepSyms.has(r.symbol)).map((r) => ({
+      symbol: r.symbol,
+      disp: r.symbol.replace(/USDTM$/i, "").replace(/^XBT/i, "BTC"),
+      price: r.price,
+      score: r.preScore,
+      why: ["full-universe watch"],
+      state: "watch",
+      vol: 0,
+      chg: Math.round(r.chg * 10) / 10,
+      turnover: r.turnover,
+      funding: +(r.funding || 0).toFixed(6),
+      fundHrs: r.fundHrs || 8,
+      fundAnnPct: +((r.funding || 0) * (24 / (r.fundHrs || 8)) * 100).toFixed(3),
+      nextFundMs: r.nextFundMs || 0,
+      oi: +r.oi || 0,
+      oiUsd: (r.oi || 0) * (r.price || 0),
+      oiLev: r.maxLev || 0,
+      skew: "-",
+      basisPct: 0,
+      rangePct: 0,
+      oiToVolPct: 0,
+      grade: r.preScore >= 65 ? "\u{1F7E2}" : r.preScore >= 45 ? "\u{1F7E1}" : "\u{1F534}"
+    }));
+    const list = [...deepList, ...rest];
+    const fundRanked = [...list].sort((a, b) => b.fundAnnPct - a.fundAnnPct);
+    const oiRanked = [...list].sort((a, b) => b.oiUsd - a.oiUsd).slice(0, 5);
+    const gridRanked = [...list].filter((x) => x.turnover > 2e6).sort((a, b) => b.rangePct - a.rangePct).slice(0, 5);
+    const basisRanked = [...list].filter((x) => x.turnover > 2e6 && Math.abs(x.basisPct) > 0.1).sort((a, b) => Math.abs(b.basisPct) - Math.abs(a.basisPct)).slice(0, 5);
+    S.intel = {
+      at: Date.now(),
+      hottest: fundRanked.slice(0, 5),
+      coldest: fundRanked.slice(-3).reverse(),
+      biggestOi: oiRanked,
+      bestGrid: gridRanked,
+      extremeBasis: basisRanked,
+      squeeze: fundRanked.filter((f) => f.fundAnnPct >= 0.05 && f.chg > 3).slice(0, 3),
+      rebound: fundRanked.filter((f) => f.fundAnnPct <= -0.03 && f.chg < -3).slice(0, 3)
+    };
     S.radar = { at: Date.now(), list };
     const cur = list.find((l) => l.symbol === S.config.symbol);
     const top = list[0];
@@ -1345,9 +1538,16 @@ async function gapHunterTick() {
   }
 }
 async function maybeSwitchSymbol() {
-  if (S.position) return;
   if (S.status !== "running") return;
-  if (Date.now() - _lastSwitchAt < 6e4) return;
+  if (S.position) {
+    try {
+      await scanRadar();
+    } catch (e) {
+      logSwallow("silent-catch", e);
+    }
+    return;
+  }
+  if (Date.now() - _lastSwitchAt < 2e4) return;
   const idleMs = Date.now() - (S.lastHuntAt || S.startedAt || Date.now());
   const rotate = idleMs > 5 * 60 * 1e3;
   try {
@@ -1366,10 +1566,10 @@ async function maybeSwitchSymbol() {
       if (topScore2 < 45) return;
       S._rotCount = ((S._rotCount || 0) + 1) % 5;
       _lastSwitchAt = Date.now();
-      const curDisp2 = cur ? cur.disp : S.config.displaySymbol, curSc2 = cur ? cur.score : 0;
+      const curDisp2 = cur ? cur.disp : S.config.displaySymbol;
       pushLog("server", "\u{1F504} \u062F\u0648\u0631\u0627\u0646 \u0632\u0645\u0646\u064A (" + Math.round(idleMs / 6e4) + " \u062F \u0628\u0644\u0627 \u0641\u0631\u0635\u0629): " + curDisp2 + " \u2192 " + top.disp + " (" + topScore2 + ") \u2014 " + (top.state || "") + " \u2014 \u0627\u0644\u0628\u062D\u062B \u0645\u0633\u062A\u0645\u0631 \u0639\u0646 \u0641\u0631\u0635\u0629 \u0623\u0641\u0636\u0644");
       toast("\u{1F504} \u062F\u0648\u0631\u0627\u0646: " + top.disp + " \u2014 \u0628\u062D\u062B \u0639\u0646 \u0641\u0631\u0635\u0629");
-      nativeNotify("AB-KING \u2014 \u062F\u0648\u0631\u0627\u0646 \u0625\u0644\u0649 \u0639\u0645\u0644\u0629 \u0623\u062E\u0631\u0649", top.disp + " \u062F\u0631\u062C\u0629 " + topScore2);
+      nativeNotify("KING-trading \u2014 \u062F\u0648\u0631\u0627\u0646 \u0625\u0644\u0649 \u0639\u0645\u0644\u0629 \u0623\u062E\u0631\u0649", top.disp + " \u062F\u0631\u062C\u0629 " + topScore2);
       saveCfg({
         symbol: top.symbol,
         leverage: S.config.leverage,
@@ -1398,7 +1598,7 @@ async function maybeSwitchSymbol() {
     const curDisp = cur ? cur.disp : S.config.displaySymbol, curSc = cur ? cur.score : 0;
     pushLog("server", "\u{1F4E1} \u062A\u0628\u062F\u064A\u0644 \u0630\u0643\u064A: " + curDisp + " (" + curSc + ") \u2192 " + top.disp + " (" + topScore + ") \u2014 " + (top.state || "") + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062F\u0627\u0631");
     toast("\u{1F4E1} \u0627\u0646\u062A\u0642\u0627\u0644 \u0625\u0644\u0649 " + top.disp + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 (" + topScore + ")");
-    nativeNotify("AB-KING \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curSc);
+    nativeNotify("KING-trading \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curSc);
     saveCfg({
       symbol: top.symbol,
       leverage: S.config.leverage,
@@ -2120,10 +2320,12 @@ function accrueFunding() {
   const hours = Math.min(8, (now - last) / 36e5);
   if (hours < 0.25) return 0;
   const notional = pos.size * (S.multiplier || 1) * (pos.entry || S.lastPrice || 0);
-  const cost = notional * Math.abs(S.funding) * (hours / 8);
+  const rate = S.funding;
+  const payDir = (pos.side === "long" ? 1 : -1) * (rate >= 0 ? 1 : -1);
+  const signed = notional * Math.abs(rate) * (hours / 8) * payDir;
   S._fundAt = now;
-  S.fundingPaid = Math.round(((S.fundingPaid || 0) + cost) * 1e4) / 1e4;
-  return cost;
+  S.fundingPaid = Math.round(((S.fundingPaid || 0) + signed) * 1e4) / 1e4;
+  return signed;
 }
 function applyDelta(side, qty, price) {
   const dir2 = side === "sell" ? "short" : "long";
@@ -2258,7 +2460,25 @@ function noteClose(qty, exit, fee, source, pnl, lotId) {
     S.cycleHarvested = Math.round(((S.cycleHarvested || 0) + pnl) * 1e4) / 1e4;
     S.config.cycleBalance = Math.max(1, Math.round((S.config.cycleBalance + pnl) * 100) / 100);
   }
-  learnTrade(row ? row.side : S.position ? S.position.side : S.config.direction, pnl);
+  {
+    const mem = S.memory;
+    if (mem && mem.pairs) {
+      const pk = S.config.symbol;
+      const pr = mem.pairs[pk] || (mem.pairs[pk] = { n: 0, w: 0, l: 0, pnl: 0, grossWin: 0, grossLoss: 0, maxLoseStreak: 0, loseStreak: 0 });
+      pr.n++;
+      pr.pnl = Math.round(((pr.pnl || 0) + pnl) * 1e4) / 1e4;
+      if (pnl >= 0) {
+        pr.w++;
+        pr.grossWin = Math.round(((pr.grossWin || 0) + pnl) * 1e4) / 1e4;
+        pr.loseStreak = 0;
+      } else {
+        pr.grossLoss = Math.round(((pr.grossLoss || 0) - pnl) * 1e4) / 1e4;
+        pr.loseStreak = (pr.loseStreak || 0) + 1;
+        pr.maxLoseStreak = Math.max(pr.maxLoseStreak || 0, pr.loseStreak);
+      }
+      saveAll();
+    }
+  }
   return pnl;
 }
 function notePartialClose(qty, exit, fee, lotId) {
@@ -2315,9 +2535,6 @@ function armCompEntry(qty) {
 function sessionOf(ts) {
   const h = new Date(ts).getUTCHours();
   return h < 8 ? "\u0622\u0633\u064A\u0627" : h < 16 ? "\u0623\u0648\u0631\u0648\u0628\u0627" : "\u0623\u0645\u0631\u064A\u0643\u0627";
-}
-function learnTrade(_side, _pnl) {
-  return;
 }
 function memStats() {
   const mem = S.memory;
@@ -2392,7 +2609,7 @@ function maybeReport() {
   S._lastReportAt = now;
   const msg = "\u0635\u0641\u0642\u0627\u062A \u0645\u062A\u0639\u0644\u064E\u0651\u0645\u0629: " + st.n + " \xB7 \u0646\u062C\u0627\u062D " + (st.winRate * 100).toFixed(0) + "% \xB7 \u0639\u0627\u0645\u0644 \u0627\u0644\u0631\u0628\u062D " + st.pf + " \xB7 \u0635\u0627\u0641\u064A \u0627\u0644\u0630\u0627\u0643\u0631\u0629 " + fmtUsd(st.pnl);
   pushLog("info", "\u062A\u0642\u0631\u064A\u0631 \u062F\u0648\u0631\u064A \u2014 " + msg);
-  nativeNotify("AB-KING \u2014 \u062A\u0642\u0631\u064A\u0631 \u0627\u0644\u0623\u062F\u0627\u0621", msg);
+  nativeNotify("KING-trading \u2014 \u062A\u0642\u0631\u064A\u0631 \u0627\u0644\u0623\u062F\u0627\u0621", msg);
 }
 function trailTarget(base, floating) {
   if (!(floating > 0)) return base;
@@ -3241,7 +3458,7 @@ async function escapeAdverse(p) {
   if (S.status !== "running" || !S.position || !p) return;
   const pos = S.position;
   let danger = liqDanger(p);
-  const flip = reversalAgainst(p);
+  reversalAgainst(p);
   if (danger) {
     const exl = S.exLiqPrice || 0, e0 = pos.entry || 0;
     if (exl > 0 && e0 > 0) {
@@ -3893,8 +4110,11 @@ async function botTick() {
       });
     }
     if (S.position && S.status === "running") syncPositionTp();
-    if (!S.position && S.status === "running") maybeSwitchSymbol().catch(() => {
-    });
+    if (!S.position && S.status === "running") {
+      _lastSwitchAt = 0;
+      maybeSwitchSymbol().catch(() => {
+      });
+    }
     const _prevDir = S.config.direction;
     resolveDirection(Date.now());
     if (S.config.direction !== _prevDir) {
@@ -4012,7 +4232,7 @@ function startBot() {
     ];
   }
   pushLog("server", "\u062F\u0648\u0631\u0629 \u062C\u062F\u064A\u062F\u0629 " + (S.config.direction === "short" ? "\u0634\u0648\u0631\u062A" : "\u0644\u0648\u0646\u063A") + (S.regime ? " \xB7 " + S.regime.label : "") + " \u2014 \u0634\u0628\u0643\u0629 \u0641\u0639\u0651\u0627\u0644\u0629 " + effLevels() + " \u0645\u0646 " + S.config.levels + " (\u062A\u0631\u0643\u064A\u0632 \u064A\u0646\u0627\u0633\u0628 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644) \u0648\u0627\u0644\u0635\u064A\u062F \u064A\u0639\u0645\u0644");
-  nativeNotify("AB-KING \u064A\u0639\u0645\u0644 \u2713", "\u0627\u0644\u0628\u0648\u062A \u0645\u062A\u0635\u0644 \u0628\u0640 KuCoin \u0648\u064A\u062A\u062F\u0627\u0648\u0644 " + (S.config.displaySymbol || S.config.symbol) + " \u2014 \u064A\u0633\u062A\u0645\u0631 \u062D\u062A\u0649 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629", true);
+  nativeNotify("KING-trading \u064A\u0639\u0645\u0644 \u2713", "\u0627\u0644\u0628\u0648\u062A \u0645\u062A\u0635\u0644 \u0628\u0640 KuCoin \u0648\u064A\u062A\u062F\u0627\u0648\u0644 " + (S.config.displaySymbol || S.config.symbol) + " \u2014 \u064A\u0633\u062A\u0645\u0631 \u062D\u062A\u0649 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629", true);
   toast("\u0627\u0644\u0628\u0648\u062A \u064A\u0639\u0645\u0644 \u0627\u0644\u0622\u0646");
   emit();
   saveAll();
@@ -4335,7 +4555,7 @@ function initEngine() {
   loadAll();
   if (S.config.symbol === "BTCUSDTM") S.config.symbol = "XBTUSDTM";
   S.config.displaySymbol = S.config.symbol.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");
-  pushLog("info", "AB-KING \u062C\u0627\u0647\u0632 \u2014 " + (S.config.mode === "live" ? "\u0648\u0636\u0639 LIVE" : "\u0648\u0636\u0639 \u0648\u0631\u0642\u064A"));
+  pushLog("info", "KING-trading \u062C\u0627\u0647\u0632 \u2014 " + (S.config.mode === "live" ? "\u0648\u0636\u0639 LIVE" : "\u0648\u0636\u0639 \u0648\u0631\u0642\u064A"));
   startStream(S.config.symbol, { onMessage: onStreamTick, onStatus: () => emitThrottled() });
   setInterval(botTick, TICK_MS);
   setInterval(emit, 1e3);
@@ -4359,11 +4579,11 @@ function initEngine() {
   setTimeout(() => {
     scanRadar().catch(() => {
     });
-  }, 22e3);
+  }, 15e3);
   setInterval(() => {
     scanRadar().catch(() => {
     });
-  }, 18e4);
+  }, 45e3);
   startSilentKeepAlive();
   startForegroundSvc();
   startNativeKeepAlive();

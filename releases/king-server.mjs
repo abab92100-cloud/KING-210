@@ -2,13 +2,13 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-process.env.KING_SERVER = "1";
-var dir = join(homedir(), ".king");
+process.env.ABKING_SERVER = "1";
+var dir = join(homedir(), ".ab-king");
 try {
   mkdirSync(dir, { recursive: true });
 } catch {
 }
-var file = join(dir, "king-server-store.json");
+var file = join(dir, "ab-king-server-store.json");
 var data = {};
 try {
   if (existsSync(file)) data = JSON.parse(readFileSync(file, "utf8") || "{}");
@@ -41,7 +41,7 @@ globalThis.localStorage = {
     persist();
   }
 };
-console.log("[KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u0629: " + file);
+console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u0629: " + file);
 
 // src/ws.ts
 var DIRECT = "https://api-futures.kucoin.com";
@@ -66,6 +66,29 @@ var onStatus = null;
 var stopped = true;
 var attempts = 0;
 var connectSeq = 0;
+var offline = false;
+function forceReconnect(reason) {
+  if (stopped) return;
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  connectSeq++;
+  clearTimers();
+  if (ws) {
+    try {
+      ws.close();
+    } catch {
+    }
+    ws = null;
+  }
+  streamState.connected = false;
+  streamState.connecting = false;
+  streamState.error = String(reason || "reconnect");
+  attempts = 0;
+  connect();
+  if (onStatus) onStatus({ ...streamState });
+}
 async function getBullet() {
   async function tryFetch(base) {
     const res2 = await fetch(base + "/api/v1/bullet-public", { method: "POST", cache: "no-store" });
@@ -214,12 +237,51 @@ async function connect() {
 }
 function scheduleRetry() {
   if (stopped) return;
+  if (offline) {
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = null;
+    return;
+  }
   attempts++;
   streamState.reconnects++;
   const base = Math.min(15e3, 1e3 * Math.pow(1.6, Math.min(attempts, 8)));
   const wait = base + Math.floor(Math.random() * 750);
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = setTimeout(connect, wait);
+}
+if (typeof window !== "undefined" && window.Capacitor) {
+  const KN = (window.Capacitor.Plugins || {}).KingNative;
+  if (KN && KN.addListener) {
+    try {
+      const sub = KN.addListener("netChange", (d) => {
+        const online = !!(d && d.online);
+        if (online) {
+          offline = false;
+          if (stopped) return;
+          forceReconnect("\u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A: \u0639\u0627\u062F \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0648\u0635\u0644 \u0641\u0648\u0631\u064A");
+        } else {
+          offline = true;
+          if (retryTimer) {
+            clearTimeout(retryTimer);
+            retryTimer = null;
+          }
+          streamState.connected = false;
+          streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A \u064A\u0646\u062A\u0638\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
+          if (onStatus) onStatus({ ...streamState });
+        }
+      });
+      if (sub && typeof sub.catch === "function") sub.catch(() => {
+      });
+    } catch {
+    }
+    try {
+      if (KN.isOnline) KN.isOnline().then((r) => {
+        offline = !(r && r.online);
+      }).catch(() => {
+      });
+    } catch {
+    }
+  }
 }
 function startStream(sym, handlers) {
   stopStream();
@@ -267,11 +329,51 @@ if (typeof document !== "undefined") {
     if (!document.hidden && !stopped) {
       const silent = Date.now() - streamState.lastMsgAt;
       if (!ws || ws.readyState !== 1 || silent > 3e4) {
-        if (retryTimer) clearTimeout(retryTimer);
-        connect();
+        forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0644\u0644\u0648\u0627\u062C\u0647\u0629 \u0648\u0627\u0644\u0642\u0646\u0627\u0629 \u0635\u0627\u0645\u062A\u0629");
       }
     }
   });
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("online", () => {
+    offline = false;
+    if (stopped) return;
+    forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0625\u0639\u0627\u062F\u0629 \u0648\u0635\u0644 \u0627\u0644\u0642\u0646\u0627\u0629 \u0641\u0648\u0631\u064B\u0627");
+  });
+  window.addEventListener("offline", () => {
+    offline = true;
+    streamState.connected = false;
+    streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0641\u064A \u0627\u0646\u062A\u0638\u0627\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
+    if (onStatus) onStatus({ ...streamState });
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  });
+}
+if (typeof navigator !== "undefined" && navigator.onLine !== void 0) {
+  setInterval(() => {
+    if (stopped) return;
+    const online = typeof navigator.onLine === "boolean" ? navigator.onLine : true;
+    if (online && offline) {
+      offline = false;
+      forceReconnect("\u0634\u064F\u0648\u0647\u062F\u062A \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629 (\u0641\u062D\u0635 \u062F\u0648\u0631\u064A)");
+    }
+    if (!online && !offline) {
+      offline = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      streamState.connected = false;
+      streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A";
+      if (onStatus) onStatus({ ...streamState });
+    }
+    if (online && !offline && ws && ws.readyState === 1) {
+      const silent = Date.now() - streamState.lastMsgAt;
+      if (silent > 45e3) forceReconnect("\u0635\u0645\u062A \u0627\u0644\u0642\u0646\u0627\u0629 \u0623\u0643\u062B\u0631 \u0645\u0646 45 \u062B\u0627\u0646\u064A\u0629 \u0623\u062B\u0646\u0627\u0621 \u0627\u0644\u0639\u0645\u0644 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629");
+    }
+  }, 1e4);
 }
 
 // src/engine.ts
@@ -284,7 +386,8 @@ var MIN_HUNT_GAP = 0.08;
 var TP_BASE_NET = 0.12;
 var LOSS_STOP_USD = 16;
 function tpBase() {
-  return Math.max(0.03, Number(S && S.config && S.config.tpNet) || TP_BASE_NET);
+  const hf = S && S.config && S.config.hfMode;
+  return Math.max(0.03, Number(S && S.config && S.config.tpNet) || (hf ? 0.03 : TP_BASE_NET));
 }
 var clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 var uid = (p) => p + "_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -435,14 +538,15 @@ function startForegroundSvc() {
         title: "KING \u064A\u0639\u0645\u0644",
         body: "\u0645\u062A\u0635\u0644 \u0628\u0627\u0644\u0645\u0646\u0635\u0629 \u0648\u064A\u0631\u0627\u0642\u0628 \u0627\u0644\u0635\u0641\u0642\u0627\u062A \u0628\u0627\u0633\u062A\u0645\u0631\u0627\u0631",
         smallIcon: "ic_launcher",
-        silent: true
+        silent: true,
+        serviceType: 1
       }).catch(() => {
       });
     const BO = P.BatteryOptimization;
-    if (BO && BO.isBatteryOptimizationEnabled && !localStorage.getItem("king_bo_asked"))
+    if (BO && BO.isBatteryOptimizationEnabled && !localStorage.getItem("abking_bo_asked"))
       BO.isBatteryOptimizationEnabled().then((r) => {
         if (r && r.enabled && BO.requestIgnoreBatteryOptimization) {
-          localStorage.setItem("king_bo_asked", "1");
+          localStorage.setItem("abking_bo_asked", "1");
           BO.requestIgnoreBatteryOptimization().catch(() => {
           });
         }
@@ -480,9 +584,9 @@ function startNativeKeepAlive() {
 }
 function logRevival() {
   try {
-    const at = localStorage.getItem("king_revived");
+    const at = localStorage.getItem("abking_revived");
     if (at) {
-      localStorage.removeItem("king_revived");
+      localStorage.removeItem("abking_revived");
       const s = Math.max(1, Math.round((Date.now() - +at) / 1e3));
       pushLog("server", "\u0623\u064F\u0646\u0639\u0634 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0628\u0639\u062F \u062A\u062C\u0645\u064A\u062F \u0627\u0644\u0646\u0638\u0627\u0645 \u0644\u0647 \u2014 \u0627\u0633\u062A\u0624\u0646\u0641 \u0627\u0644\u0639\u0645\u0644 \u062E\u0644\u0627\u0644 " + s + " \u062B");
     }
@@ -516,7 +620,7 @@ function notify(txt, kind) {
     }
   }
   pushLog(kind === "warn" ? "error" : "fill", txt);
-  nativeNotify("KING Trading", txt);
+  nativeNotify("KING-trading", txt);
 }
 var listeners = /* @__PURE__ */ new Set();
 var emitTimer = null;
@@ -535,7 +639,7 @@ function toast(m) {
   S.toastMsg = { text: m, at: Date.now() };
   emit();
 }
-var R = () => typeof window !== "undefined" && window.__KING_REMOTE ? String(window.__KING_REMOTE) : null;
+var R = () => typeof window !== "undefined" && window.__ABKING_REMOTE ? String(window.__ABKING_REMOTE) : null;
 async function remoteCmd(action, payload) {
   const base = R();
   if (!base) return { ok: false, error: "no server" };
@@ -590,7 +694,7 @@ function relayServerLogs() {
         logSwallow("silent-catch", e);
       }
     }
-    nativeNotify("KING Trading", l.text);
+    nativeNotify("KING-trading", l.text);
   }
 }
 async function remoteSync() {
@@ -625,7 +729,7 @@ async function detectRemoteServer() {
     clearTimeout(t);
     const j = await r.json();
     if (j && j.ok) {
-      window.__KING_REMOTE = "http://127.0.0.1:8787";
+      window.__ABKING_REMOTE = "http://127.0.0.1:8787";
       return true;
     }
   } catch (e) {
@@ -646,7 +750,10 @@ var S = {
     directionMode: "auto",
     cycleBalance: 100,
     mode: "paper",
-    tpNet: 0.12
+    tpNet: 0.12,
+    patienceHrs: 24,
+    patienceUsd: 0,
+    gapMode: false
   },
   status: "idle",
   heartbeat: 0,
@@ -668,6 +775,7 @@ var S = {
   logs: [],
   history: [],
   linkOk: false,
+  intel: null,
   exEquity: null,
   realizedPnl: 0,
   feesPaid: 0,
@@ -738,10 +846,10 @@ function netAlivePing(ok) {
 var _wasDownStart = 0;
 function saveAll() {
   try {
-    localStorage.setItem("king:cfg", JSON.stringify(S.config));
-    localStorage.setItem("king:keys", S.keys ? JSON.stringify(S.keys) : "");
-    localStorage.setItem("king:snd", S.sound ? "1" : "0");
-    localStorage.setItem("king:tone", S.soundTone || "soft");
+    localStorage.setItem("abking:cfg", JSON.stringify(S.config));
+    localStorage.setItem("abking:keys", S.keys ? JSON.stringify(S.keys) : "");
+    localStorage.setItem("abking:snd", S.sound ? "1" : "0");
+    localStorage.setItem("abking:tone", S.soundTone || "soft");
     const rt = {
       grid: S.grid,
       position: S.position,
@@ -761,17 +869,17 @@ function saveAll() {
       logs: S.logs,
       savedAt: Date.now()
     };
-    localStorage.setItem("king:rt", JSON.stringify(rt));
-    localStorage.setItem("king:mem", JSON.stringify(S.memory || { pairs: {}, cycles: 0, totalPnl: 0 }));
+    localStorage.setItem("abking:rt", JSON.stringify(rt));
+    localStorage.setItem("abking:mem", JSON.stringify(S.memory || { pairs: {}, cycles: 0, totalPnl: 0 }));
   } catch (e) {
     logSwallow("silent-catch", e);
   }
 }
 function loadAll() {
   try {
-    const cfg = JSON.parse(localStorage.getItem("king:cfg") || "null");
+    const cfg = JSON.parse(localStorage.getItem("abking:cfg") || "null");
     if (cfg) S.config = { ...S.config, ...cfg };
-    const ks = localStorage.getItem("king:keys");
+    const ks = localStorage.getItem("abking:keys");
     if (ks) {
       try {
         S.keys = JSON.parse(ks);
@@ -779,9 +887,9 @@ function loadAll() {
         S.keys = null;
       }
     }
-    S.sound = localStorage.getItem("king:snd") !== "0";
-    S.soundTone = localStorage.getItem("king:tone") || "soft";
-    const rt = JSON.parse(localStorage.getItem("king:rt") || "null");
+    S.sound = localStorage.getItem("abking:snd") !== "0";
+    S.soundTone = localStorage.getItem("abking:tone") || "soft";
+    const rt = JSON.parse(localStorage.getItem("abking:rt") || "null");
     if (rt) {
       Object.assign(S, {
         grid: rt.grid || [],
@@ -806,13 +914,13 @@ function loadAll() {
     if (S.status === "running") {
       if (S._savedAt && Date.now() - S._savedAt < 30 * 60 * 1e3) {
         pushLog("server", "\u26A1 \u0623\u0648\u0642\u0641 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0644\u062D\u0638\u064A\u064B\u0627 \u2014 \u0627\u0633\u062A\u064F\u0624\u0646\u0641 \u0627\u0644\u0635\u064A\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0645\u0646 \u062D\u064A\u062B \u062A\u0648\u0642\u0641");
-        nativeNotify("KING \u0639\u0627\u062F \u0644\u0644\u0639\u0645\u0644 \u2713", "\u0623\u0648\u0642\u0641 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629 \u2014 \u0627\u0633\u062A\u064F\u0624\u0646\u0641 \u0627\u0644\u0635\u064A\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627", true);
+        nativeNotify("KING-trading \u0639\u0627\u062F \u0644\u0644\u0639\u0645\u0644 \u2713", "\u0623\u0648\u0642\u0641 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629 \u2014 \u0627\u0633\u062A\u064F\u0624\u0646\u0641 \u0627\u0644\u0635\u064A\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627", true);
       } else {
         S.status = "paused";
         pushLog("info", "\u0627\u0633\u062A\u064F\u0639\u064A\u062F\u062A \u0627\u0644\u062C\u0644\u0633\u0629 \u0645\u062A\u0648\u0642\u0641\u0629 \u0645\u0624\u0642\u062A\u064B\u0627 \u2014 \u0627\u0636\u063A\u0637 \xAB\u062A\u0634\u063A\u064A\u0644\xBB \u0644\u0644\u0628\u062F\u0621");
       }
     }
-    const mem = JSON.parse(localStorage.getItem("king:mem") || "null");
+    const mem = JSON.parse(localStorage.getItem("abking:mem") || "null");
     S.memory = { v: 3, pairs: {}, cycles: 0, totalPnl: 0, profiles: mem && mem.profiles || {} };
   } catch (e) {
     logSwallow("silent-catch", e);
@@ -840,7 +948,7 @@ function pushJr(row) {
   S.journal = [row, ...S.journal].slice(0, 120);
 }
 var DIRECT_BASE = "https://api-futures.kucoin.com";
-var IS_SERVER = typeof process !== "undefined" && !!(process && process.env && process.env.KING_SERVER);
+var IS_SERVER = typeof process !== "undefined" && !!(process && process.env && process.env.ABKING_SERVER);
 var IS_NATIVE = IS_SERVER || typeof window !== "undefined" && (window.Capacitor || location.protocol === "capacitor:");
 var API_BASE = IS_NATIVE ? DIRECT_BASE : "/kucoin";
 function sig(ms) {
@@ -849,7 +957,6 @@ function sig(ms) {
   return c.signal;
 }
 async function kcFetch(path, opts) {
-  const _t0 = Date.now();
   try {
     const _r = await kcFetchInner(path, opts);
     netAlivePing(true);
@@ -1044,12 +1151,46 @@ async function scanRadar() {
       symbol: c.symbol,
       turnover: +(c.turnoverOf24h ?? c.turnover24h ?? c.volumeOf24h ?? c.volume24h ?? 0) || 0,
       price: +(c.lastTradePrice ?? c.markPrice ?? 0) || 0,
-      chg: +(c.priceChgPct ?? 0) * 100 || 0
+      chg: +(c.priceChgPct ?? 0) * 100 || 0,
+      funding: +(c.fundingFeeRate ?? 0) || 0,
+      fundHrs: +(c.fundingRateGranularity ?? 288e5) / 36e5 || 8,
+      nextFundMs: +(c.nextFundingRateTime ?? 0) || 0,
+      oi: +(c.openInterest ?? 0) || 0,
+      maxLev: +(c.maxLeverage ?? 0) || 0,
+      markP: +(c.markPrice ?? 0) || 0,
+      idxP: +(c.indexPrice ?? 0) || 0,
+      lowP: +(c.lowPrice ?? 0) || 0,
+      highP: +(c.highPrice ?? 0) || 0
     })).filter((r) => r.turnover > 0 && r.price > 0);
-    const cheap = rows0.filter((r) => r.price < 1).sort((a, b) => b.turnover - a.turnover).slice(0, 16);
-    const big = rows0.filter((r) => r.price >= 1).sort((a, b) => b.turnover - a.turnover).slice(0, 4);
-    const rows = [...cheap, ...big];
-    const det = await Promise.all(rows.map(async (r) => {
+    const rows = rows0;
+    const preScored = rows.map((r) => {
+      let sc = 50;
+      if (r.turnover >= 5e7) sc += 10;
+      else if (r.turnover >= 1e7) sc += 6;
+      else if (r.turnover < 3e5) sc -= 25;
+      else if (r.turnover < 1e6) sc -= 12;
+      const a = Math.abs(r.chg);
+      if (a < 1.2) sc += 8;
+      else if (a < 3.5) sc += 4;
+      else if (a > 8) sc -= 8;
+      else sc -= 3;
+      const range = r.lowP > 0 ? (r.highP - r.lowP) / r.lowP * 100 : 0;
+      if (range >= 4) sc += 10;
+      else if (range >= 2) sc += 6;
+      else if (range > 0 && range < 0.6) sc -= 6;
+      const basis = r.markP > 0 && r.idxP > 0 ? (r.markP - r.idxP) / r.idxP * 100 : 0;
+      if (Math.abs(basis) > 0.2) sc += 6;
+      if (r.price > 0 && r.price < 0.01) sc += 6;
+      else if (r.price > 100) sc -= 10;
+      const oiUsd = r.oi * r.price;
+      if (r.oi > 0 && r.turnover > 0) {
+        const rto = oiUsd / r.turnover;
+        if (rto < 0.5) sc += 4;
+        else if (rto > 5) sc -= 4;
+      }
+      return { ...r, preScore: Math.max(0, Math.min(100, Math.round(sc))) };
+    }).sort((a, b) => b.preScore - a.preScore);
+    const det = await Promise.all(preScored.slice(0, 30).map(async (r) => {
       const out = { ...r, vol: 0, spread: 0, trendPct: 0, price: 0 };
       try {
         const ks = await fetchKlines(r.symbol, 15);
@@ -1074,8 +1215,14 @@ async function scanRadar() {
       }
       return out;
     }));
-    const list = det.filter((d) => d.price > 0).map((d) => {
+    const deepList = det.filter((d) => d.price > 0).map((d) => {
       const s = radarScore(d);
+      const fundAnn = (d.funding || 0) * (24 / (d.fundHrs || 8)) * 100;
+      const oiUsd = (d.oi || 0) * (d.price || 0);
+      const skew = d.chg < 0 && d.funding < 0 ? "\u0634\u0648\u0631\u062A \u0645\u062A\u0643\u062F\u0633 \u2014 \u0645\u0631\u0634\u062D \u0627\u0646\u0639\u0643\u0627\u0633 \u0635\u0627\u0639\u062F" : d.chg > 0 && d.funding > 0 ? "\u0644\u0648\u0646\u063A \u0645\u062A\u0643\u062F\u0633 \u2014 \u062D\u0630\u0631 \u0645\u0646 \u0627\u0646\u0639\u0643\u0627\u0633 \u0647\u0627\u0628\u0637" : (d.funding || 0) !== 0 ? "\u0645\u062D\u0627\u064A\u062F" : "\u2014";
+      const basis = d.markP > 0 && d.idxP > 0 ? (d.markP - d.idxP) / d.idxP * 100 : 0;
+      const range = d.lowP > 0 ? (d.highP - d.lowP) / d.lowP * 100 : 0;
+      const oiToVol = d.turnover > 0 ? oiUsd / d.turnover : 0;
       return {
         symbol: d.symbol,
         disp: d.symbol.replace(/USDTM$/i, "").replace(/^XBT/i, "BTC"),
@@ -1086,9 +1233,59 @@ async function scanRadar() {
         vol: +d.vol.toFixed(2),
         chg: Math.round(d.chg * 10) / 10,
         turnover: d.turnover,
+        funding: +(d.funding || 0).toFixed(6),
+        fundHrs: d.fundHrs || 8,
+        fundAnnPct: +fundAnn.toFixed(3),
+        nextFundMs: d.nextFundMs || 0,
+        oi: +d.oi || 0,
+        oiUsd,
+        oiLev: d.maxLev || 0,
+        skew,
+        basisPct: +basis.toFixed(3),
+        rangePct: +range.toFixed(1),
+        oiToVolPct: +(oiToVol * 100).toFixed(0),
         grade: s.score >= 65 ? "\u{1F7E2}" : s.score >= 45 ? "\u{1F7E1}" : "\u{1F534}"
       };
     }).sort((a, b) => b.score - a.score || (b.state === "\u0639\u0631\u0636\u064A \u0645\u062A\u0630\u0628\u0630\u0628" ? 1 : 0) - (a.state === "\u0639\u0631\u0636\u064A \u0645\u062A\u0630\u0628\u0630\u0628" ? 1 : 0) || b.turnover - a.turnover);
+    const deepSyms = new Set(deepList.map((x) => x.symbol));
+    const rest = preScored.filter((r) => !deepSyms.has(r.symbol)).map((r) => ({
+      symbol: r.symbol,
+      disp: r.symbol.replace(/USDTM$/i, "").replace(/^XBT/i, "BTC"),
+      price: r.price,
+      score: r.preScore,
+      why: ["full-universe watch"],
+      state: "watch",
+      vol: 0,
+      chg: Math.round(r.chg * 10) / 10,
+      turnover: r.turnover,
+      funding: +(r.funding || 0).toFixed(6),
+      fundHrs: r.fundHrs || 8,
+      fundAnnPct: +((r.funding || 0) * (24 / (r.fundHrs || 8)) * 100).toFixed(3),
+      nextFundMs: r.nextFundMs || 0,
+      oi: +r.oi || 0,
+      oiUsd: (r.oi || 0) * (r.price || 0),
+      oiLev: r.maxLev || 0,
+      skew: "-",
+      basisPct: 0,
+      rangePct: 0,
+      oiToVolPct: 0,
+      grade: r.preScore >= 65 ? "\u{1F7E2}" : r.preScore >= 45 ? "\u{1F7E1}" : "\u{1F534}"
+    }));
+    const list = [...deepList, ...rest];
+    const fundRanked = [...list].sort((a, b) => b.fundAnnPct - a.fundAnnPct);
+    const oiRanked = [...list].sort((a, b) => b.oiUsd - a.oiUsd).slice(0, 5);
+    const gridRanked = [...list].filter((x) => x.turnover > 2e6).sort((a, b) => b.rangePct - a.rangePct).slice(0, 5);
+    const basisRanked = [...list].filter((x) => x.turnover > 2e6 && Math.abs(x.basisPct) > 0.1).sort((a, b) => Math.abs(b.basisPct) - Math.abs(a.basisPct)).slice(0, 5);
+    S.intel = {
+      at: Date.now(),
+      hottest: fundRanked.slice(0, 5),
+      coldest: fundRanked.slice(-3).reverse(),
+      biggestOi: oiRanked,
+      bestGrid: gridRanked,
+      extremeBasis: basisRanked,
+      squeeze: fundRanked.filter((f) => f.fundAnnPct >= 0.05 && f.chg > 3).slice(0, 3),
+      rebound: fundRanked.filter((f) => f.fundAnnPct <= -0.03 && f.chg < -3).slice(0, 3)
+    };
     S.radar = { at: Date.now(), list };
     const cur = list.find((l) => l.symbol === S.config.symbol);
     const top = list[0];
@@ -1124,10 +1321,233 @@ function bgRadarTick() {
   }
 }
 var _lastSwitchAt = 0;
+var GAP_MODE_ON = () => !!S.config.gapMode;
+var _gapScanAt = 0;
+var _gapStats = null;
+async function gapScan() {
+  if (!GAP_MODE_ON()) return null;
+  if (Date.now() - _gapScanAt < 60 * 1e3) return _gapStats;
+  _gapScanAt = Date.now();
+  try {
+    const all = await kcPublic("/api/v1/contracts/active", 6e3);
+    const liq = (all || []).filter((c) => /USDTM$/.test(c.symbol) && c.status === "Open" && +(c.turnoverOf24h || 0) > 3e6 && +(c.lastTradePrice || 0) > 0 && +(c.indexPrice || 0) > 0);
+    const out = [];
+    for (const c of liq.slice(0, 60)) {
+      const dev = (+c.lastTradePrice - +c.indexPrice) / +c.indexPrice * 100;
+      if (dev < -0.15) {
+        out.push({
+          symbol: c.symbol,
+          dev,
+          oi: +c.openInterest || 0,
+          turn: +c.turnoverOf24h,
+          fund: +c.fundingFeeRate || 0,
+          last: +c.lastTradePrice,
+          idx: +c.indexPrice
+        });
+      }
+    }
+    out.sort((a, b) => a.dev - b.dev);
+    _gapStats = { at: Date.now(), list: out };
+    return _gapStats;
+  } catch (e) {
+    logSwallow("silent-catch", e);
+    return _gapStats;
+  }
+}
+async function gapSignal(symbol2) {
+  try {
+    const [ixr, pkr] = await Promise.all([
+      kcPublic("/api/v1/kline/query?symbol=.K" + symbol2.replace("USDTM", "USDT") + "&granularity=5", 6e3),
+      kcPublic("/api/v1/kline/query?symbol=" + symbol2 + "&granularity=5", 6e3)
+    ]);
+    const idx = {}, perp = {};
+    (ixr || []).forEach((k) => idx[k[0]] = +k[4]);
+    (pkr || []).forEach((k) => perp[k[0]] = +k[4]);
+    const devs = [];
+    for (const t in perp) {
+      if (idx[t] > 0 && perp[t] > 0) devs.push({ t: +t, d: (perp[t] - idx[t]) / idx[t] * 100, p: perp[t], idx: idx[t] });
+    }
+    if (devs.length < 27) return null;
+    devs.sort((a, b) => a.t - b.t);
+    const win = devs.slice(-25, -1);
+    const mean = win.reduce((a, b) => a + b.d, 0) / win.length;
+    const sd = Math.sqrt(win.reduce((a, b) => a + (b.d - mean) ** 2, 0) / win.length);
+    if (!(sd > 1e-3)) return null;
+    const cur = devs[devs.length - 1];
+    const z = (cur.d - mean) / sd;
+    const stable = devs.length > 3 && cur.p >= devs[devs.length - 4].p * 0.9985;
+    const deep = cur.d < -0.15 && z < -2;
+    const idxNow = cur.idx || cur.p;
+    const idx6h = devs.length > 6 ? devs[devs.length - 7].idx || idxNow : idxNow;
+    const idxFlat = Math.abs((idxNow - idx6h) / idx6h * 100) < 1.5;
+    const ready = deep && stable && idxFlat;
+    return { z, dev: cur.d, ready, price: cur.p, exitDev: mean };
+  } catch (e) {
+    return null;
+  }
+}
+function gapExitCheck(p) {
+  const ctx = S._gapCtx;
+  if (!ctx) return false;
+  const dev = (p - ctx.idx) / ctx.idx * 100;
+  if (dev >= ctx.exitDev) return true;
+  return false;
+}
+async function confluenceScore(symbol2, dev) {
+  let score = 0;
+  try {
+    const tr = await kcPublic("/api/v1/trade/history?symbol=" + encodeURIComponent(symbol2), 4e3);
+    const trades = (Array.isArray(tr) ? tr : []).slice(0, 100);
+    let whaleNet = 0;
+    if (trades.length >= 20) {
+      const sizes = trades.map((t) => +t.size).sort((a, b) => a - b);
+      const med = sizes[Math.floor(sizes.length / 2)] || 1;
+      let lastPx = 0;
+      for (const t of trades) {
+        if (+t.price > 0) lastPx = +t.price;
+      }
+      if (lastPx > 0) {
+        for (const t of trades) {
+          if (+t.size > med * 8) whaleNet += (t.side === "buy" ? 1 : -1) * +t.size * lastPx;
+        }
+      }
+    }
+    if (whaleNet > 0) score++;
+    const bk = await kcPublic("/api/v1/level2/depth20?symbol=" + encodeURIComponent(symbol2), 3e3);
+    let imb = 0;
+    if (bk && bk.bids && bk.asks) {
+      const bd = (bk.bids || []).reduce((a, x) => a + +x[1], 0);
+      const ad = (bk.asks || []).reduce((a, x) => a + +x[1], 0);
+      if (bd + ad > 0) imb = (bd - ad) / (bd + ad);
+    }
+    if (imb > 0.05) score++;
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  }
+  if (dev < -0.15) score += 2;
+  return score;
+}
+function inPeakWindow() {
+  const h = (/* @__PURE__ */ new Date()).getUTCHours();
+  return h >= 13 && h <= 19;
+}
+var _btcLead = null;
+async function btcLead() {
+  try {
+    const now = Date.now();
+    if (_btcLead && now - _btcLead.t < 6e4) return _btcLead.ret;
+    const k = await kcPublic("/api/v1/kline/query?symbol=XBTUSDTM&granularity=1", 3e3);
+    const rows = (Array.isArray(k) ? k : []).slice(-3);
+    if (rows.length < 2) return 0;
+    const last = +rows[rows.length - 1][4], prev = +rows[0][4];
+    const ret = prev > 0 ? (last - prev) / prev * 100 : 0;
+    _btcLead = { t: now, ret };
+    return ret;
+  } catch (e) {
+    return 0;
+  }
+}
+async function wallReal(symbol2) {
+  try {
+    const snap = async () => {
+      const b = await kcPublic("/api/v1/level2/depth20?symbol=" + encodeURIComponent(symbol2), 3e3);
+      if (!b || !b.bids || !b.bids.length) return null;
+      let mx = 0, mxP = 0;
+      for (const x of b.bids.slice(0, 15)) {
+        if (+x[1] > mx) {
+          mx = +x[1];
+          mxP = +x[0];
+        }
+      }
+      return { wallP: mxP, wallS: mx };
+    };
+    const s1 = await snap();
+    if (!s1 || !(s1.wallS > 0)) return true;
+    await new Promise((r) => setTimeout(r, 15e3));
+    const s2 = await snap();
+    if (!s2) return true;
+    const sameZone = Math.abs(s2.wallP - s1.wallP) / Math.max(1e-12, s1.wallP) < 4e-3;
+    const stillSized = s2.wallS >= s1.wallS * 0.5;
+    return sameZone && stillSized;
+  } catch (e) {
+    return true;
+  }
+}
+async function gapHunterTick() {
+  if (S._gapHuntBusy) return;
+  S._gapHuntBusy = true;
+  try {
+    const st = await gapScan();
+    if (!st || !st.list || !st.list.length) return;
+    for (const cand of st.list.slice(0, 3)) {
+      const sig2 = await gapSignal(cand.symbol);
+      if (sig2 && sig2.ready) {
+        const cs = await confluenceScore(cand.symbol, sig2.dev);
+        if (cs < 3) {
+          continue;
+        }
+        if (!inPeakWindow()) {
+          continue;
+        }
+        const lead = await btcLead();
+        if (lead < -0.08) {
+          continue;
+        }
+        if (!await wallReal(cand.symbol)) {
+          continue;
+        }
+        if (cand.symbol !== S.config.symbol) {
+          pushLog("server", "\u{1F50D} \u0635\u0627\u0626\u062F \u0627\u0644\u0641\u062C\u0648\u0627\u062A: \u062A\u062D\u0648\u064A\u0644 \u0625\u0644\u0649 " + cand.symbol.replace(/USDTM$/, "") + " \u2014 \u0641\u062C\u0648\u0629 " + sig2.dev.toFixed(2) + "% (z=" + sig2.z.toFixed(1) + ")");
+          S.config.symbol = cand.symbol;
+          S.config.displaySymbol = cand.symbol.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");
+          S.multiplier = 1;
+          S.tickSize = 0.1;
+          S._metaSym = null;
+          S._metaAt = 0;
+          setStreamSymbol(cand.symbol);
+          S.grid = [];
+          S.journal = [];
+          S.tape = [];
+          S.priceTrail = [];
+          S.emaFast = S.emaSlow = null;
+        }
+        S._gapCtx = { idx: cand.idx, exitDev: sig2.exitDev, entryAt: Date.now() };
+        S.lastPrice = sig2.price;
+        S._metaSym = null;
+        S._metaAt = 0;
+        try {
+          const ct = await kcPublic("/api/v1/contracts/" + encodeURIComponent(cand.symbol), 4e3);
+          if (ct && ct.multiplier) {
+            S.multiplier = +ct.multiplier;
+            S.tickSize = +ct.tickSize || S.tickSize;
+            S._metaSym = cand.symbol;
+            S._metaAt = Date.now();
+          }
+        } catch (e) {
+          logSwallow("silent-catch", e);
+        }
+        maybeHunt(sig2.price);
+        pushLog("server", "\u2696\uFE0F \u0641\u062C\u0648\u0629 \u0645\u062C\u0647\u0632\u0629: \u062F\u062E\u0648\u0644 \u0637\u0648\u064A\u0644 @ " + fmtPx(sig2.price) + " \u2014 \u062E\u0631\u0648\u062C \u0639\u0646\u062F \u0639\u0648\u062F\u0629 \u0627\u0644\u0641\u062C\u0648\u0629");
+        break;
+      }
+    }
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  } finally {
+    S._gapHuntBusy = false;
+  }
+}
 async function maybeSwitchSymbol() {
-  if (S.position) return;
   if (S.status !== "running") return;
-  if (Date.now() - _lastSwitchAt < 6e4) return;
+  if (S.position) {
+    try {
+      await scanRadar();
+    } catch (e) {
+      logSwallow("silent-catch", e);
+    }
+    return;
+  }
+  if (Date.now() - _lastSwitchAt < 2e4) return;
   const idleMs = Date.now() - (S.lastHuntAt || S.startedAt || Date.now());
   const rotate = idleMs > 5 * 60 * 1e3;
   try {
@@ -1146,10 +1566,10 @@ async function maybeSwitchSymbol() {
       if (topScore2 < 45) return;
       S._rotCount = ((S._rotCount || 0) + 1) % 5;
       _lastSwitchAt = Date.now();
-      const curDisp2 = cur ? cur.disp : S.config.displaySymbol, curSc2 = cur ? cur.score : 0;
+      const curDisp2 = cur ? cur.disp : S.config.displaySymbol;
       pushLog("server", "\u{1F504} \u062F\u0648\u0631\u0627\u0646 \u0632\u0645\u0646\u064A (" + Math.round(idleMs / 6e4) + " \u062F \u0628\u0644\u0627 \u0641\u0631\u0635\u0629): " + curDisp2 + " \u2192 " + top.disp + " (" + topScore2 + ") \u2014 " + (top.state || "") + " \u2014 \u0627\u0644\u0628\u062D\u062B \u0645\u0633\u062A\u0645\u0631 \u0639\u0646 \u0641\u0631\u0635\u0629 \u0623\u0641\u0636\u0644");
       toast("\u{1F504} \u062F\u0648\u0631\u0627\u0646: " + top.disp + " \u2014 \u0628\u062D\u062B \u0639\u0646 \u0641\u0631\u0635\u0629");
-      nativeNotify("KING \u2014 \u062F\u0648\u0631\u0627\u0646 \u0625\u0644\u0649 \u0639\u0645\u0644\u0629 \u0623\u062E\u0631\u0649", top.disp + " \u062F\u0631\u062C\u0629 " + topScore2);
+      nativeNotify("KING-trading \u2014 \u062F\u0648\u0631\u0627\u0646 \u0625\u0644\u0649 \u0639\u0645\u0644\u0629 \u0623\u062E\u0631\u0649", top.disp + " \u062F\u0631\u062C\u0629 " + topScore2);
       saveCfg({
         symbol: top.symbol,
         leverage: S.config.leverage,
@@ -1178,7 +1598,7 @@ async function maybeSwitchSymbol() {
     const curDisp = cur ? cur.disp : S.config.displaySymbol, curSc = cur ? cur.score : 0;
     pushLog("server", "\u{1F4E1} \u062A\u0628\u062F\u064A\u0644 \u0630\u0643\u064A: " + curDisp + " (" + curSc + ") \u2192 " + top.disp + " (" + topScore + ") \u2014 " + (top.state || "") + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062F\u0627\u0631");
     toast("\u{1F4E1} \u0627\u0646\u062A\u0642\u0627\u0644 \u0625\u0644\u0649 " + top.disp + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 (" + topScore + ")");
-    nativeNotify("KING \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curSc);
+    nativeNotify("KING-trading \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curSc);
     saveCfg({
       symbol: top.symbol,
       leverage: S.config.leverage,
@@ -1470,7 +1890,8 @@ function spacingGate(p) {
   if (!(p > 0)) return true;
   const last = lastRealFillPx();
   if (!last) return true;
-  const minGap = Math.max(S.config.gridStepPct / 100 * 0.75, 12e-4);
+  const hfMin = S.config.hfMode ? 4e-4 : 12e-4;
+  const minGap = Math.max(S.config.gridStepPct / 100 * (S.config.hfMode ? 0.25 : 0.75), hfMin);
   return Math.abs(p - last) / last >= minGap;
 }
 function filledAdds() {
@@ -1777,7 +2198,7 @@ function buildGrid(center, wide, initialCount) {
   for (let i = 1; i <= n; i++) {
     let dist = wide ? Math.min(step * i, 0.05) : span * Math.pow(i / n, 1.5);
     if (!wide) {
-      const minGap = Math.max(step, stepPct / 100);
+      const minGap = Math.max(step * (S.config.hfMode ? 0.3 : 1), stepPct / 100 * (S.config.hfMode ? 0.3 : 1));
       if (i === 1) dist = Math.max(dist, minGap);
       else dist = Math.max(dist, prevDist + minGap);
     }
@@ -1899,10 +2320,12 @@ function accrueFunding() {
   const hours = Math.min(8, (now - last) / 36e5);
   if (hours < 0.25) return 0;
   const notional = pos.size * (S.multiplier || 1) * (pos.entry || S.lastPrice || 0);
-  const cost = notional * Math.abs(S.funding) * (hours / 8);
+  const rate = S.funding;
+  const payDir = (pos.side === "long" ? 1 : -1) * (rate >= 0 ? 1 : -1);
+  const signed = notional * Math.abs(rate) * (hours / 8) * payDir;
   S._fundAt = now;
-  S.fundingPaid = Math.round(((S.fundingPaid || 0) + cost) * 1e4) / 1e4;
-  return cost;
+  S.fundingPaid = Math.round(((S.fundingPaid || 0) + signed) * 1e4) / 1e4;
+  return signed;
 }
 function applyDelta(side, qty, price) {
   const dir2 = side === "sell" ? "short" : "long";
@@ -2037,7 +2460,25 @@ function noteClose(qty, exit, fee, source, pnl, lotId) {
     S.cycleHarvested = Math.round(((S.cycleHarvested || 0) + pnl) * 1e4) / 1e4;
     S.config.cycleBalance = Math.max(1, Math.round((S.config.cycleBalance + pnl) * 100) / 100);
   }
-  learnTrade(row ? row.side : S.position ? S.position.side : S.config.direction, pnl);
+  {
+    const mem = S.memory;
+    if (mem && mem.pairs) {
+      const pk = S.config.symbol;
+      const pr = mem.pairs[pk] || (mem.pairs[pk] = { n: 0, w: 0, l: 0, pnl: 0, grossWin: 0, grossLoss: 0, maxLoseStreak: 0, loseStreak: 0 });
+      pr.n++;
+      pr.pnl = Math.round(((pr.pnl || 0) + pnl) * 1e4) / 1e4;
+      if (pnl >= 0) {
+        pr.w++;
+        pr.grossWin = Math.round(((pr.grossWin || 0) + pnl) * 1e4) / 1e4;
+        pr.loseStreak = 0;
+      } else {
+        pr.grossLoss = Math.round(((pr.grossLoss || 0) - pnl) * 1e4) / 1e4;
+        pr.loseStreak = (pr.loseStreak || 0) + 1;
+        pr.maxLoseStreak = Math.max(pr.maxLoseStreak || 0, pr.loseStreak);
+      }
+      saveAll();
+    }
+  }
   return pnl;
 }
 function notePartialClose(qty, exit, fee, lotId) {
@@ -2094,9 +2535,6 @@ function armCompEntry(qty) {
 function sessionOf(ts) {
   const h = new Date(ts).getUTCHours();
   return h < 8 ? "\u0622\u0633\u064A\u0627" : h < 16 ? "\u0623\u0648\u0631\u0648\u0628\u0627" : "\u0623\u0645\u0631\u064A\u0643\u0627";
-}
-function learnTrade(_side, _pnl) {
-  return;
 }
 function memStats() {
   const mem = S.memory;
@@ -2171,7 +2609,7 @@ function maybeReport() {
   S._lastReportAt = now;
   const msg = "\u0635\u0641\u0642\u0627\u062A \u0645\u062A\u0639\u0644\u064E\u0651\u0645\u0629: " + st.n + " \xB7 \u0646\u062C\u0627\u062D " + (st.winRate * 100).toFixed(0) + "% \xB7 \u0639\u0627\u0645\u0644 \u0627\u0644\u0631\u0628\u062D " + st.pf + " \xB7 \u0635\u0627\u0641\u064A \u0627\u0644\u0630\u0627\u0643\u0631\u0629 " + fmtUsd(st.pnl);
   pushLog("info", "\u062A\u0642\u0631\u064A\u0631 \u062F\u0648\u0631\u064A \u2014 " + msg);
-  nativeNotify("KING \u2014 \u062A\u0642\u0631\u064A\u0631 \u0627\u0644\u0623\u062F\u0627\u0621", msg);
+  nativeNotify("KING-trading \u2014 \u062A\u0642\u0631\u064A\u0631 \u0627\u0644\u0623\u062F\u0627\u0621", msg);
 }
 function trailTarget(base, floating) {
   if (!(floating > 0)) return base;
@@ -2439,6 +2877,13 @@ function inAddZone(p) {
 }
 function harvestRipe(p) {
   if (!p || S.status === "idle") return;
+  if (S._gapCtx && S.position && gapExitCheck(p)) {
+    pushLog("server", "\u{1F3AF} \u0635\u0627\u0626\u062F \u0627\u0644\u0641\u062C\u0648\u0627\u062A: \u0639\u0627\u062F\u0629 \u0627\u0644\u0625\u0646\u062F\u064A\u0643\u0633 \u062A\u0645\u062A \u2014 \u062C\u0646\u064A \u0627\u0644\u0645\u0631\u0643\u0632 \u0643\u0627\u0645\u0644\u0627");
+    flattenAt(p, "\u0639\u0648\u062F\u0629 \u0625\u0646\u062F\u064A\u0643\u0633").catch(() => {
+    });
+    S._gapCtx = null;
+    return;
+  }
   for (const tp of S.grid.filter((g) => g.reduceOnly && (g.status === "open" || g.status === "armed"))) {
     const tol = Math.min(S.tickSize > 0 ? S.tickSize * 0.5 : 1e-12, Math.abs(tp.price) * 5e-4);
     const crossed = tp.side === "sell" ? p >= tp.price - tol : p <= tp.price + tol;
@@ -2628,10 +3073,11 @@ function huntSignals(p) {
   return sig2;
 }
 function effectiveHuntPct() {
+  const hf = S.config.hfMode;
   const base = Math.max(
-    0.14,
-    S.config.huntPct,
-    profOf() && profOf().spread ? profOf().spread * 2.5 : 0
+    hf ? 0.05 : 0.14,
+    S.config.huntPct * (hf ? 0.4 : 1),
+    profOf() && profOf().spread ? profOf().spread * (hf ? 1.5 : 2.5) : 0
   );
   const mag = Math.abs(S.biasScore);
   const stalled = S.lastWorkAt && Date.now() - S.lastWorkAt > 6e4;
@@ -2810,7 +3256,7 @@ function huntTrigger(p) {
   if (S.startedAt && Date.now() - S.startedAt < SCOUT_MS && filledAdds() >= 1) return null;
   if (S.lastAddAt && Date.now() - S.lastAddAt < ADD_COOLDOWN) return null;
   trailHuntAnchor(p);
-  if (S.lastHuntAt && Date.now() - S.lastHuntAt < HUNT_COOLDOWN) return null;
+  if (S.lastHuntAt && Date.now() - S.lastHuntAt < (S.config.hfMode ? 3e3 : HUNT_COOLDOWN)) return null;
   const volNow = retStdev() || 0.05;
   const capHunt = S.regime && S.regime.shock ? 2 : volNow > 1.2 ? 2 : volNow < 0.35 ? 4 : MAX_HUNT_OPEN;
   if (openHuntLots() >= capHunt) return null;
@@ -2973,6 +3419,29 @@ function cancelPendingAdds() {
     }
   }
 }
+async function patienceLimit(p) {
+  if (!p || S.status !== "running" || !S.position) return;
+  const hrs = Number(S.config.patienceHrs);
+  const usd = Number(S.config.patienceUsd);
+  if (!(hrs > 0) && !(usd > 0)) return;
+  const ageMs = Date.now() - (S.position.openedAt || Date.now());
+  const adv = adversePct(p);
+  const floatUsd = -(S.position.unrealized || 0);
+  const aged = hrs > 0 && ageMs > hrs * 3600 * 1e3;
+  const sunk = usd > 0 && floatUsd >= usd;
+  if (!aged && !sunk) return;
+  if (S.regime && !S.regime.shock) {
+    const against = S.position.side === "short" && S.regime.trend === "down" && adv > 0.6 || S.position.side === "long" && S.regime.trend === "up" && adv > 0.6;
+    if (!against) {
+      return;
+    }
+  }
+  const why = aged ? "\u0639\u0644\u0642 " + Math.round(ageMs / 36e5) + " \u0633" : "\u0627\u0646\u062D\u062F\u0627\u0631 " + fmtUsd(floatUsd);
+  pushLog("server", "\u23F0 \u062D\u062F \u0627\u0644\u0635\u0628\u0631: \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u0639\u0627\u0644\u0642 (" + why + ") \u2014 \u062A\u0639\u0648\u062F \u0627\u0644\u062F\u0648\u0631\u0629 \u0645\u0646 \u062C\u062F\u064A\u062F \u0645\u0639 \u062F\u0631\u0627\u0633\u0629");
+  await flattenAt(p, "\u062D\u062F \u0627\u0644\u0635\u0628\u0631");
+  S._postDisaster = Date.now();
+  startStudy(false);
+}
 async function circuitBreak(p) {
   if (!p || S.status !== "running") return;
   const limit = Math.max(LOSS_STOP_USD, (S.config.cycleBalance || 0) * 0.08);
@@ -2989,7 +3458,7 @@ async function escapeAdverse(p) {
   if (S.status !== "running" || !S.position || !p) return;
   const pos = S.position;
   let danger = liqDanger(p);
-  const flip = reversalAgainst(p);
+  reversalAgainst(p);
   if (danger) {
     const exl = S.exLiqPrice || 0, e0 = pos.entry || 0;
     if (exl > 0 && e0 > 0) {
@@ -3636,9 +4105,16 @@ async function botTick() {
     studyTick();
     armProgressive();
     bgRadarTick();
+    if (S.config.gapMode && !S.position && S.status === "running") {
+      gapHunterTick().catch(() => {
+      });
+    }
     if (S.position && S.status === "running") syncPositionTp();
-    if (!S.position && S.status === "running") maybeSwitchSymbol().catch(() => {
-    });
+    if (!S.position && S.status === "running") {
+      _lastSwitchAt = 0;
+      maybeSwitchSymbol().catch(() => {
+      });
+    }
     const _prevDir = S.config.direction;
     resolveDirection(Date.now());
     if (S.config.direction !== _prevDir) {
@@ -3654,6 +4130,7 @@ async function botTick() {
       }
     }
     if (running && price > 0) {
+      await patienceLimit(price);
       await circuitBreak(price);
       await escapeAdverse(price);
       harvestRipe(price);
@@ -3755,7 +4232,7 @@ function startBot() {
     ];
   }
   pushLog("server", "\u062F\u0648\u0631\u0629 \u062C\u062F\u064A\u062F\u0629 " + (S.config.direction === "short" ? "\u0634\u0648\u0631\u062A" : "\u0644\u0648\u0646\u063A") + (S.regime ? " \xB7 " + S.regime.label : "") + " \u2014 \u0634\u0628\u0643\u0629 \u0641\u0639\u0651\u0627\u0644\u0629 " + effLevels() + " \u0645\u0646 " + S.config.levels + " (\u062A\u0631\u0643\u064A\u0632 \u064A\u0646\u0627\u0633\u0628 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644) \u0648\u0627\u0644\u0635\u064A\u062F \u064A\u0639\u0645\u0644");
-  nativeNotify("KING \u064A\u0639\u0645\u0644 \u2713", "\u0627\u0644\u0628\u0648\u062A \u0645\u062A\u0635\u0644 \u0628\u0640 KuCoin \u0648\u064A\u062A\u062F\u0627\u0648\u0644 " + (S.config.displaySymbol || S.config.symbol) + " \u2014 \u064A\u0633\u062A\u0645\u0631 \u062D\u062A\u0649 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629", true);
+  nativeNotify("KING-trading \u064A\u0639\u0645\u0644 \u2713", "\u0627\u0644\u0628\u0648\u062A \u0645\u062A\u0635\u0644 \u0628\u0640 KuCoin \u0648\u064A\u062A\u062F\u0627\u0648\u0644 " + (S.config.displaySymbol || S.config.symbol) + " \u2014 \u064A\u0633\u062A\u0645\u0631 \u062D\u062A\u0649 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629", true);
   toast("\u0627\u0644\u0628\u0648\u062A \u064A\u0639\u0645\u0644 \u0627\u0644\u0622\u0646");
   emit();
   saveAll();
@@ -4078,7 +4555,7 @@ function initEngine() {
   loadAll();
   if (S.config.symbol === "BTCUSDTM") S.config.symbol = "XBTUSDTM";
   S.config.displaySymbol = S.config.symbol.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");
-  pushLog("info", "KING Trading \u062C\u0627\u0647\u0632 \u2014 " + (S.config.mode === "live" ? "\u0648\u0636\u0639 LIVE" : "\u0648\u0636\u0639 \u0648\u0631\u0642\u064A"));
+  pushLog("info", "KING-trading \u062C\u0627\u0647\u0632 \u2014 " + (S.config.mode === "live" ? "\u0648\u0636\u0639 LIVE" : "\u0648\u0636\u0639 \u0648\u0631\u0642\u064A"));
   startStream(S.config.symbol, { onMessage: onStreamTick, onStatus: () => emitThrottled() });
   setInterval(botTick, TICK_MS);
   setInterval(emit, 1e3);
@@ -4102,11 +4579,11 @@ function initEngine() {
   setTimeout(() => {
     scanRadar().catch(() => {
     });
-  }, 22e3);
+  }, 15e3);
   setInterval(() => {
     scanRadar().catch(() => {
     });
-  }, 18e4);
+  }, 45e3);
   startSilentKeepAlive();
   startForegroundSvc();
   startNativeKeepAlive();
@@ -4198,8 +4675,8 @@ var srv = createServer(async (req, res) => {
   }
 });
 srv.listen(PORT, "127.0.0.1", () => {
-  console.log("[KING] \u0633\u064A\u0631\u0641\u0631 \u0627\u0644\u062C\u0648\u0627\u0644 \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT);
-  console.log("[KING] \u0627\u0641\u062A\u062D \u062A\u0637\u0628\u064A\u0642 KING \u2014 \u0633\u064A\u0643\u062A\u0634\u0641 \u0627\u0644\u0633\u064A\u0631\u0641\u0631 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0648\u064A\u062A\u062D\u0648\u0644 \u0644\u0648\u0636\u0639 \u0627\u0644\u0648\u0627\u062C\u0647\u0629");
+  console.log("[AB-KING] \u0633\u064A\u0631\u0641\u0631 \u0627\u0644\u062C\u0648\u0627\u0644 \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT);
+  console.log("[AB-KING] \u0627\u0641\u062A\u062D \u062A\u0637\u0628\u064A\u0642 AB-KING \u2014 \u0633\u064A\u0643\u062A\u0634\u0641 \u0627\u0644\u0633\u064A\u0631\u0641\u0631 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0648\u064A\u062A\u062D\u0648\u0644 \u0644\u0648\u0636\u0639 \u0627\u0644\u0648\u0627\u062C\u0647\u0629");
 });
 initEngine();
-console.log("[KING] \u0627\u0644\u0645\u062D\u0631\u0643 \u0628\u062F\u0623 \u2014 \u0623\u0628\u0642\u0650 Termux \u062D\u064A\u064B\u0627 (termux-wake-lock \u0645\u0641\u0639\u0651\u0644)");
+console.log("[AB-KING] \u0627\u0644\u0645\u062D\u0631\u0643 \u0628\u062F\u0623 \u2014 \u0623\u0628\u0642\u0650 Termux \u062D\u064A\u064B\u0627 (termux-wake-lock \u0645\u0641\u0639\u0651\u0644)");
