@@ -1142,6 +1142,58 @@ function radarScore(x) {
   }
   return { score: clamp(Math.round(sc), 0, 100), why };
 }
+S._nextSymbol = null;
+S._nextReady = false;
+var _bgPipeAt = 0;
+async function backgroundPipeline() {
+  if (S.status !== "running") return;
+  if (Date.now() - _bgPipeAt < 3e4) return;
+  _bgPipeAt = Date.now();
+  try {
+    const r = S.radar && S.radar.list && S.radar.list.length ? S.radar : await scanRadar();
+    if (!r || !r.list || !r.list.length) return;
+    const cands = r.list.filter((l) => l.symbol !== S.config.symbol && (l.score || 0) >= 55);
+    if (!cands.length) return;
+    const nxt = cands[0];
+    if (S._nextSymbol !== nxt.symbol) {
+      S._nextSymbol = nxt.symbol;
+      S._nextReady = true;
+      S._nextStudiedAt = Date.now();
+      if (Date.now() - (S._bgLogAt || 0) > 12e4) {
+        S._bgLogAt = Date.now();
+        pushLog("server", "\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A " + nxt.disp + " (\u062F\u0631\u062C\u0629 " + nxt.score + ") \u062C\u0627\u0647\u0632 \u2014 \u064A\u064F\u0641\u062A\u062D \u0641\u0648\u0631 \u0627\u0644\u062C\u0646\u064A");
+      }
+    }
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  }
+}
+function openNextReady() {
+  if (!S._nextSymbol || !S._nextReady) return false;
+  if (S.position) return false;
+  if (S._nextSymbol === S.config.symbol) {
+    S._nextReady = false;
+    return false;
+  }
+  const sym = S._nextSymbol;
+  S._nextReady = false;
+  S._nextSymbol = null;
+  pushLog("server", "\u26A1 \u0641\u062A\u062D \u0641\u0648\u0631\u064A \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u0645\u062F\u0631\u0648\u0633\u0629 \u062E\u0644\u0641\u064A\u064B\u0627 " + sym.replace(/USDTM$/i, "") + " \u062A\u062F\u062E\u0644 \u0627\u0644\u0622\u0646");
+  saveCfg({
+    symbol: sym,
+    leverage: S.config.leverage,
+    levels: S.config.levels,
+    gridStepPct: S.config.gridStepPct,
+    huntPct: S.config.huntPct,
+    tpNet: S.config.tpNet,
+    cycleBalance: S.config.cycleBalance,
+    directionMode: S.config.directionMode,
+    mode: S.config.mode,
+    sound: S.sound,
+    soundTone: S.soundTone
+  });
+  return true;
+}
 async function scanRadar() {
   if (S._radarBusy) return S.radar;
   S._radarBusy = true;
@@ -1547,7 +1599,7 @@ async function maybeSwitchSymbol() {
     }
     return;
   }
-  if (Date.now() - _lastSwitchAt < 2e4) return;
+  if (Date.now() - _lastSwitchAt < 45e3) return;
   const idleMs = Date.now() - (S.lastHuntAt || S.startedAt || Date.now());
   const rotate = idleMs > 5 * 60 * 1e3;
   try {
@@ -1592,7 +1644,7 @@ async function maybeSwitchSymbol() {
       if (topScore < 55) return;
     } else {
       const curScore = cur.score || 0;
-      if (topScore - curScore < 12 || curScore >= 55) return;
+      if (topScore - curScore < 18 || curScore >= 55) return;
     }
     _lastSwitchAt = Date.now();
     const curDisp = cur ? cur.disp : S.config.displaySymbol, curSc = cur ? cur.score : 0;
@@ -2725,7 +2777,11 @@ function creditExFillReal(l, delta, fp, realFee) {
     }
     S.lastAddAt = Date.now();
     if (l.qty - (l.exFilled || 0) > 1e-9) pushLog("server", "\u062A\u0646\u0641\u064A\u0630 \u062C\u0632\u0626\u064A: \u062F\u064F\u062E\u0644 " + delta + " \u0645\u0646 " + l.qty + " @ " + fmtPx(fp) + " \u2014 \u0627\u0644\u0628\u0627\u0642\u064A \u0645\u0639\u0644\u0651\u0642 \u064A\u064F\u0643\u0645\u0644 \u0623\u0648 \u064A\u064F\u0644\u063A\u0649 \u0639\u0646\u062F \u0627\u0644\u062C\u0646\u064A");
-    if (S.position && S.status === "running") syncPositionTp();
+    if (S.position && S.status === "running") {
+      syncPositionTp();
+      backgroundPipeline().catch(() => {
+      });
+    }
     return false;
   }
   const estFee2 = feeFor(delta * mult * fp, false);
@@ -3157,7 +3213,7 @@ function profFresh() {
   return p && Date.now() - p.at < 24 * 3600 * 1e3 ? p : null;
 }
 function startStudy(short) {
-  S.studyUntil = Date.now() + (short ? 15e3 : 6e4);
+  S.studyUntil = Date.now() + (short ? 12e3 : 28e3);
   S.studyAcc = { vols: [], sps: [], act: 0, whales: 0 };
 }
 function studying() {
@@ -3279,14 +3335,10 @@ function huntTrigger(p) {
   if (!sig2.length) return null;
   if (sig2.length < 2) {
     const need = effectiveHuntPct();
-    const bigRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0 && parseFloat(x.replace(/[^٠-٩.]/g, "")) >= need * 1.5);
     const markGap = sig2.some((x) => x.indexOf("\u0641\u062C\u0648\u0629 \u0645\u0627\u0631\u0643") === 0);
-    if (!bigRetrace && !markGap) {
-      const hasRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0);
-      if (!hasRetrace) return null;
-      const support = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") !== 0);
-      if (!support) return null;
-    }
+    const decentRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0 && parseFloat(x.replace(/[^\u0660-\u0669.]/g, "")) >= need * 0.8);
+    const strongSingle = markGap || decentRetrace || sig2.length === 1 && (sig2[0].indexOf("\u0632\u062E\u0645") === 0 || sig2[0].indexOf("\u0627\u062A\u062C\u0627\u0647") === 0 || sig2[0].indexOf("\u062D\u064A\u062A\u0627\u0646") === 0 || sig2[0].indexOf("\u0627\u0646\u062D\u0631\u0627\u0641") === 0 || sig2[0].indexOf("\u0641\u062E \u0627\u062E\u062A\u0631\u0627\u0642") === 0 || sig2[0].indexOf("\u0636\u063A\u0637 \u0623\u0648\u0627\u0645\u0631") === 0);
+    if (!strongSingle) return null;
   }
   S._lastSig = sig2.slice(0, 3).join(" \xB7 ");
   return packHunt(p);
@@ -4109,8 +4161,15 @@ async function botTick() {
       gapHunterTick().catch(() => {
       });
     }
-    if (S.position && S.status === "running") syncPositionTp();
+    if (S.position && S.status === "running") {
+      syncPositionTp();
+      backgroundPipeline().catch(() => {
+      });
+    }
     if (!S.position && S.status === "running") {
+      if (openNextReady()) return;
+      backgroundPipeline().catch(() => {
+      });
       _lastSwitchAt = 0;
       maybeSwitchSymbol().catch(() => {
       });

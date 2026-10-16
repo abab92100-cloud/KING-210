@@ -449,6 +449,43 @@ function radarScore(x:any){ // x: {vol,spread,chg,trendPct,turnover,price}
   if(Math.abs(x.chg)>12){ sc-=6; why.push('حركة يوم متطرفة'); }
   return {score:clamp(Math.round(sc),0,100),why}; }
 
+// ===================================================================
+// background pipeline: the NEXT trade is prepared while the current one works.
+// every 30s the full universe is ranked and the next candidate is kept warm;
+// the moment the position closes (harvest), the bot opens it instantly.
+// ===================================================================
+S._nextSymbol=null; S._nextReady=false; let _bgPipeAt=0;
+export async function backgroundPipeline(){
+  if(S.status!=='running') return;
+  if(Date.now()-_bgPipeAt<30000) return;
+  _bgPipeAt=Date.now();
+  try{
+    const r=S.radar&&S.radar.list&&S.radar.list.length?S.radar:(await scanRadar());
+    if(!r||!r.list||!r.list.length) return;
+    const cands=r.list.filter(l=>l.symbol!==S.config.symbol&&(l.score||0)>=55);
+    if(!cands.length) return;
+    const nxt=cands[0];
+    if(S._nextSymbol!==nxt.symbol){
+      S._nextSymbol=nxt.symbol;
+      S._nextReady=true;
+      S._nextStudiedAt=Date.now();
+      if(Date.now()-(S._bgLogAt||0)>120000){ S._bgLogAt=Date.now();
+        pushLog('server','\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A '+nxt.disp+' (\u062F\u0631\u062C\u0629 '+nxt.score+') \u062C\u0627\u0647\u0632 \u2014 \u064A\u064F\u0641\u062A\u062D \u0641\u0648\u0631 \u0627\u0644\u062C\u0646\u064A'); } }
+  }catch(e){ logSwallow('silent-catch', e); }
+}
+export function openNextReady(){
+  if(!S._nextSymbol||!S._nextReady) return false;
+  if(S.position) return false;
+  if(S._nextSymbol===S.config.symbol){ S._nextReady=false; return false; }
+  const sym=S._nextSymbol;
+  S._nextReady=false; S._nextSymbol=null;
+  pushLog('server','\u26A1 \u0641\u062A\u062D \u0641\u0648\u0631\u064A \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u0645\u062F\u0631\u0648\u0633\u0629 \u062E\u0644\u0641\u064A\u064B\u0627 '+sym.replace(/USDTM$/i,'')+' \u062A\u062F\u062E\u0644 \u0627\u0644\u0622\u0646');
+  saveCfg({symbol:sym,leverage:S.config.leverage,levels:S.config.levels,
+    gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+    cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
+    mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
+  return true;
+}
 export async function scanRadar(){
   if(S._radarBusy) return S.radar; S._radarBusy=true;
   try{
@@ -1527,7 +1564,8 @@ function creditExFillReal(l,delta,fp,realFee){ if(!(delta>0)||!(fp>0)) return fa
     S.lastAddAt=Date.now();
     if(l.qty-(l.exFilled||0)>1e-9) pushLog('server','تنفيذ جزئي: دُخل '+delta+' من '+l.qty+
       ' @ '+fmtPx(fp)+' — الباقي معلّق يُكمل أو يُلغى عند الجني');
-    if(S.position&&S.status==='running') syncPositionTp();
+    if(S.position&&S.status==='running'){ syncPositionTp();
+      backgroundPipeline().catch(()=>{}); }
     return false; }
   const estFee2=feeFor(delta*mult*fp,false);
   if(realFee!=null&&S._realFeesAt&&Math.abs(realFee-estFee2)>1e-9){
@@ -2532,8 +2570,12 @@ export async function botTick(){
     armProgressive(); bgRadarTick();
     if(S.config.gapMode&&!S.position&&S.status==='running'){
       gapHunterTick().catch(()=>{}); }
-    if(S.position&&S.status==='running') syncPositionTp(); // تبع سريع: يتحدّث كل ثانية مع الربح العائم
-    if(!S.position&&S.status==='running'){ _lastSwitchAt=0; maybeSwitchSymbol().catch(()=>{}); }
+    if(S.position&&S.status==='running'){ syncPositionTp();
+      backgroundPipeline().catch(()=>{}); } // تبع سريع: يتحدّث كل ثانية مع الربح العائم
+    if(!S.position&&S.status==='running'){
+      if(openNextReady()) return;
+      backgroundPipeline().catch(()=>{});
+      _lastSwitchAt=0; maybeSwitchSymbol().catch(()=>{}); }
     // انضباط الاتجاه: أي انقلاب يلغي فورًا سلم الجهة القديمة المسلّح —
     // بقاؤه بعد الانقلاب كان يملأ مستويات معاكسة فوق مركز جديد فيغلقه
     // بخسارة عابرة ويزرع شورتًا ولونغًا في الوقت نفسه
