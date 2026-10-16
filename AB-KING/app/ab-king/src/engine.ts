@@ -835,8 +835,10 @@ export async function maybeSwitchSymbol(){
     if(!best) return; // لا فرصة أقوى — البقاء على الحالية والدخول حين تكتمل شروطها
     // نحن الأفضل بالفعل؟ اكتملت الدراسة هنا وادخل الصفقة
     if(cur&&(cur.score||0)>=(best.score||0)) return;
-    // هامش وضوح 12 درجة يمنع التأرجح بين عملتين متقاربتين
-    if(cur&&best.score-cur.score<12) return;
+    // بعد جني مكتمل (خلال 10 دقائق): إعادة اختيار حاسمة — الأفضل مطلقاً بلا هامش
+    const afterHarvest=!!(S._harvestAt&&Date.now()-S._harvestAt<10*60*1000);
+    // هامش وضوح 12 درجة يمنع التأرجح بين عملتين متقاربتين (خارج نافذة ما بعد الجني)
+    if(!afterHarvest&&cur&&best.score-cur.score<12) return;
     _lastSwitchAt=Date.now();
     const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
     pushLog('server','🎯 انتقال للأفضل قبل الصفقة: '+curDisp+' ('+curSc+') → '+best.disp+' ('+best.score+') — كل الشروط متوفرة — تُدرس 60 ثانية ثم تُفتح الصفقة');

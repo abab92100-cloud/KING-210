@@ -19,7 +19,7 @@ echo "✓ Node $(node -v)"
 
 # 2) أحدث نسخة من السيرفر
 echo "• تحميل أحدث سيرفر من المستودع..."
-curl -sL -o ~/king-server.mjs https://raw.githubusercontent.com/abab92100-cloud/KING-210/main/releases/king-server.mjs
+curl -sL -o ~/king-server.mjs "https://raw.githubusercontent.com/abab92100-cloud/KING-210/main/releases/king-server.mjs?t=$(date +%s)"
 echo "✓ السيرفر محدّث"
 
 # 3) قفل اليقظة — يمنع أندرويد من تجميد Termux في الخلفية

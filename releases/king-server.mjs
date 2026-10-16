@@ -1652,7 +1652,8 @@ async function maybeSwitchSymbol() {
     const best = r.list.filter((l) => l.symbol !== S.config.symbol).find((l) => (l.score || 0) >= 55);
     if (!best) return;
     if (cur && (cur.score || 0) >= (best.score || 0)) return;
-    if (cur && best.score - cur.score < 12) return;
+    const afterHarvest = !!(S._harvestAt && Date.now() - S._harvestAt < 10 * 60 * 1e3);
+    if (!afterHarvest && cur && best.score - cur.score < 12) return;
     _lastSwitchAt = Date.now();
     const curDisp = cur ? cur.disp : S.config.displaySymbol, curSc = cur ? cur.score : 0;
     pushLog("server", "\u{1F3AF} \u0627\u0646\u062A\u0642\u0627\u0644 \u0644\u0644\u0623\u0641\u0636\u0644 \u0642\u0628\u0644 \u0627\u0644\u0635\u0641\u0642\u0629: " + curDisp + " (" + curSc + ") \u2192 " + best.disp + " (" + best.score + ") \u2014 \u0643\u0644 \u0627\u0644\u0634\u0631\u0648\u0637 \u0645\u062A\u0648\u0641\u0631\u0629 \u2014 \u062A\u064F\u062F\u0631\u0633 60 \u062B\u0627\u0646\u064A\u0629 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
@@ -4694,7 +4695,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.1.0", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.1.1", at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {
