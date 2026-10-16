@@ -819,58 +819,31 @@ export async function gapHunterTick(){
 }
 export async function maybeSwitchSymbol(){
   if(S.status!=='running') return;
-  // continuous watch: the scan runs while a position is OPEN too - keeps the live best-opportunities list,
-  // so the moment the position closes the bot jumps to the strongest contract with no waiting
+  // مع مركز مفتوح: الصفقة تُدار حتى الجني — لا تبديل في منتصف صفقة أبدًا
   if(S.position){
     try{ await scanRadar(); }catch(e){ logSwallow('silent-catch', e); }
     return; }
+  // ─── دورة المالك: أفضل عملة بكل الشروط قبل كل صفقة، وبعد الجني تُختار الأفضل من جديد ───
+  // مهلة تبريد 45 ثانية + لا تبديل وسط دراسة — يكتمل تقييم العملة الحالية أولًا
   if(Date.now()-_lastSwitchAt<45000) return;
-  // ─── حواجز الاستقرار (إصلاح البحث المتسارع عن عملة) ───
-  // 1) لا تبديل وسط دراسة: البصمة يجب أن تكتمل على العملة الحالية قبل أي حكم عليها
   if(studying()) return;
-  // 2) لا تبديل قبل تجميع دفتر أوامر وشريط صفقات حقيقيين عن العملة الحالية
-  if(!warmedUp()) return;
-  // 3) إقامة إلزامية 10 دقائق: الحكم على العملة بعد عمل فعلي عليها لا بعد ثوانٍ
-  if(Date.now()-(S._dwellAt||S.startedAt||Date.now())<10*60*1000) return;
-  // دوران زمني: لا صفقة خلال 45 دقيقة = العملة بايرة للبوت — انتقل لأقوى عملة أخرى
-  const idleMs=Date.now()-(S.lastHuntAt||S.startedAt||Date.now());
-  const rotate=idleMs>45*60*1000; // دوران حكيم كما صُمم: فرصة حقيقية كاملة قبل الحكم
-  try{ const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
+  try{
+    const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
     const cur=r.list.find(l=>l.symbol===S.config.symbol);
-    let top=r.list[0];
-    if(rotate){
-      // اختر أقوى عملة مختلفة عن الحالية (أول القائمة خارج الأخيرة محاولات تدوير متتالية)
-      const skipN=1+(S._rotCount||0);
-      const cands=r.list.filter(l=>l.symbol!==S.config.symbol);
-      if(cands.length){ top=cands[Math.min(skipN-1,cands.length-1)];
-        // إن كان المرشح هو الحالي تمامًا بعد التدوير → خذ التالي
-        if(top.symbol===S.config.symbol) top=cands[0]||top; }
-      const topScore=top.score||0;
-      if(topScore<45) return; // لا تدوير لعملة ضعيفة
-      S._rotCount=((S._rotCount||0)+1)%5;
-      _lastSwitchAt=Date.now();
-      const curDisp=cur?cur.disp:S.config.displaySymbol;
-      pushLog('server','\ud83d\udd04 \u062fوران زمني ('+Math.round(idleMs/60000)+' د بلا فرصة): '+curDisp+' → '+top.disp+' ('+topScore+') — '+
-        (top.state||'')+' — البحث مستمر عن فرصة أفضل');
-      toast('\ud83d\udd04 دوران: '+top.disp+' — بحث عن فرصة');
-      nativeNotify('AB-KING — دوران إلى عملة أخرى',top.disp+' درجة '+topScore);
-      saveCfg({symbol:top.symbol,leverage:S.config.leverage,levels:S.config.levels,
-        gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
-        cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
-        mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
-      startBot(); return; }
-    const topScore=top.score||0;
-    if(cur&&cur.symbol===top.symbol) return;
-    if(!cur){ if(topScore<55) return; }
-    else { const curScore=cur.score||0;
-      if(topScore-curScore<18||curScore>=55) return; }
+    // أفضل عملة تستوفي كل الشروط (درجة قوية ≥ 55 من رادار الفرص)
+    const best=r.list.filter(l=>l.symbol!==S.config.symbol).find(l=>(l.score||0)>=55);
+    if(!best) return; // لا فرصة أقوى — البقاء على الحالية والدخول حين تكتمل شروطها
+    // نحن الأفضل بالفعل؟ اكتملت الدراسة هنا وادخل الصفقة
+    if(cur&&(cur.score||0)>=(best.score||0)) return;
+    // هامش وضوح 12 درجة يمنع التأرجح بين عملتين متقاربتين
+    if(cur&&best.score-cur.score<12) return;
     _lastSwitchAt=Date.now();
     const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
-    pushLog('server','\ud83d\udce1 \u062a\u0628\u062f\u064a\u0644 \u0630\u0643\u064a: '+curDisp+' ('+curSc+') \u2192 '+top.disp+' ('+topScore+') \u2014 '+
-      (top.state||'')+' \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062f\u0627\u0631');
-    toast('\ud83d\udce1 \u0627\u0646\u062a\u0642\u0627\u0644 \u0625\u0644\u0649 '+top.disp+' \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 ('+topScore+')');
-    nativeNotify('AB-KING \u2014 \u062a\u0628\u062f\u064a\u0644 \u0639\u0645\u0644\u0629',top.disp+' \u062f\u0631\u062c\u0629 '+topScore+' \u0645\u0642\u0627\u0628\u0644 '+curSc);
-    saveCfg({symbol:top.symbol,leverage:S.config.leverage,levels:S.config.levels,
+    pushLog('server','🎯 انتقال للأفضل قبل الصفقة: '+curDisp+' ('+curSc+') → '+best.disp+' ('+best.score+') — كل الشروط متوفرة — تُدرس 60 ثانية ثم تُفتح الصفقة');
+    toast('🎯 الأفضل الآن: '+best.disp+' — '+best.score);
+    nativeNotify('AB-KING — انتقال للأفضل',best.disp+' درجة '+best.score+' قبل الصفقة');
+    // الجني التالي: يُعاد الاختيار من جديد عبر openNextReady وهذه الدالة
+    saveCfg({symbol:best.symbol,leverage:S.config.leverage,levels:S.config.levels,
       gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
       cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
       mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});

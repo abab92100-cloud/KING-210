@@ -1645,61 +1645,21 @@ async function maybeSwitchSymbol() {
   }
   if (Date.now() - _lastSwitchAt < 45e3) return;
   if (studying()) return;
-  if (!warmedUp()) return;
-  if (Date.now() - (S._dwellAt || S.startedAt || Date.now()) < 10 * 60 * 1e3) return;
-  const idleMs = Date.now() - (S.lastHuntAt || S.startedAt || Date.now());
-  const rotate = idleMs > 45 * 60 * 1e3;
   try {
     const r = await scanRadar();
     if (!r || !r.list || !r.list.length) return;
     const cur = r.list.find((l) => l.symbol === S.config.symbol);
-    let top = r.list[0];
-    if (rotate) {
-      const skipN = 1 + (S._rotCount || 0);
-      const cands = r.list.filter((l) => l.symbol !== S.config.symbol);
-      if (cands.length) {
-        top = cands[Math.min(skipN - 1, cands.length - 1)];
-        if (top.symbol === S.config.symbol) top = cands[0] || top;
-      }
-      const topScore2 = top.score || 0;
-      if (topScore2 < 45) return;
-      S._rotCount = ((S._rotCount || 0) + 1) % 5;
-      _lastSwitchAt = Date.now();
-      const curDisp2 = cur ? cur.disp : S.config.displaySymbol;
-      pushLog("server", "\u{1F504} \u062F\u0648\u0631\u0627\u0646 \u0632\u0645\u0646\u064A (" + Math.round(idleMs / 6e4) + " \u062F \u0628\u0644\u0627 \u0641\u0631\u0635\u0629): " + curDisp2 + " \u2192 " + top.disp + " (" + topScore2 + ") \u2014 " + (top.state || "") + " \u2014 \u0627\u0644\u0628\u062D\u062B \u0645\u0633\u062A\u0645\u0631 \u0639\u0646 \u0641\u0631\u0635\u0629 \u0623\u0641\u0636\u0644");
-      toast("\u{1F504} \u062F\u0648\u0631\u0627\u0646: " + top.disp + " \u2014 \u0628\u062D\u062B \u0639\u0646 \u0641\u0631\u0635\u0629");
-      nativeNotify("AB-KING \u2014 \u062F\u0648\u0631\u0627\u0646 \u0625\u0644\u0649 \u0639\u0645\u0644\u0629 \u0623\u062E\u0631\u0649", top.disp + " \u062F\u0631\u062C\u0629 " + topScore2);
-      saveCfg({
-        symbol: top.symbol,
-        leverage: S.config.leverage,
-        levels: S.config.levels,
-        gridStepPct: S.config.gridStepPct,
-        huntPct: S.config.huntPct,
-        tpNet: S.config.tpNet,
-        cycleBalance: S.config.cycleBalance,
-        directionMode: S.config.directionMode,
-        mode: S.config.mode,
-        sound: S.sound,
-        soundTone: S.soundTone
-      });
-      startBot();
-      return;
-    }
-    const topScore = top.score || 0;
-    if (cur && cur.symbol === top.symbol) return;
-    if (!cur) {
-      if (topScore < 55) return;
-    } else {
-      const curScore = cur.score || 0;
-      if (topScore - curScore < 18 || curScore >= 55) return;
-    }
+    const best = r.list.filter((l) => l.symbol !== S.config.symbol).find((l) => (l.score || 0) >= 55);
+    if (!best) return;
+    if (cur && (cur.score || 0) >= (best.score || 0)) return;
+    if (cur && best.score - cur.score < 12) return;
     _lastSwitchAt = Date.now();
     const curDisp = cur ? cur.disp : S.config.displaySymbol, curSc = cur ? cur.score : 0;
-    pushLog("server", "\u{1F4E1} \u062A\u0628\u062F\u064A\u0644 \u0630\u0643\u064A: " + curDisp + " (" + curSc + ") \u2192 " + top.disp + " (" + topScore + ") \u2014 " + (top.state || "") + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062F\u0627\u0631");
-    toast("\u{1F4E1} \u0627\u0646\u062A\u0642\u0627\u0644 \u0625\u0644\u0649 " + top.disp + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 (" + topScore + ")");
-    nativeNotify("AB-KING \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curSc);
+    pushLog("server", "\u{1F3AF} \u0627\u0646\u062A\u0642\u0627\u0644 \u0644\u0644\u0623\u0641\u0636\u0644 \u0642\u0628\u0644 \u0627\u0644\u0635\u0641\u0642\u0629: " + curDisp + " (" + curSc + ") \u2192 " + best.disp + " (" + best.score + ") \u2014 \u0643\u0644 \u0627\u0644\u0634\u0631\u0648\u0637 \u0645\u062A\u0648\u0641\u0631\u0629 \u2014 \u062A\u064F\u062F\u0631\u0633 60 \u062B\u0627\u0646\u064A\u0629 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
+    toast("\u{1F3AF} \u0627\u0644\u0623\u0641\u0636\u0644 \u0627\u0644\u0622\u0646: " + best.disp + " \u2014 " + best.score);
+    nativeNotify("AB-KING \u2014 \u0627\u0646\u062A\u0642\u0627\u0644 \u0644\u0644\u0623\u0641\u0636\u0644", best.disp + " \u062F\u0631\u062C\u0629 " + best.score + " \u0642\u0628\u0644 \u0627\u0644\u0635\u0641\u0642\u0629");
     saveCfg({
-      symbol: top.symbol,
+      symbol: best.symbol,
       leverage: S.config.leverage,
       levels: S.config.levels,
       gridStepPct: S.config.gridStepPct,
@@ -4734,7 +4694,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.0.9", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.1.0", at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {
