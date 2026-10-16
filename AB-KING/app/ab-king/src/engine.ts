@@ -479,10 +479,10 @@ export async function backgroundPipeline(){
     const cands=r.list.filter(l=>l.symbol!==S.config.symbol&&(l.score||0)>=55);
     if(!cands.length) return;
     const nxt=cands[0];
+    S._nextReady=true;
+    S._nextStudiedAt=Date.now();
     if(S._nextSymbol!==nxt.symbol){
       S._nextSymbol=nxt.symbol;
-      S._nextReady=true;
-      S._nextStudiedAt=Date.now();
       if(Date.now()-(S._bgLogAt||0)>120000){ S._bgLogAt=Date.now();
         pushLog('server','\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A '+nxt.disp+' (\u062F\u0631\u062C\u0629 '+nxt.score+') \u062C\u0627\u0647\u0632 \u2014 \u064A\u064F\u0641\u062A\u062D \u0641\u0648\u0631 \u0627\u0644\u062C\u0646\u064A'); } }
   }catch(e){ logSwallow('silent-catch', e); }
@@ -490,6 +490,11 @@ export async function backgroundPipeline(){
 export function openNextReady(){
   if(!S._nextSymbol||!S._nextReady) return false;
   if(S.position) return false;
+  // ─── إصلاح الدوران المتسارع (المسار الثاني): القفز الفوري للمرشح المدروس
+  // مسموح فقط خلال 10 دقائق بعد جني مكتمل — لا كل 30 ثانية بلا مركز كما كان ───
+  if(!S._harvestAt||Date.now()-S._harvestAt>10*60*1000){ S._nextReady=false; S._nextSymbol=null; return false; }
+  // المرشح يجب أن يبقى مدروسًا حديثًا (خلال 15 دقيقة) — لا فتح ببيانات باردة
+  if(Date.now()-(S._nextStudiedAt||0)>15*60*1000){ S._nextReady=false; S._nextSymbol=null; return false; }
   if(S._nextSymbol===S.config.symbol){ S._nextReady=false; return false; }
   const sym=S._nextSymbol;
   S._nextReady=false; S._nextSymbol=null;
@@ -1561,6 +1566,7 @@ function coveringLoser(l,p){ const pos=S.position; if(!pos||l.reduceOnly) return
 function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
     exCancelAll(S.config.symbol).catch(()=>{});
     exCancelStops(S.config.symbol).catch(()=>{}); }
+  S._harvestAt=Date.now(); // لحظة اكتمال الدورة — القفز للعملة التالية مسموح بعدها فقط
   S._guardId=null; S._tpBanked=0; S._trailFloor=0;
   for(const g of S.grid){ if(g.status==='armed'||g.status==='open'||g.status==='staged'){
     g.status='cancelled'; g.exchangeOrderId=null; } }
