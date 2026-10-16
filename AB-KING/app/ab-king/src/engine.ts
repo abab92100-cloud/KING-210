@@ -768,7 +768,7 @@ export async function maybeSwitchSymbol(){
   if(S.position){
     try{ await scanRadar(); }catch(e){ logSwallow('silent-catch', e); }
     return; }
-  if(Date.now()-_lastSwitchAt<20000) return;
+  if(Date.now()-_lastSwitchAt<45000) return;
   // دوران زمني: لا صفقة خلال 45 دقيقة = العملة بايرة للبوت — انتقل لأقوى عملة أخرى
   const idleMs=Date.now()-(S.lastHuntAt||S.startedAt||Date.now());
   const rotate=idleMs>5*60*1000; // دوران سريع: 5 دقائق بلا فرصة = العملة بايرة
@@ -800,7 +800,7 @@ export async function maybeSwitchSymbol(){
     if(cur&&cur.symbol===top.symbol) return;
     if(!cur){ if(topScore<55) return; }
     else { const curScore=cur.score||0;
-      if(topScore-curScore<12||curScore>=55) return; }
+      if(topScore-curScore<18||curScore>=55) return; }
     _lastSwitchAt=Date.now();
     const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
     pushLog('server','\ud83d\udce1 \u062a\u0628\u062f\u064a\u0644 \u0630\u0643\u064a: '+curDisp+' ('+curSc+') \u2192 '+top.disp+' ('+topScore+') \u2014 '+
@@ -1876,7 +1876,7 @@ function toxicBlocked(dir){ const lv=sanctionLevel(dir);
    ================================================================ */
 function profOf(){ const mem=S.memory; return mem&&mem.profiles?mem.profiles[S.config.symbol]:null; }
 function profFresh(){ const p=profOf(); return p&&Date.now()-p.at<24*3600*1000?p:null; }
-function startStudy(short){ S.studyUntil=Date.now()+(short?15000:60000);
+function startStudy(short){ S.studyUntil=Date.now()+(short?12000:28000);
   S.studyAcc={vols:[],sps:[],act:0,whales:0}; }
 function studying(){ return !!(S.studyUntil&&Date.now()<S.studyUntil); }
 function studyTick(){ if(!S.studyUntil) return;
@@ -1963,13 +1963,13 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(sig.length<2){
     // إشارة واحدة تكفي إن كانت قوية: مرساة كبيرة (≥1.5×عتبة الصيد) أو فجوة مارك واضحة
     const need=effectiveHuntPct();
-    const bigRetrace=sig.some(x=>x.indexOf('مرساة')===0&&parseFloat(x.replace(/[^٠-٩.]/g,''))>=need*1.5);
-    const markGap=sig.some(x=>x.indexOf('فجوة مارك')===0);
-    if(!bigRetrace&&!markGap){
-      const hasRetrace=sig.some(x=>x.indexOf('مرساة')===0);
-      if(!hasRetrace) return null;
-      const support=sig.some(x=>x.indexOf('مرساة')!==0);
-      if(!support) return null; } }
+    const markGap=sig.some(x=>x.indexOf('\u0641\u062c\u0648\u0629 \u0645\u0627\u0631\u0643')===0);
+    const decentRetrace=sig.some(x=>x.indexOf('\u0645\u0631\u0633\u0627\u0629')===0&&parseFloat(x.replace(/[^\u0660-\u0669.]/g,''))>=need*0.8);
+    const strongSingle=markGap||decentRetrace||(sig.length===1&&(
+      sig[0].indexOf('\u0632\u062e\u0645')===0||sig[0].indexOf('\u0627\u062a\u062c\u0627\u0647')===0||
+      sig[0].indexOf('\u062d\u064a\u062a\u0627\u0646')===0||sig[0].indexOf('\u0627\u0646\u062d\u0631\u0627\u0641')===0||
+      sig[0].indexOf('\u0641\u062e \u0627\u062e\u062a\u0631\u0627\u0642')===0||sig[0].indexOf('\u0636\u063a\u0637 \u0623\u0648\u0627\u0645\u0631')===0));
+    if(!strongSingle) return null; }
   S._lastSig=sig.slice(0,3).join(' · ');
   return packHunt(p); }
 function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
