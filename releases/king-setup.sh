@@ -1,70 +1,50 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# ══════════════════════════════════════════════════════════════
-# KING Trading — مثبّت ومشغّل سيرفر الجوال بأمر واحد
-# الاستخدام (انسخه كاملًا في Termux):
-#   curl -sL https://github.com/abab92100-cloud/King/raw/main/releases/king-setup.sh | bash
-# مهم: إن كان السيرفر القديم يعمل في النافذة (سطور تتكرر) اضغط Ctrl+C أولًا ثم الصق الأمر
-# إن لم يوجد curl أصلًا:
-#   pkg install -y curl && curl -sL https://github.com/abab92100-cloud/King/raw/main/releases/king-setup.sh | bash
-# ══════════════════════════════════════════════════════════════
+# ================================================================
+# AB-KING — إعداد سيرفر البوت الدائم في Termux (ضغطة واحدة)
+# · يثبّت Node.js إن لم يكن موجودًا
+# · يحمي Termux من تجميد أندرويد في الخلفية (قفل اليقظة)
+# · يجهّز الإقلاع التلقائي بعد إعادة تشغيل الجوال (Termux:Boot)
+# · يشغّل السيرفر إن لم يكن شغالًا ويحوّله للنسخة الأحدث
+# الحالة والمفاتيح محفوظة في ~/.ab-king ولا تُمس أبدًا
+# ================================================================
+set -e
+echo "══ AB-KING — إعداد السيرفر الدائم ══"
 
-echo "═══ KING — سيرفر الجوال ═══"
-
-# 0) فحص الاتصال أولًا — خطأ واضح بدل صمت محيّر
-echo "• فحص الاتصال بالإنترنت..."
-if ! curl -sI --max-time 12 https://github.com >/dev/null 2>&1; then
-  echo "✗ لا يصل الجوال إلى GitHub — تحقق من الإنترنت (أو جرّب بيانات الجوال بدل الواي فاي) ثم أعد الأمر"
-  exit 1
-fi
-echo "  الاتصال سليم ✓"
-
-# 1) Node.js — يُثبَّت تلقائيًا إن لم يوجد
-#    (</dev/null يمنع pkg من التهام مجرى السكربت أثناء التنفيذ عبر الأنبوب)
+# 1) Node.js
 if ! command -v node >/dev/null 2>&1; then
-  echo "• تثبيت Node.js (أول مرة فقط — قد يستغرق دقيقة)..."
-  pkg update -y </dev/null
-  pkg install -y nodejs-lts </dev/null
+  echo "• تثبيت Node.js..."
+  pkg install nodejs -y
 fi
-echo "  Node $(node -v) ✓"
+echo "✓ Node $(node -v)"
 
-# 2) تحميل أحدث نسخة من السيرفر دائمًا (رابط latest لا يتقادم) + إعادة محاولة
-mkdir -p "$HOME/king" && cd "$HOME/king"
-echo "• تحميل أحدث سيرفر..."
-if ! curl -L -s --fail --retry 3 --max-time 60 -o king-server.mjs "https://github.com/abab92100-cloud/King/raw/main/releases/king-server.mjs"; then
-  echo "✗ فشل تحميل السيرفر — أعد المحاولة بعد دقيقة"
-  exit 1
+# 2) أحدث نسخة من السيرفر
+echo "• تحميل أحدث سيرفر من المستودع..."
+curl -sL -o ~/king-server.mjs https://raw.githubusercontent.com/abab92100-cloud/KING-210/main/releases/king-server.mjs
+echo "✓ السيرفر محدّث"
+
+# 3) قفل اليقظة — يمنع أندرويد من تجميد Termux في الخلفية
+termux-wake-lock 2>/dev/null && echo "✓ قفل اليقظة مفعّل (Termux لا ينام)" || echo "! pkg install termux-tools ثم أعد المحاولة"
+
+# 4) إقلاع تلقائي بعد إعادة تشغيل الجوال
+mkdir -p ~/.termux/boot
+cat > ~/.termux/boot/king.sh <<'EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+termux-wake-lock
+pgrep -f king-server.mjs >/dev/null 2>&1 || nohup node ~/king-server.mjs >> ~/king-server.log 2>&1 &
+EOF
+chmod +x ~/.termux/boot/king.sh
+echo "✓ الإقلاع التلقائي مُجهّز (يعمل بعد تثبيت تطبيق Termux:Boot من متجر F-Droid مرة واحدة)"
+
+# 5) تشغيل السيرفر الآن إن لم يكن شغالًا
+if pgrep -f king-server.mjs >/dev/null 2>&1; then
+  echo "• السيرفر يعمل — إعادة تشغيله بالنسخة الجديدة..."
+  pkill -f king-server.mjs || true
+  sleep 1
 fi
-echo "  حُمّل $(wc -c < king-server.mjs) بايت ✓"
+nohup node ~/king-server.mjs >> ~/king-server.log 2>&1 &
+echo "✓ السيرفر انطلق"
 
-# 3) إيقاف أي سيرفر قديم — تشغيل الأمر مرتين كان يجعل النسخة الجديدة تصطدم
-#    بالمنفذ المشغول فتنهار وتعيد المحاولة بلا نهاية وكأن الأمر «لا يعمل»
-echo "• إيقاف أي نسخة قديمة من السيرفر..."
-pkill -f king-server.mjs 2>/dev/null || true
+# 6) فحص الصحة
 sleep 2
-
-# 4) منع نوم المعالج — السيرفر يعمل والشاشة مطفأة
-echo "• تفعيل قفل الاستيقاظ..."
-termux-wake-lock 2>/dev/null || true
-
-# 4ب) تحذير البطارية — بدونه يقتل أندرويد السيرفر بعد ~30 دقيقة خلفية
-echo ""
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║  ⚠ خطوة إلزامية مرة واحدة حتى لا يتوقف السيرفر وأنت نائم:  ║"
-echo "║  إعدادات الجوال ← التطبيقات ← Termux ← البطارية          ║"
-echo "║  ← اختر «غير مقيَّد / Unrestricted»                       ║"
-echo "║  وفي «العناية بالبطارية» أضف Termux إلى قائمة            ║"
-echo "║  «التطبيقات التي لا تُثبَّط أبدًا»                         ║"
-echo "╚══════════════════════════════════════════════════════════╝"
-echo ""
-
-echo "• السيرفر يعمل الآن — افتح تطبيق KING وستظهر شارة «سيرفر»"
-echo "  (أبقِ هذه النافذة مفتوحة — إن توقف السيرفر يعود تلقائيًا خلال 3 ثوانٍ)"
-echo "──────────────────────────────────────────────"
-
-# 5) حارس إعادة التشغيل الذاتي: أي توقف مفاجئ = انطلاق من جديد خلال 3 ثوانٍ
-#    والحالة محفوظة في ملف المخزن فيستأنف من حيث توقف لا من الصفر
-while true; do
-  node king-server.mjs
-  echo "⚠ السيرفر توقف — إعادة تشغيل خلال 3 ثوانٍ... (للإيقاف النهائي: Ctrl+C)"
-  sleep 3
-done
+echo "• فحص الصحة..."
+curl -s 127.0.0.1:8787/health && echo "" && echo "══ تم — البوت يعمل الآن ومحمي من الخلفية ══" || echo "! راجع السجل: cat ~/king-server.log"
