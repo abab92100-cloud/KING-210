@@ -91,13 +91,27 @@ export function startSilentKeepAlive(){ if(_kaCtx||!(typeof window!=='undefined'
   }catch(e){ logSwallow("silent-catch", e); } }
 /* خدمة أمامية أندرويد: إشعار دائم يُبقي العملية حية ويمنع النظام من قتلها في الخلفية،
    + طلب استثناء «تحسين البطارية» مرة واحدة — السبب الثاني الأكبر لتوقف البوت أثناء النوم */
+let _fsTimer:any=null;
+function fsStart(){ if(!(typeof window!=='undefined'&&window.Capacitor)) return;
+  try{ const FS=((window.Capacitor.Plugins||{}).ForegroundService);
+    if(!FS||!FS.startForegroundService) return;
+    // بلا serviceType صريح: أندرويد يستخدم النوع المعلن في المانيفست (specialUse)
+    // — القيمة القديمة (1 = camera) كانت تُفشل بدء الخدمة وتُسقط التطبيق كليًا
+    FS.startForegroundService({id:7,title:'KING يعمل',
+      body:'متصل بالمنصة ويراقب الصفقات باستمرار',smallIcon:'ic_launcher',silent:true,
+      }).catch(()=>{});
+  }catch(e){ logSwallow("silent-catch", e); } }
 function startForegroundSvc(){ if(!(typeof window!=='undefined'&&window.Capacitor)) return;
   try{ const P=(window.Capacitor&&window.Capacitor.Plugins)||{};
     const FS=P.ForegroundService;
-    if(FS&&FS.startForegroundService)
-      FS.startForegroundService({id:7,title:'KING يعمل',
-        body:'متصل بالمنصة ويراقب الصفقات باستمرار',smallIcon:'ic_launcher',silent:true,
-        serviceType:1}).catch(()=>{});
+    fsStart();
+    // إعادة تأكيد الخدمة كل 5 دقائق وعند العودة للواجهة — لو قتلها النظام تعود فورًا
+    if(!_fsTimer) _fsTimer=setInterval(()=>{ try{ fsStart(); }catch(e){ logSwallow("silent-catch", e); } },300000);
+    if(typeof document!=='undefined') document.addEventListener('visibilitychange',()=>{
+      if(!document.hidden){ try{ fsStart(); }catch(e){ logSwallow("silent-catch", e); } } });
+    // أندرويد 13+: إذن الإشعارات مطلوب لإظهار إشعار الخدمة الأمامية
+    try{ if(FS&&FS.requestPermissions&&!(localStorage.getItem('abking_notif_asked')))
+      FS.requestPermissions().then(()=>{ localStorage.setItem('abking_notif_asked','1'); }).catch(()=>{}); }catch(e){ logSwallow("silent-catch", e); }
     const BO=P.BatteryOptimization;
     if(BO&&BO.isBatteryOptimizationEnabled&&!(localStorage.getItem('abking_bo_asked')))
       BO.isBatteryOptimizationEnabled().then(r=>{

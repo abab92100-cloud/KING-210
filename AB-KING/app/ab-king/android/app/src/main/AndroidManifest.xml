@@ -33,16 +33,26 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
 
+        <!--
+          خدمة أمامية من نوع specialUse: بوت تداول يعمل ٢٤/٧ ويحتاج قناة سوق دائمة.
+          النوع القديم dataSync له مهلة ٦ ساعات في أندرويد 15+ ثم يقتله النظام نهائيًا،
+          و specialUse بلا مهلة — الحل الصحيح للعمل المتواصل بلا انقطاع.
+        -->
         <service
             android:name="io.capawesome.capacitorjs.plugins.foregroundservice.AndroidForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Persistent market-data connection for the automated trading engine" />
+        </service>
     </application>
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 </manifest>
