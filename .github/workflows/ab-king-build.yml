@@ -123,7 +123,11 @@ jobs:
           git config user.name "ci-bot"
           git config user.email "ci@users.noreply.github.com"
           cp AB-KING/app/ab-king/android/KING-trading-signed.apk releases/AB-KING-latest.apk
+          # سيرفر Termux (محرك البوت الحقيقي) — يُنشر مع كل بناء لتحديث جوال المالك:
+          # curl -L -o ~/king-server.mjs https://raw.githubusercontent.com/abab92100-cloud/KING-210/main/releases/king-server.mjs
+          cp AB-KING/app/ab-king/server-dist/ab-king-server.mjs releases/king-server.mjs
           git add releases/AB-KING-latest.apk
+          git add releases/king-server.mjs
           git add AB-KING/app/ab-king/android/king-release.keystore
           git commit -m "ci: update AB-KING-latest.apk (stable signature) [skip ci]" || echo "no change"
           git push

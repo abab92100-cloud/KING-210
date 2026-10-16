@@ -527,21 +527,55 @@ function startSilentKeepAlive() {
     logSwallow("silent-catch", e);
   }
 }
+var _fsTimer = null;
+function fsStart() {
+  if (!(typeof window !== "undefined" && window.Capacitor)) return;
+  try {
+    const FS = (window.Capacitor.Plugins || {}).ForegroundService;
+    if (!FS || !FS.startForegroundService) return;
+    FS.startForegroundService({
+      id: 7,
+      title: "KING \u064A\u0639\u0645\u0644",
+      body: "\u0645\u062A\u0635\u0644 \u0628\u0627\u0644\u0645\u0646\u0635\u0629 \u0648\u064A\u0631\u0627\u0642\u0628 \u0627\u0644\u0635\u0641\u0642\u0627\u062A \u0628\u0627\u0633\u062A\u0645\u0631\u0627\u0631",
+      smallIcon: "ic_launcher",
+      silent: true
+    }).catch(() => {
+    });
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  }
+}
 function startForegroundSvc() {
   if (!(typeof window !== "undefined" && window.Capacitor)) return;
   try {
     const P = window.Capacitor && window.Capacitor.Plugins || {};
     const FS = P.ForegroundService;
-    if (FS && FS.startForegroundService)
-      FS.startForegroundService({
-        id: 7,
-        title: "KING \u064A\u0639\u0645\u0644",
-        body: "\u0645\u062A\u0635\u0644 \u0628\u0627\u0644\u0645\u0646\u0635\u0629 \u0648\u064A\u0631\u0627\u0642\u0628 \u0627\u0644\u0635\u0641\u0642\u0627\u062A \u0628\u0627\u0633\u062A\u0645\u0631\u0627\u0631",
-        smallIcon: "ic_launcher",
-        silent: true,
-        serviceType: 1
-      }).catch(() => {
-      });
+    fsStart();
+    if (!_fsTimer) _fsTimer = setInterval(() => {
+      try {
+        fsStart();
+      } catch (e) {
+        logSwallow("silent-catch", e);
+      }
+    }, 3e5);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        try {
+          fsStart();
+        } catch (e) {
+          logSwallow("silent-catch", e);
+        }
+      }
+    });
+    try {
+      if (FS && FS.requestPermissions && !localStorage.getItem("abking_notif_asked"))
+        FS.requestPermissions().then(() => {
+          localStorage.setItem("abking_notif_asked", "1");
+        }).catch(() => {
+        });
+    } catch (e) {
+      logSwallow("silent-catch", e);
+    }
     const BO = P.BatteryOptimization;
     if (BO && BO.isBatteryOptimizationEnabled && !localStorage.getItem("abking_bo_asked"))
       BO.isBatteryOptimizationEnabled().then((r) => {
@@ -620,7 +654,7 @@ function notify(txt, kind) {
     }
   }
   pushLog(kind === "warn" ? "error" : "fill", txt);
-  nativeNotify("KING-trading", txt);
+  nativeNotify("AB-KING", txt);
 }
 var listeners = /* @__PURE__ */ new Set();
 var emitTimer = null;
@@ -694,7 +728,7 @@ function relayServerLogs() {
         logSwallow("silent-catch", e);
       }
     }
-    nativeNotify("KING-trading", l.text);
+    nativeNotify("AB-KING", l.text);
   }
 }
 async function remoteSync() {
@@ -914,7 +948,7 @@ function loadAll() {
     if (S.status === "running") {
       if (S._savedAt && Date.now() - S._savedAt < 30 * 60 * 1e3) {
         pushLog("server", "\u26A1 \u0623\u0648\u0642\u0641 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0644\u062D\u0638\u064A\u064B\u0627 \u2014 \u0627\u0633\u062A\u064F\u0624\u0646\u0641 \u0627\u0644\u0635\u064A\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0645\u0646 \u062D\u064A\u062B \u062A\u0648\u0642\u0641");
-        nativeNotify("KING-trading \u0639\u0627\u062F \u0644\u0644\u0639\u0645\u0644 \u2713", "\u0623\u0648\u0642\u0641 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629 \u2014 \u0627\u0633\u062A\u064F\u0624\u0646\u0641 \u0627\u0644\u0635\u064A\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627", true);
+        nativeNotify("AB-KING \u0639\u0627\u062F \u0644\u0644\u0639\u0645\u0644 \u2713", "\u0623\u0648\u0642\u0641 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629 \u2014 \u0627\u0633\u062A\u064F\u0624\u0646\u0641 \u0627\u0644\u0635\u064A\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627", true);
       } else {
         S.status = "paused";
         pushLog("info", "\u0627\u0633\u062A\u064F\u0639\u064A\u062F\u062A \u0627\u0644\u062C\u0644\u0633\u0629 \u0645\u062A\u0648\u0642\u0641\u0629 \u0645\u0624\u0642\u062A\u064B\u0627 \u2014 \u0627\u0636\u063A\u0637 \xAB\u062A\u0634\u063A\u064A\u0644\xBB \u0644\u0644\u0628\u062F\u0621");
@@ -1141,6 +1175,68 @@ function radarScore(x) {
     why.push("\u062D\u0631\u0643\u0629 \u064A\u0648\u0645 \u0645\u062A\u0637\u0631\u0641\u0629");
   }
   return { score: clamp(Math.round(sc), 0, 100), why };
+}
+S._nextSymbol = null;
+S._nextReady = false;
+var _bgPipeAt = 0;
+async function backgroundPipeline() {
+  if (S.status !== "running") return;
+  if (Date.now() - _bgPipeAt < 3e4) return;
+  _bgPipeAt = Date.now();
+  try {
+    const r = S.radar && S.radar.list && S.radar.list.length ? S.radar : await scanRadar();
+    if (!r || !r.list || !r.list.length) return;
+    const cands = r.list.filter((l) => l.symbol !== S.config.symbol && (l.score || 0) >= 55);
+    if (!cands.length) return;
+    const nxt = cands[0];
+    S._nextReady = true;
+    S._nextStudiedAt = Date.now();
+    if (S._nextSymbol !== nxt.symbol) {
+      S._nextSymbol = nxt.symbol;
+      if (Date.now() - (S._bgLogAt || 0) > 12e4) {
+        S._bgLogAt = Date.now();
+        pushLog("server", "\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A " + nxt.disp + " (\u062F\u0631\u062C\u0629 " + nxt.score + ") \u062C\u0627\u0647\u0632 \u2014 \u064A\u064F\u0641\u062A\u062D \u0641\u0648\u0631 \u0627\u0644\u062C\u0646\u064A");
+      }
+    }
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  }
+}
+function openNextReady() {
+  if (!S._nextSymbol || !S._nextReady) return false;
+  if (S.position) return false;
+  if (!S._harvestAt || Date.now() - S._harvestAt > 10 * 60 * 1e3) {
+    S._nextReady = false;
+    S._nextSymbol = null;
+    return false;
+  }
+  if (Date.now() - (S._nextStudiedAt || 0) > 15 * 60 * 1e3) {
+    S._nextReady = false;
+    S._nextSymbol = null;
+    return false;
+  }
+  if (S._nextSymbol === S.config.symbol) {
+    S._nextReady = false;
+    return false;
+  }
+  const sym = S._nextSymbol;
+  S._nextReady = false;
+  S._nextSymbol = null;
+  pushLog("server", "\u26A1 \u0641\u062A\u062D \u0641\u0648\u0631\u064A \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u0645\u062F\u0631\u0648\u0633\u0629 \u062E\u0644\u0641\u064A\u064B\u0627 " + sym.replace(/USDTM$/i, "") + " \u062A\u062F\u062E\u0644 \u0627\u0644\u0622\u0646");
+  saveCfg({
+    symbol: sym,
+    leverage: S.config.leverage,
+    levels: S.config.levels,
+    gridStepPct: S.config.gridStepPct,
+    huntPct: S.config.huntPct,
+    tpNet: S.config.tpNet,
+    cycleBalance: S.config.cycleBalance,
+    directionMode: S.config.directionMode,
+    mode: S.config.mode,
+    sound: S.sound,
+    soundTone: S.soundTone
+  });
+  return true;
 }
 async function scanRadar() {
   if (S._radarBusy) return S.radar;
@@ -1547,9 +1643,12 @@ async function maybeSwitchSymbol() {
     }
     return;
   }
-  if (Date.now() - _lastSwitchAt < 2e4) return;
+  if (Date.now() - _lastSwitchAt < 45e3) return;
+  if (studying()) return;
+  if (!warmedUp()) return;
+  if (Date.now() - (S._dwellAt || S.startedAt || Date.now()) < 10 * 60 * 1e3) return;
   const idleMs = Date.now() - (S.lastHuntAt || S.startedAt || Date.now());
-  const rotate = idleMs > 5 * 60 * 1e3;
+  const rotate = idleMs > 45 * 60 * 1e3;
   try {
     const r = await scanRadar();
     if (!r || !r.list || !r.list.length) return;
@@ -1569,7 +1668,7 @@ async function maybeSwitchSymbol() {
       const curDisp2 = cur ? cur.disp : S.config.displaySymbol;
       pushLog("server", "\u{1F504} \u062F\u0648\u0631\u0627\u0646 \u0632\u0645\u0646\u064A (" + Math.round(idleMs / 6e4) + " \u062F \u0628\u0644\u0627 \u0641\u0631\u0635\u0629): " + curDisp2 + " \u2192 " + top.disp + " (" + topScore2 + ") \u2014 " + (top.state || "") + " \u2014 \u0627\u0644\u0628\u062D\u062B \u0645\u0633\u062A\u0645\u0631 \u0639\u0646 \u0641\u0631\u0635\u0629 \u0623\u0641\u0636\u0644");
       toast("\u{1F504} \u062F\u0648\u0631\u0627\u0646: " + top.disp + " \u2014 \u0628\u062D\u062B \u0639\u0646 \u0641\u0631\u0635\u0629");
-      nativeNotify("KING-trading \u2014 \u062F\u0648\u0631\u0627\u0646 \u0625\u0644\u0649 \u0639\u0645\u0644\u0629 \u0623\u062E\u0631\u0649", top.disp + " \u062F\u0631\u062C\u0629 " + topScore2);
+      nativeNotify("AB-KING \u2014 \u062F\u0648\u0631\u0627\u0646 \u0625\u0644\u0649 \u0639\u0645\u0644\u0629 \u0623\u062E\u0631\u0649", top.disp + " \u062F\u0631\u062C\u0629 " + topScore2);
       saveCfg({
         symbol: top.symbol,
         leverage: S.config.leverage,
@@ -1592,13 +1691,13 @@ async function maybeSwitchSymbol() {
       if (topScore < 55) return;
     } else {
       const curScore = cur.score || 0;
-      if (topScore - curScore < 12 || curScore >= 55) return;
+      if (topScore - curScore < 18 || curScore >= 55) return;
     }
     _lastSwitchAt = Date.now();
     const curDisp = cur ? cur.disp : S.config.displaySymbol, curSc = cur ? cur.score : 0;
     pushLog("server", "\u{1F4E1} \u062A\u0628\u062F\u064A\u0644 \u0630\u0643\u064A: " + curDisp + " (" + curSc + ") \u2192 " + top.disp + " (" + topScore + ") \u2014 " + (top.state || "") + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062F\u0627\u0631");
     toast("\u{1F4E1} \u0627\u0646\u062A\u0642\u0627\u0644 \u0625\u0644\u0649 " + top.disp + " \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 (" + topScore + ")");
-    nativeNotify("KING-trading \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curSc);
+    nativeNotify("AB-KING \u2014 \u062A\u0628\u062F\u064A\u0644 \u0639\u0645\u0644\u0629", top.disp + " \u062F\u0631\u062C\u0629 " + topScore + " \u0645\u0642\u0627\u0628\u0644 " + curSc);
     saveCfg({
       symbol: top.symbol,
       leverage: S.config.leverage,
@@ -2609,7 +2708,7 @@ function maybeReport() {
   S._lastReportAt = now;
   const msg = "\u0635\u0641\u0642\u0627\u062A \u0645\u062A\u0639\u0644\u064E\u0651\u0645\u0629: " + st.n + " \xB7 \u0646\u062C\u0627\u062D " + (st.winRate * 100).toFixed(0) + "% \xB7 \u0639\u0627\u0645\u0644 \u0627\u0644\u0631\u0628\u062D " + st.pf + " \xB7 \u0635\u0627\u0641\u064A \u0627\u0644\u0630\u0627\u0643\u0631\u0629 " + fmtUsd(st.pnl);
   pushLog("info", "\u062A\u0642\u0631\u064A\u0631 \u062F\u0648\u0631\u064A \u2014 " + msg);
-  nativeNotify("KING-trading \u2014 \u062A\u0642\u0631\u064A\u0631 \u0627\u0644\u0623\u062F\u0627\u0621", msg);
+  nativeNotify("AB-KING \u2014 \u062A\u0642\u0631\u064A\u0631 \u0627\u0644\u0623\u062F\u0627\u0621", msg);
 }
 function trailTarget(base, floating) {
   if (!(floating > 0)) return base;
@@ -2685,6 +2784,7 @@ function _harvestCleanup(fp) {
     exCancelStops(S.config.symbol).catch(() => {
     });
   }
+  S._harvestAt = Date.now();
   S._guardId = null;
   S._tpBanked = 0;
   S._trailFloor = 0;
@@ -2725,7 +2825,11 @@ function creditExFillReal(l, delta, fp, realFee) {
     }
     S.lastAddAt = Date.now();
     if (l.qty - (l.exFilled || 0) > 1e-9) pushLog("server", "\u062A\u0646\u0641\u064A\u0630 \u062C\u0632\u0626\u064A: \u062F\u064F\u062E\u0644 " + delta + " \u0645\u0646 " + l.qty + " @ " + fmtPx(fp) + " \u2014 \u0627\u0644\u0628\u0627\u0642\u064A \u0645\u0639\u0644\u0651\u0642 \u064A\u064F\u0643\u0645\u0644 \u0623\u0648 \u064A\u064F\u0644\u063A\u0649 \u0639\u0646\u062F \u0627\u0644\u062C\u0646\u064A");
-    if (S.position && S.status === "running") syncPositionTp();
+    if (S.position && S.status === "running") {
+      syncPositionTp();
+      backgroundPipeline().catch(() => {
+      });
+    }
     return false;
   }
   const estFee2 = feeFor(delta * mult * fp, false);
@@ -3157,7 +3261,7 @@ function profFresh() {
   return p && Date.now() - p.at < 24 * 3600 * 1e3 ? p : null;
 }
 function startStudy(short) {
-  S.studyUntil = Date.now() + (short ? 15e3 : 6e4);
+  S.studyUntil = Date.now() + (short ? 12e3 : 28e3);
   S.studyAcc = { vols: [], sps: [], act: 0, whales: 0 };
 }
 function studying() {
@@ -3279,14 +3383,10 @@ function huntTrigger(p) {
   if (!sig2.length) return null;
   if (sig2.length < 2) {
     const need = effectiveHuntPct();
-    const bigRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0 && parseFloat(x.replace(/[^٠-٩.]/g, "")) >= need * 1.5);
     const markGap = sig2.some((x) => x.indexOf("\u0641\u062C\u0648\u0629 \u0645\u0627\u0631\u0643") === 0);
-    if (!bigRetrace && !markGap) {
-      const hasRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0);
-      if (!hasRetrace) return null;
-      const support = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") !== 0);
-      if (!support) return null;
-    }
+    const decentRetrace = sig2.some((x) => x.indexOf("\u0645\u0631\u0633\u0627\u0629") === 0 && parseFloat(x.replace(/[^\u0660-\u0669.]/g, "")) >= need * 0.8);
+    const strongSingle = markGap || decentRetrace || sig2.length === 1 && (sig2[0].indexOf("\u0632\u062E\u0645") === 0 || sig2[0].indexOf("\u0627\u062A\u062C\u0627\u0647") === 0 || sig2[0].indexOf("\u062D\u064A\u062A\u0627\u0646") === 0 || sig2[0].indexOf("\u0627\u0646\u062D\u0631\u0627\u0641") === 0 || sig2[0].indexOf("\u0641\u062E \u0627\u062E\u062A\u0631\u0627\u0642") === 0 || sig2[0].indexOf("\u0636\u063A\u0637 \u0623\u0648\u0627\u0645\u0631") === 0);
+    if (!strongSingle) return null;
   }
   S._lastSig = sig2.slice(0, 3).join(" \xB7 ");
   return packHunt(p);
@@ -4109,9 +4209,15 @@ async function botTick() {
       gapHunterTick().catch(() => {
       });
     }
-    if (S.position && S.status === "running") syncPositionTp();
+    if (S.position && S.status === "running") {
+      syncPositionTp();
+      backgroundPipeline().catch(() => {
+      });
+    }
     if (!S.position && S.status === "running") {
-      _lastSwitchAt = 0;
+      if (openNextReady()) return;
+      backgroundPipeline().catch(() => {
+      });
       maybeSwitchSymbol().catch(() => {
       });
     }
@@ -4232,7 +4338,7 @@ function startBot() {
     ];
   }
   pushLog("server", "\u062F\u0648\u0631\u0629 \u062C\u062F\u064A\u062F\u0629 " + (S.config.direction === "short" ? "\u0634\u0648\u0631\u062A" : "\u0644\u0648\u0646\u063A") + (S.regime ? " \xB7 " + S.regime.label : "") + " \u2014 \u0634\u0628\u0643\u0629 \u0641\u0639\u0651\u0627\u0644\u0629 " + effLevels() + " \u0645\u0646 " + S.config.levels + " (\u062A\u0631\u0643\u064A\u0632 \u064A\u0646\u0627\u0633\u0628 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644) \u0648\u0627\u0644\u0635\u064A\u062F \u064A\u0639\u0645\u0644");
-  nativeNotify("KING-trading \u064A\u0639\u0645\u0644 \u2713", "\u0627\u0644\u0628\u0648\u062A \u0645\u062A\u0635\u0644 \u0628\u0640 KuCoin \u0648\u064A\u062A\u062F\u0627\u0648\u0644 " + (S.config.displaySymbol || S.config.symbol) + " \u2014 \u064A\u0633\u062A\u0645\u0631 \u062D\u062A\u0649 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629", true);
+  nativeNotify("AB-KING \u064A\u0639\u0645\u0644 \u2713", "\u0627\u0644\u0628\u0648\u062A \u0645\u062A\u0635\u0644 \u0628\u0640 KuCoin \u0648\u064A\u062A\u062F\u0627\u0648\u0644 " + (S.config.displaySymbol || S.config.symbol) + " \u2014 \u064A\u0633\u062A\u0645\u0631 \u062D\u062A\u0649 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629", true);
   toast("\u0627\u0644\u0628\u0648\u062A \u064A\u0639\u0645\u0644 \u0627\u0644\u0622\u0646");
   emit();
   saveAll();
@@ -4487,6 +4593,7 @@ function saveCfg(v) {
     S._guardLogged = false;
     S._guardId = null;
     setStreamSymbol(sym);
+    S._dwellAt = Date.now();
     const pf = S.memory && S.memory.profiles && S.memory.profiles[sym];
     startStudy(!!(pf && Date.now() - pf.at < 24 * 3600 * 1e3));
     pushLog("server", "\u0627\u0646\u062A\u0642\u0627\u0644 \u0625\u0644\u0649 " + S.config.displaySymbol + " \u2014 \u0623\u064F\u0644\u063A\u064A\u062A \u062D\u0627\u0644\u0629 \u0627\u0644\u0632\u0648\u062C \u0627\u0644\u0633\u0627\u0628\u0642" + (pf && Date.now() - pf.at < 24 * 3600 * 1e3 ? " \xB7 \u0628\u0635\u0645\u062A\u0647\u0627 \u0645\u0639\u0631\u0648\u0641\u0629 \u2014 \u0625\u062D\u0645\u0627\u0621 \u0642\u0635\u064A\u0631" : " \xB7 \u062A\u064F\u062F\u0631\u0633 60 \u062B\u0627\u0646\u064A\u0629 \u0642\u0628\u0644 \u0623\u064A \u062F\u062E\u0648\u0644"));
@@ -4555,7 +4662,7 @@ function initEngine() {
   loadAll();
   if (S.config.symbol === "BTCUSDTM") S.config.symbol = "XBTUSDTM";
   S.config.displaySymbol = S.config.symbol.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");
-  pushLog("info", "KING-trading \u062C\u0627\u0647\u0632 \u2014 " + (S.config.mode === "live" ? "\u0648\u0636\u0639 LIVE" : "\u0648\u0636\u0639 \u0648\u0631\u0642\u064A"));
+  pushLog("info", "AB-KING \u062C\u0627\u0647\u0632 \u2014 " + (S.config.mode === "live" ? "\u0648\u0636\u0639 LIVE" : "\u0648\u0636\u0639 \u0648\u0631\u0642\u064A"));
   startStream(S.config.symbol, { onMessage: onStreamTick, onStatus: () => emitThrottled() });
   setInterval(botTick, TICK_MS);
   setInterval(emit, 1e3);
@@ -4627,7 +4734,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.0.9", at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {
