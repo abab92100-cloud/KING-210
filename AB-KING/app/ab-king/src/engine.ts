@@ -1,5 +1,5 @@
 /* ================================================================
-   KING-trading — بوت تداول عقود KuCoin الآجلة
+   AB-KING — بوت تداول عقود KuCoin الآجلة
    النسخة المتصلة: بيانات لحظية عبر WebSocket (دفع مستمر) +
    REST عبر بروكسي محلي (/kucoin) لتجاوز CORS.
    منطق المحرك مطابق للنسخة الأصلية: شبكة + صيد + جني +
@@ -141,7 +141,7 @@ function notify(txt:any,kind?:any){ if(S.sound){
     else if(kind==='warn'){ beep('alarm'); }
     else beep(S.soundTone);
     try{ if(typeof navigator!=='undefined'&&navigator.vibrate) navigator.vibrate(kind==='win'?[80,60,140]:120); }catch(e){ logSwallow("silent-catch", e); } }
-  pushLog(kind==='warn'?'error':'fill',txt); nativeNotify('KING-trading',txt); }
+  pushLog(kind==='warn'?'error':'fill',txt); nativeNotify('AB-KING',txt); }
 
 /* ---------- مخزن الحالة + إشعارات الواجهة ---------- */
 const listeners=new Set();
@@ -191,7 +191,7 @@ function relayServerLogs(){ // أحداث السيرفر تعيش في Termux و
       if(win){ beep(S.soundTone); setTimeout(()=>{ try{beep('bell');}catch(e){ logSwallow("silent-catch", e); } },200); }
       else if(l.kind==='error') beep('alarm'); else beep(S.soundTone);
       try{navigator.vibrate&&navigator.vibrate(win?[80,60,140]:120);}catch(e){ logSwallow("silent-catch", e); } }
-    nativeNotify('KING-trading',l.text); } }
+    nativeNotify('AB-KING',l.text); } }
 export async function remoteSync(){ const base=R(); if(!base) return false;
   try{ const r=await fetch(base+'/state'); const j=await r.json();
     if(!j||!j.ok) throw new Error('bad state');
@@ -291,7 +291,7 @@ function loadAll(){ try{
   if(S.status==='running'){
     if(S._savedAt&&Date.now()-S._savedAt<30*60*1000){
       pushLog('server','⚡ أوقف النظام التطبيق لحظيًا — استُؤنف الصيد تلقائيًا من حيث توقف');
-      nativeNotify('KING-trading عاد للعمل ✓','أوقف النظام التطبيق في الخلفية — استُؤنف الصيد تلقائيًا',true);
+      nativeNotify('AB-KING عاد للعمل ✓','أوقف النظام التطبيق في الخلفية — استُؤنف الصيد تلقائيًا',true);
     } else { S.status='paused';
       pushLog('info','استُعيدت الجلسة متوقفة مؤقتًا — اضغط «تشغيل» للبدء'); } }
   // بصمات العملات (دراسة 60 ثانية) تُحفظ — أما سجل التعلم فأُلغي نهائيًا بطلب المالك
@@ -820,9 +820,16 @@ export async function maybeSwitchSymbol(){
     try{ await scanRadar(); }catch(e){ logSwallow('silent-catch', e); }
     return; }
   if(Date.now()-_lastSwitchAt<45000) return;
+  // ─── حواجز الاستقرار (إصلاح البحث المتسارع عن عملة) ───
+  // 1) لا تبديل وسط دراسة: البصمة يجب أن تكتمل على العملة الحالية قبل أي حكم عليها
+  if(studying()) return;
+  // 2) لا تبديل قبل تجميع دفتر أوامر وشريط صفقات حقيقيين عن العملة الحالية
+  if(!warmedUp()) return;
+  // 3) إقامة إلزامية 10 دقائق: الحكم على العملة بعد عمل فعلي عليها لا بعد ثوانٍ
+  if(Date.now()-(S._dwellAt||S.startedAt||Date.now())<10*60*1000) return;
   // دوران زمني: لا صفقة خلال 45 دقيقة = العملة بايرة للبوت — انتقل لأقوى عملة أخرى
   const idleMs=Date.now()-(S.lastHuntAt||S.startedAt||Date.now());
-  const rotate=idleMs>5*60*1000; // دوران سريع: 5 دقائق بلا فرصة = العملة بايرة
+  const rotate=idleMs>45*60*1000; // دوران حكيم كما صُمم: فرصة حقيقية كاملة قبل الحكم
   try{ const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
     const cur=r.list.find(l=>l.symbol===S.config.symbol);
     let top=r.list[0];
@@ -841,7 +848,7 @@ export async function maybeSwitchSymbol(){
       pushLog('server','\ud83d\udd04 \u062fوران زمني ('+Math.round(idleMs/60000)+' د بلا فرصة): '+curDisp+' → '+top.disp+' ('+topScore+') — '+
         (top.state||'')+' — البحث مستمر عن فرصة أفضل');
       toast('\ud83d\udd04 دوران: '+top.disp+' — بحث عن فرصة');
-      nativeNotify('KING-trading — دوران إلى عملة أخرى',top.disp+' درجة '+topScore);
+      nativeNotify('AB-KING — دوران إلى عملة أخرى',top.disp+' درجة '+topScore);
       saveCfg({symbol:top.symbol,leverage:S.config.leverage,levels:S.config.levels,
         gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
         cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
@@ -857,7 +864,7 @@ export async function maybeSwitchSymbol(){
     pushLog('server','\ud83d\udce1 \u062a\u0628\u062f\u064a\u0644 \u0630\u0643\u064a: '+curDisp+' ('+curSc+') \u2192 '+top.disp+' ('+topScore+') \u2014 '+
       (top.state||'')+' \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062f\u0627\u0631');
     toast('\ud83d\udce1 \u0627\u0646\u062a\u0642\u0627\u0644 \u0625\u0644\u0649 '+top.disp+' \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 ('+topScore+')');
-    nativeNotify('KING-trading \u2014 \u062a\u0628\u062f\u064a\u0644 \u0639\u0645\u0644\u0629',top.disp+' \u062f\u0631\u062c\u0629 '+topScore+' \u0645\u0642\u0627\u0628\u0644 '+curSc);
+    nativeNotify('AB-KING \u2014 \u062a\u0628\u062f\u064a\u0644 \u0639\u0645\u0644\u0629',top.disp+' \u062f\u0631\u062c\u0629 '+topScore+' \u0645\u0642\u0627\u0628\u0644 '+curSc);
     saveCfg({symbol:top.symbol,leverage:S.config.leverage,levels:S.config.levels,
       gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
       cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
@@ -1493,7 +1500,7 @@ function maybeReport(){ const now=Date.now();
   const st=memStats(); if(!st.n) return;
   S._lastReportAt=now;
   const msg='صفقات متعلَّمة: '+st.n+' · نجاح '+(st.winRate*100).toFixed(0)+'% · عامل الربح '+st.pf+' · صافي الذاكرة '+fmtUsd(st.pnl);
-  pushLog('info','تقرير دوري — '+msg); nativeNotify('KING-trading — تقرير الأداء',msg); }
+  pushLog('info','تقرير دوري — '+msg); nativeNotify('AB-KING — تقرير الأداء',msg); }
 // ——— أمر الجني الموحّد الوحيد (نظام جديد كليًا — حُذفت tpTargetPrice/placeTpOpposite) ———
 // يُوضع فور فتح الصفقة ويُعاد حسابه مع كل إضافة: متوسط الدخول الفعلي + رسوم
 // الدخول المدفوعة فعلًا من السجل + رسوم الخروج taker المقدّرة + صافي TP_BASE_NET
@@ -2589,7 +2596,9 @@ export async function botTick(){
     if(!S.position&&S.status==='running'){
       if(openNextReady()) return;
       backgroundPipeline().catch(()=>{});
-      _lastSwitchAt=0; maybeSwitchSymbol().catch(()=>{}); }
+      // إصلاح القفز المتسارع: أُلغي تصفير مهلة التبريد — مهلة 45 ثانية تحمي العملة
+      // الحالية من التبديل كل بضع ثوانٍ، والدراسة تكتمل فعلًا قبل أي قرار تبديل
+      maybeSwitchSymbol().catch(()=>{}); }
     // انضباط الاتجاه: أي انقلاب يلغي فورًا سلم الجهة القديمة المسلّح —
     // بقاؤه بعد الانقلاب كان يملأ مستويات معاكسة فوق مركز جديد فيغلقه
     // بخسارة عابرة ويزرع شورتًا ولونغًا في الوقت نفسه
@@ -2655,7 +2664,7 @@ export function startBot(){ if(R()){ remoteCmd('start').then(()=>remoteSync()); 
   pushLog('server','دورة جديدة '+(S.config.direction==='short'?'شورت':'لونغ')+
     (S.regime?' · '+S.regime.label:'')+' — شبكة فعّالة '+effLevels()+' من '+S.config.levels+
     ' (تركيز يناسب رأس المال) والصيد يعمل');
-  nativeNotify('KING-trading يعمل ✓','البوت متصل بـ KuCoin ويتداول '+(S.config.displaySymbol||S.config.symbol)+' — يستمر حتى في الخلفية',true);
+  nativeNotify('AB-KING يعمل ✓','البوت متصل بـ KuCoin ويتداول '+(S.config.displaySymbol||S.config.symbol)+' — يستمر حتى في الخلفية',true);
   toast('البوت يعمل الآن'); emit(); saveAll(); }
 export function pauseBot(){ if(R()){ remoteCmd('pause').then(()=>remoteSync()); return; }
   if(S.status!=='running') return;
@@ -2768,6 +2777,7 @@ export function saveCfg(v){
     S._btcImp=null; S._btcPrev=null; S._actHist=[]; S._actMed=0; S._actAt=0; S._tradeTs=[];
     S._lossStreak=null; S._lastSig=null; S._vetoAt=0; S._guardPx=0; S._guardLogged=false; S._guardId=null;
     setStreamSymbol(sym);
+    S._dwellAt=Date.now(); // بداية إقامة جديدة: لا تبديل جديد قبل 10 دقائق عمل فعلي
     // بصمة العملة الجديدة: معروفة وحديثة = إحماء قصير · جديدة = دراسة كاملة قبل التداول
     const pf=S.memory&&S.memory.profiles&&S.memory.profiles[sym];
     startStudy(!!(pf&&Date.now()-pf.at<24*3600*1000));
@@ -2828,7 +2838,7 @@ export function initEngine(){
   loadAll();
   if(S.config.symbol==='BTCUSDTM') S.config.symbol='XBTUSDTM'; // الرمز الصحيح في عقود KuCoin
   S.config.displaySymbol=S.config.symbol.replace(/USDTM$/i,'').replace(/^XBT$/i,'BTC');
-  pushLog('info','KING-trading جاهز — '+(S.config.mode==='live'?'وضع LIVE':'وضع ورقي'));
+  pushLog('info','AB-KING جاهز — '+(S.config.mode==='live'?'وضع LIVE':'وضع ورقي'));
   // قناة الدفع المستمرة — تتصل فورًا وتعيد الاتصال تلقائيًا عند أي انقطاع
   startStream(S.config.symbol,{ onMessage:onStreamTick, onStatus:()=>emitThrottled() });
   setInterval(botTick,TICK_MS);

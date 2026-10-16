@@ -559,8 +559,8 @@ export default function App() {
   return (
     <div>
       <header>
-        <div className="logo">KING</div>
-        <div className="t"><b>KING TRADING</b><span>FUTURES BOT</span></div>
+        <div className="logo">AB</div>
+        <div className="t"><b>AB-KING</b><span>FUTURES BOT</span></div>
         <span className={'pill ' + (streamState.connected ? 'on' : 'dn-pill')} title="صحة قناة السعر اللحظية">
           <i></i>{streamState.connected ? 'متصل' : 'مقطوع'} · {pulseAge()}
         </span>
