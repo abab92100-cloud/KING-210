@@ -391,7 +391,7 @@ function exportCsv() {
   const rows = [...S.journal, ...(S.history || [])];
   const head = 'time,symbol,side,source,entry,exit,qty,pnl,fees,status\n';
   const body = rows.map(j => [
-    new Date(j.closedAt || j.openedAt).toISOString(), S.config.symbol, j.side, j.source,
+    new Date(j.closedAt || j.openedAt).toISOString(), (j.symbol || S.config.displaySymbol), j.side, j.source,
     j.entry, j.exit || '', j.qty, j.pnl != null ? j.pnl : '', j.fees, j.status,
   ].join(',')).join('\n');
   const blob = new Blob(['﻿' + head + body], { type: 'text/csv;charset=utf-8' });
@@ -425,7 +425,7 @@ function JournalScreen() {
               <div className="log" key={j.id}>
                 <span className={(pnl > 0 ? 'up' : pnl < 0 ? 'dn' : 'muted') + ' mono'}>{fmtUsd(pnl)}</span>
                 <span>
-                  {j.source + ' · ' + (j.side === 'short' ? 'شورت' : 'لونغ') + ' · ' +
+                  {(j.symbol || S.config.displaySymbol) + ' · ' + j.source + ' · ' + (j.side === 'short' ? 'شورت' : 'لونغ') + ' · ' +
                     (j.status === 'open' ? 'مفتوحة' : 'مغلقة') + (j.mergedOrders > 1 ? ' · متوسط ×' + j.mergedOrders : '') + ' '}
                   <span className="subtle">{fmtTime(j.closedAt || j.openedAt)}</span>
                 </span>

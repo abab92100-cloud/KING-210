@@ -979,6 +979,7 @@ function logSwallow(where, err) {
   }
 }
 function pushJr(row) {
+  row.symbol = row.symbol || S.config.displaySymbol;
   S.journal = [row, ...S.journal].slice(0, 120);
 }
 var DIRECT_BASE = "https://api-futures.kucoin.com";
@@ -1602,7 +1603,6 @@ async function gapHunterTick() {
           S._metaAt = 0;
           setStreamSymbol(cand.symbol);
           S.grid = [];
-          S.journal = [];
           S.tape = [];
           S.priceTrail = [];
           S.emaFast = S.emaSlow = null;
@@ -1955,7 +1955,7 @@ function spacingGate(p) {
   return Math.abs(p - last) / last >= minGap;
 }
 function filledAdds() {
-  const o = S.journal.filter((j) => j.status === "open");
+  const o = S.journal.filter((j) => j.status === "open" && (j.symbol === void 0 || j.symbol === S.config.displaySymbol));
   const n = o.reduce((a, j) => a + Math.max(1, j.mergedOrders || 1), 0);
   return n > 0 ? n : S.position ? 1 : 0;
 }
@@ -2209,7 +2209,7 @@ function levelQtys(center, n) {
   const cv = Math.max(1e-12, (S.multiplier || 1) * center);
   const lev = Math.max(1, c.leverage);
   const total = Math.max(0, c.cycleBalance) * 0.8;
-  const used = S.journal.filter((j) => j.status === "open").reduce((a, j) => a + j.qty * (S.multiplier || 1) * j.entry, 0) / lev;
+  const used = S.journal.filter((j) => j.status === "open" && (j.symbol === void 0 || j.symbol === S.config.displaySymbol)).reduce((a, j) => a + j.qty * (S.multiplier || 1) * j.entry, 0) / lev;
   let budget = Math.max(0, total - used) * (S.regime ? S.regime.sizeMult : 1) * memSizeMult();
   if (c.mode === "live" && S.exAvail > 0) budget = Math.min(budget, Math.max(0, S.exAvail * 0.95));
   else if (c.mode === "live" && S.exEquity > 0) budget = Math.min(budget, Math.max(0, S.exEquity * 0.95 - used));
@@ -2445,7 +2445,7 @@ function noteEntry(qty, price, fee, source, noCount) {
     at: Date.now()
   };
   const label = source === "hunt" ? "\u0635\u0641\u0642\u0629" : "\u0634\u0628\u0643\u0629";
-  const ex = S.journal.find((j) => j.status === "open" && j.side === side);
+  const ex = S.journal.find((j) => j.status === "open" && j.side === side && (j.symbol === void 0 || j.symbol === S.config.displaySymbol));
   if (ex) {
     const t = ex.qty + qty;
     ex.entry = (ex.entry * ex.qty + price * qty) / t;
@@ -2485,7 +2485,7 @@ function noteEntry(qty, price, fee, source, noCount) {
 }
 function noteClose(qty, exit, fee, source, pnl, lotId) {
   const lotId_ = lotId;
-  const row = (lotId_ ? S.journal.find((j) => j.id === lotId_ && j.status === "open") : null) || S.journal.find((j) => j.status === "open" && (source === "\u0625\u064A\u0642\u0627\u0641" || j.source === source)) || S.journal.find((j) => j.status === "open");
+  const row = (lotId_ ? S.journal.find((j) => j.id === lotId_ && j.status === "open") : null) || S.journal.find((j) => j.status === "open" && (source === "\u0625\u064A\u0642\u0627\u0641" || j.source === source) && (j.symbol === void 0 || j.symbol === S.config.displaySymbol)) || S.journal.find((j) => j.status === "open" && (j.symbol === void 0 || j.symbol === S.config.displaySymbol));
   if (row) {
     const share = row.qty > 0 ? row.fees * (qty / row.qty) : row.fees;
     const net = lotNet(row.side, row.entry, exit, qty, share + fee);
@@ -2542,7 +2542,7 @@ function noteClose(qty, exit, fee, source, pnl, lotId) {
   return pnl;
 }
 function notePartialClose(qty, exit, fee, lotId) {
-  const row = (lotId ? S.journal.find((j) => j.id === lotId && j.status === "open") : null) || S.journal.find((j) => j.status === "open");
+  const row = (lotId ? S.journal.find((j) => j.id === lotId && j.status === "open") : null) || S.journal.find((j) => j.status === "open" && (j.symbol === void 0 || j.symbol === S.config.displaySymbol));
   if (!row || !(qty > 0)) return 0;
   const share = row.qty > 0 ? row.fees * Math.min(1, qty / row.qty) : 0;
   const net = lotNet(row.side, row.entry, exit, qty, share + fee);
@@ -4506,7 +4506,6 @@ function saveCfg(v) {
     }
     S.grid = [];
     S.position = null;
-    S.journal = [];
     S._tpBanked = 0;
     S._trailFloor = 0;
     S.realizedPnl = 0;
@@ -4695,7 +4694,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.1.1", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.2.0", at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {

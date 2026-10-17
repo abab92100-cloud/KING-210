@@ -317,7 +317,8 @@ function logSwallow(where:any,err:any){
     pushLog('warn', where + ': ' + msg);
   }catch(e2){ /* rate-limit logger must never throw */ }
 }
-function pushJr(row:any){ S.journal=[row,...S.journal].slice(0,120); }
+function pushJr(row:any){ row.symbol=row.symbol||S.config.displaySymbol; // عملة الصفقة تُسجل معها — السجل لا يفقد سياقه عند الانتقال
+  S.journal=[row,...S.journal].slice(0,120); }
 
 /* ================================================================
    عميل KuCoin — REST عبر البروكسي المحلي /kucoin
@@ -799,7 +800,7 @@ export async function gapHunterTick(){
           S.config.displaySymbol=cand.symbol.replace(/USDTM$/i,'').replace(/^XBT$/i,'BTC');
           S.multiplier=1; S.tickSize=0.1; S._metaSym=null; S._metaAt=0;
           setStreamSymbol(cand.symbol);
-          S.grid=[]; S.journal=[]; S.tape=[]; S.priceTrail=[]; S.emaFast=S.emaSlow=null;
+          S.grid=[]; S.tape=[]; S.priceTrail=[]; S.emaFast=S.emaSlow=null; // السجل يبقى — الانتقال لا يمسح التاريخ
         }
         S._gapCtx={idx:cand.idx,exitDev:sig.exitDev,entryAt:Date.now()};
         // الحجم = نف معايير تطبيق KING النهائي (contractsForLevel):
@@ -1029,7 +1030,7 @@ function spacingGate(p){ if(!(p>0)) return true;
   const hfMin=S.config.hfMode?0.0004:0.0012;
   const minGap=Math.max(S.config.gridStepPct/100*(S.config.hfMode?0.25:0.75),hfMin);
   return Math.abs(p-last)/last>=minGap; }
-function filledAdds(){ const o=S.journal.filter(j=>j.status==='open');
+function filledAdds(){ const o=S.journal.filter(j=>j.status==='open'&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
   const n=o.reduce((a,j)=>a+Math.max(1,j.mergedOrders||1),0); return n>0?n:(S.position?1:0); }
 function addsBlocked(){ if(S.status!=='running') return false;
   if(filledAdds()>=effLevels()) return true;
@@ -1181,7 +1182,7 @@ function levelQtys(center,n){ const c=S.config;
   // وتُفرض القيمة نفسها على المنصة عبر changeCrossUserLeverage في liveSync
   const lev=Math.max(1,c.leverage);
   const total=Math.max(0,c.cycleBalance)*0.80; // 20% احتياطي هامش — قاعدة المالك
-  const used=S.journal.filter(j=>j.status==='open')
+  const used=S.journal.filter(j=>j.status==='open'&&(j.symbol===undefined||j.symbol===S.config.displaySymbol))
     .reduce((a,j)=>a+j.qty*(S.multiplier||1)*j.entry,0)/lev;
   let budget=Math.max(0,total-used) // هامش حرّ بالدولار
     *(S.regime?S.regime.sizeMult:1)*memSizeMult();
@@ -1354,7 +1355,7 @@ function noteEntry(qty:any,price:any,fee:any,source?:any,noCount?:any){ const si
   S._entryCtx={rg:S.regime?(S.regime.shock?'صدمة':S.regime.trend==='up'?'صاعد':S.regime.trend==='down'?'هابط':'عرضي'):'عرضي',
     ses:sessionOf(Date.now()),origin:source==='hunt'?'صيد':'شبكة',at:Date.now()};
   const label=source==='hunt'?'صفقة':'شبكة';
-  const ex=S.journal.find(j=>j.status==='open'&&j.side===side);
+  const ex=S.journal.find(j=>j.status==='open'&&j.side===side&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
   if(ex){ const t=ex.qty+qty; ex.entry=(ex.entry*ex.qty+price*qty)/t; ex.qty=t;
     // الاعتمادات الجزئية المتتالية لنفس المستوى لا ترفع عدد الأوامر —
     // تضخم العدّاد كان يوهم addsBlocked بامتلاء الشبكة فيلغي تسليحها كاملة
@@ -1371,8 +1372,9 @@ function noteEntry(qty:any,price:any,fee:any,source?:any,noCount?:any){ const si
   return id; }
 function noteClose(qty:any,exit:any,fee:any,source?:any,pnl?:any,lotId?:any){ const lotId_=lotId;
   const row=(lotId_?S.journal.find(j=>j.id===lotId_&&j.status==='open'):null)
-    ||S.journal.find(j=>j.status==='open'&&(source==='إيقاف'||j.source===source))
-    ||S.journal.find(j=>j.status==='open');
+    ||S.journal.find(j=>j.status==='open'&&(source==='إيقاف'||j.source===source)
+      &&(j.symbol===undefined||j.symbol===S.config.displaySymbol))
+    ||S.journal.find(j=>j.status==='open'&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
   if(row){ const share=row.qty>0?row.fees*(qty/row.qty):row.fees;
     const net=lotNet(row.side,row.entry,exit,qty,share+fee);
     row.status='closed'; row.exit=exit; row.fees+=fee; row.closedAt=Date.now();
@@ -1402,7 +1404,7 @@ function noteClose(qty:any,exit:any,fee:any,source?:any,pnl?:any,lotId?:any){ co
 // ويضيف الربح فورًا لرصيد الدورة كأي جني — لا ينتظر الإقفال الكامل
 function notePartialClose(qty,exit,fee,lotId){
   const row=(lotId?S.journal.find(j=>j.id===lotId&&j.status==='open'):null)
-    ||S.journal.find(j=>j.status==='open');
+    ||S.journal.find(j=>j.status==='open'&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
   if(!row||!(qty>0)) return 0;
   const share=row.qty>0?row.fees*Math.min(1,qty/row.qty):0;
   const net=lotNet(row.side,row.entry,exit,qty,share+fee);
@@ -2743,7 +2745,7 @@ export function saveCfg(v){
       if(S.position) exCloseQty(old,S.position.side,S.position.size)
         .catch(e=>pushLog('error','إغلاق مركز الزوج السابق فشل: '+(e.message||e)));
       pushLog('server','أُلغيت أوامر ووقف '+old+' وأُغلق مركزه قبل الانتقال'); }
-    S.grid=[]; S.position=null; S.journal=[]; S._tpBanked=0; S._trailFloor=0;
+    S.grid=[]; S.position=null; S._tpBanked=0; S._trailFloor=0; // سجل الصفقات يبقى — التاريخ لا يُمسح عند الانتقال
     S.realizedPnl=0; S.feesPaid=0; S.fundingPaid=0; S.slipCost=0; S._fundAt=0; S.ignoreExchangeUntil=Date.now()+12000;
     S.tape=[]; S.priceTrail=[]; S.emaFast=S.emaSlow=null; S._metaAt=0;
     // مضاعف العملة السابقة سمّ زاعف للجديدة (عقد PEPE = 520 ألف وحدة!) —
