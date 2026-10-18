@@ -1440,10 +1440,6 @@ async function postHarvestReselect() {
       return;
     }
     const curSc = cur ? cur.score || 0 : 0;
-    if (cur && curSc - bestOther.score > 10 && curSc >= 55) {
-      pushLog("server", "\u2705 \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: " + cur.disp + " (" + curSc + ") \u0623\u0642\u0648\u0649 \u0645\u0646 \u0643\u0644 \u0627\u0644\u0628\u062F\u0627\u0626\u0644 \u2014 \u0627\u0644\u0639\u0648\u062F\u0629 \u0625\u0644\u064A\u0647\u0627 \u0648\u0627\u0633\u062A\u0626\u0646\u0627\u0641 \u0627\u0644\u0635\u064A\u062F");
-      return;
-    }
     _lastSwitchAt = Date.now();
     const curDisp = cur ? cur.disp : S.config.displaySymbol;
     pushLog("server", "\u{1F504} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0646\u062A\u0642\u0627\u0644 \u0645\u0628\u0627\u0634\u0631 \u0645\u0646 " + curDisp + " (" + curSc + ") \u0625\u0644\u0649 " + bestOther.disp + " (" + bestOther.score + ") \u2014 \u0645\u0646\u0637\u0642\u0629 \u0623\u0642\u0648\u0649 \u2014 \u062A\u064F\u062F\u0631\u0633 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
@@ -2375,6 +2371,7 @@ function buildGrid(center, wide, initialCount) {
 }
 function armProgressive() {
   if (S.status !== "running") return;
+  if (!S.position && S._harvestAt && !S._reselectDone && Date.now() - S._harvestAt < 15 * 60 * 1e3) return;
   const armed = S.grid.filter((g) => g.status === "armed" || g.status === "open");
   const staged = S.grid.filter((g) => g.status === "staged");
   if (!staged.length) return;
@@ -4820,7 +4817,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.4.1", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.4.2", at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {

@@ -651,10 +651,8 @@ export async function postHarvestReselect(){
         (cur?cur.disp:S.config.displaySymbol)+' في الرادار — استئناف الصيد على العملة الحالية');
       return; }
     const curSc=cur?(cur.score||0):0;
-    // الحالية أقوى بوضوح من كل البدائل؟ العودة إليها واستئناف الصيد
-    if(cur&&curSc-bestOther.score>10&&curSc>=55){
-      pushLog('server','✅ بعد الجني: '+cur.disp+' ('+curSc+') أقوى من كل البدائل — العودة إليها واستئناف الصيد');
-      return; }
+    // قاعدة المالك النهائية: بعد الجني يوجد بديل مؤهل (55+)؟ انتقال مباشر إليه.
+    // البقاء على العملة الحالية فقط إذا لم يوجد أي بديل مؤهل في الرادار.
     // عملة أخرى أفضل أو منافسة → انتقال مباشر ثم دراسة ثم دخول
     _lastSwitchAt=Date.now();
     const curDisp=cur?cur.disp:S.config.displaySymbol;
@@ -1342,6 +1340,8 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
   return grid.sort((a,b)=>b.price-a.price); }
 /* PROGRESSIVE GRID: open with 4 orders; when only 1 armed remains, arm 2 more */
 function armProgressive(){ if(S.status!=='running') return;
+  // بعد الجني: لا تسليح دخول جديد حتى تكتمل إعادة اختيار العملة — لا تعبئة مبكرة تكسر الدورة
+  if(!S.position&&S._harvestAt&&!S._reselectDone&&Date.now()-S._harvestAt<15*60*1000) return;
   const armed=S.grid.filter(g=>g.status==='armed'||g.status==='open');
   const staged=S.grid.filter(g=>g.status==='staged');
   if(!staged.length) return;
