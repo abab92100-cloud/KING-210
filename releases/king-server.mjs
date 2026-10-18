@@ -1207,7 +1207,7 @@ async function backgroundPipeline() {
       S._nextSymbol = nxt.symbol;
       if (Date.now() - (S._bgLogAt || 0) > 12e4) {
         S._bgLogAt = Date.now();
-        pushLog("server", "\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A " + nxt.disp + " (\u062F\u0631\u062C\u0629 " + nxt.score + ") \u062C\u0627\u0647\u0632 \u2014 \u064A\u064F\u0641\u062A\u062D \u0641\u0648\u0631 \u0627\u0644\u062C\u0646\u064A");
+        pushLog("server", "\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A " + nxt.disp + " (\u062F\u0631\u062C\u0629 " + nxt.score + ") \u0645\u0631\u0634\u0651\u062D \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A \u2014 \u064A\u064F\u062E\u062A\u0627\u0631 \u0625\u0646 \u0643\u0627\u0646\u062A \u0645\u0646\u0637\u0642\u062A\u0647 \u0623\u0642\u0648\u0649");
       }
     }
   } catch (e) {
@@ -1709,8 +1709,31 @@ async function maybeSwitchSymbol() {
     const cur = r.list.find((l) => l.symbol === S.config.symbol);
     const best = r.list.filter((l) => l.symbol !== S.config.symbol).find((l) => (l.score || 0) >= 55);
     if (!best) return;
-    if (cur && (cur.score || 0) >= (best.score || 0)) return;
     const afterHarvest = !!(S._harvestAt && Date.now() - S._harvestAt < 10 * 60 * 1e3);
+    const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || Date.now());
+    const barren = idleMs > 25 * 60 * 1e3;
+    if (barren && best) {
+      _lastSwitchAt = Date.now();
+      const curDisp2 = cur ? cur.disp : S.config.displaySymbol, curSc2 = cur ? cur.score : 0;
+      pushLog("server", "\u{1F504} \u062F\u0648\u0631\u0627\u0646 \u0627\u0644\u0628\u0648\u0631\u0629 (" + Math.round(idleMs / 6e4) + " \u062F \u0628\u0644\u0627 \u062A\u0646\u0641\u064A\u0630): " + curDisp2 + " (" + curSc2 + ") \u2192 " + best.disp + " (" + best.score + ") \u2014 \u0644\u0627 \u062C\u0644\u0648\u0633 \u0639\u0644\u0649 \u0639\u0645\u0644\u0629 \u062E\u0627\u0645\u062F\u0629");
+      toast("\u{1F504} \u062F\u0648\u0631\u0627\u0646: " + best.disp + " \u2014 " + best.score);
+      nativeNotify("AB-KING \u2014 \u062F\u0648\u0631\u0627\u0646 \u0627\u0644\u0628\u0648\u0631\u0629", best.disp + " \u062F\u0631\u062C\u0629 " + best.score + " \u0628\u062F\u0644 " + curDisp2 + " \u0627\u0644\u062E\u0627\u0645\u062F\u0629");
+      saveCfg({
+        symbol: best.symbol,
+        leverage: S.config.leverage,
+        levels: S.config.levels,
+        gridStepPct: S.config.gridStepPct,
+        huntPct: S.config.huntPct,
+        tpNet: S.config.tpNet,
+        cycleBalance: S.config.cycleBalance,
+        directionMode: S.config.directionMode,
+        mode: S.config.mode,
+        sound: S.sound,
+        soundTone: S.soundTone
+      });
+      return;
+    }
+    if (cur && (cur.score || 0) >= (best.score || 0)) return;
     if (!afterHarvest && cur && best.score - cur.score < 12) return;
     _lastSwitchAt = Date.now();
     const curDisp = cur ? cur.disp : S.config.displaySymbol, curSc = cur ? cur.score : 0;
@@ -4797,7 +4820,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.4.0", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.4.1", at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {

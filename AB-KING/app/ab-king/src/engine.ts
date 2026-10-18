@@ -503,7 +503,7 @@ export async function backgroundPipeline(){
     if(S._nextSymbol!==nxt.symbol){
       S._nextSymbol=nxt.symbol;
       if(Date.now()-(S._bgLogAt||0)>120000){ S._bgLogAt=Date.now();
-        pushLog('server','\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A '+nxt.disp+' (\u062F\u0631\u062C\u0629 '+nxt.score+') \u062C\u0627\u0647\u0632 \u2014 \u064A\u064F\u0641\u062A\u062D \u0641\u0648\u0631 \u0627\u0644\u062C\u0646\u064A'); } }
+        pushLog('server','\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A '+nxt.disp+' (\u062F\u0631\u062C\u0629 '+nxt.score+') \u0645\u0631\u0634\u0651\u062D \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A \u2014 \u064A\u064F\u062E\u062A\u0627\u0631 \u0625\u0646 \u0643\u0627\u0646\u062A \u0645\u0646\u0637\u0642\u062A\u0647 \u0623\u0642\u0648\u0649'); } }
   }catch(e){ logSwallow('silent-catch', e); }
 }
 export function openNextReady(){
@@ -889,9 +889,25 @@ export async function maybeSwitchSymbol(){
     const best=r.list.filter(l=>l.symbol!==S.config.symbol).find(l=>(l.score||0)>=55);
     if(!best) return; // لا فرصة أقوى — البقاء على الحالية والدخول حين تكتمل شروطها
     // نحن الأفضل بالفعل؟ اكتملت الدراسة هنا وادخل الصفقة
-    if(cur&&(cur.score||0)>=(best.score||0)) return;
     // بعد جني مكتمل (خلال 10 دقائق): إعادة اختيار حاسمة — الأفضل مطلقاً بلا هامش
     const afterHarvest=!!(S._harvestAt&&Date.now()-S._harvestAt<10*60*1000);
+    // ─── دوران البورة (إصلاح التعليق 3 ساعات بلا صفقة) ───
+    // 25 دقيقة بلا تنفيذ صفقة رغم الدراسة الكاملة = العملة بارة الآن:
+    // انتقال لأفضل بديل مؤهل حتى لو كانت الحالية متصدرة — لا جلوس أبدي أوامر مسلحة لا تُنفذ
+    const idleMs=Date.now()-(S.lastHuntAt||S._dwellAt||S.startedAt||Date.now());
+    const barren=idleMs>25*60*1000;
+    if(barren&&best){ _lastSwitchAt=Date.now();
+      const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
+      pushLog('server','🔄 دوران البورة ('+Math.round(idleMs/60000)+' د بلا تنفيذ): '+curDisp+' ('+curSc+') → '+best.disp+' ('+best.score+') — لا جلوس على عملة خامدة');
+      toast('🔄 دوران: '+best.disp+' — '+best.score);
+      nativeNotify('AB-KING — دوران البورة',best.disp+' درجة '+best.score+' بدل '+curDisp+' الخامدة');
+      saveCfg({symbol:best.symbol,leverage:S.config.leverage,levels:S.config.levels,
+        gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+        cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
+        mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
+      return; }
+    // نحن الأفضل بالفعل وننتج؟ اكتملت الدراسة هنا وادخل الصفقة
+    if(cur&&(cur.score||0)>=(best.score||0)) return;
     // هامش وضوح 12 درجة يمنع التأرجح بين عملتين متقاربتين (خارج نافذة ما بعد الجني)
     if(!afterHarvest&&cur&&best.score-cur.score<12) return;
     _lastSwitchAt=Date.now();
