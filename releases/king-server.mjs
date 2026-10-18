@@ -385,9 +385,20 @@ var SCOUT_MS = 9e4;
 var MIN_HUNT_GAP = 0.08;
 var TP_BASE_NET = 0.12;
 var LOSS_STOP_USD = 16;
-function tpBase() {
+function dynamicTpNet() {
   const hf = S && S.config && S.config.hfMode;
-  return Math.max(0.03, Number(S && S.config && S.config.tpNet) || (hf ? 0.03 : TP_BASE_NET));
+  const bal = Math.max(1, S.config && S.config.cycleBalance || 100);
+  const prof = profOf() || {};
+  const vol = Math.max(5e-3, +prof.vol || 0.05);
+  const spread = Math.max(0, +prof.spread || 0.02);
+  const volMult = clamp(vol / 0.05, 0.6, 3);
+  let target = bal * clamp(18e-4 * volMult, 12e-4, 6e-3);
+  target = Math.max(target, bal * spread / 100 * 2 + 0.05);
+  if (hf) target = Math.min(target, 0.05);
+  return Math.max(0.05, Math.round(target * 100) / 100);
+}
+function tpBase() {
+  return dynamicTpNet();
 }
 var clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 var uid = (p) => p + "_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -4786,7 +4797,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.3.0", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.4.0", at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {
