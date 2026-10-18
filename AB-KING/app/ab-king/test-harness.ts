@@ -75,17 +75,17 @@ async function main() {
   log('للاختبار الكامل عبر إقلاع جديد شغّل: node test-bundle.mjs revive');
 
   /* ─── سيناريو 3: دوران البورة — 40 دقيقة بلا تنفيذ ─── */
-  log('— سيناريو 3: 40 دقيقة بلا تنفيذ صفقة — دوران البورة يجب أن يعمل —');
+  log('— سيناريو 3: 16 دقيقة بلا تنفيذ صفقة (عتبة المالك الجديدة 15 د) — دوران البورة يجب أن يعمل —');
   S.lastHuntAt = Date.now() - 40 * 60 * 1000; S._harvestAt = 0; S._reselectDone = true;
   S.position = null; S.status = 'running';
   S.studyUntil = 0; S.studyAcc = null; // لا دراسة جارية — كما بعد ساعات تشغيل
   // إيقاف مؤقت أثناء الانتظار: المحرك الحي يفتح مراكز ورقية فعلاً — نعزل السيناريو
   S.status = 'paused'; S.position = null; S.grid = [];
-  log('انتظار 47 ثانية لانقضاء مهلة تبريد التبديل (45 ثانية) كما يحدث في التشغيل الحقيقي...');
+  log('انتظار 47 ثانية لانقضاء مهلة التبريد كما يحدث في التشغيل الحقيقي...');
   await new Promise(r => setTimeout(r, 47000));
   // كما بعد إعادة تشغيل حقيقية: لا صفقة 40 دقيقة، الحالة تعود من الذاكرة
   S.status = 'running'; S.position = null; S.studyUntil = 0; S.studyAcc = null;
-  S.lastHuntAt = Date.now() - 40 * 60 * 1000; S._savedAt = Date.now() - 40 * 60 * 1000;
+  S.lastHuntAt = Date.now() - 16 * 60 * 1000; S._savedAt = Date.now() - 16 * 60 * 1000;
   const before3 = S.config.symbol;
   await maybeSwitchSymbol();
   await new Promise(r => setTimeout(r, 1500));

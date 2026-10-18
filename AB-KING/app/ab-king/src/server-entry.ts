@@ -7,8 +7,10 @@
 import './server-shims'; // أولًا دائمًا: يثبّت البيئة قبل تقييم المحرك
 import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
-  saveCfg, saveKeys, clearKeys, scanRadar,
+  saveCfg, saveKeys, clearKeys, scanRadar, pushLog,
 } from './engine';
+
+const SRV_VER = 'AB-KING-1.4.4';
 import { createServer } from 'node:http';
 
 const PORT = 8787;
@@ -24,6 +26,18 @@ function send(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+// ─── لافتة الإصدار + نبضة الحالة (إثبات مرئي داخل سجل التطبيق) ───
+pushLog('server','✅ '+SRV_VER+' يعمل الآن — التبديل التلقائي مفعّل: بعد الجني فورًا + دوران البورة عند 15 دقيقة بلا تنفيذ');
+setInterval(() => {
+  try {
+    const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || S._savedAt || Date.now());
+    const idleMin = Math.max(0, Math.round(idleMs / 60000));
+    pushLog('server', '💡 نبضة '+SRV_VER+' — العملة: ' + (S.config.displaySymbol || '?') +
+      ' — بلا تنفيذ منذ ' + idleMin + ' د' + (S.position ? ' — مركز مفتوح يُدار حتى الجني' : ' — الدوران التلقائي عند 15 د') +
+      ' — الحالة: ' + (S.status || '؟'));
+  } catch { /* نبضة تشخيصية فقط */ }
+}, 30 * 60 * 1000).unref?.();
+
 const srv = createServer(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') {
@@ -37,7 +51,7 @@ const srv = createServer(async (req, res) => {
     const u = new URL(req.url || '/', 'http://127.0.0.1');
 
     if (req.method === 'GET' && (u.pathname === '/' || u.pathname === '/health'))
-      return send(res, 200, { ok: true, name: 'KING Termux Server', version: 'AB-KING-1.4.3', at: Date.now() });
+      return send(res, 200, { ok: true, name: 'KING Termux Server', version: SRV_VER, at: Date.now() });
 
     if (req.method === 'GET' && u.pathname === '/state')
       return send(res, 200, { ok: true, at: Date.now(), state: S });

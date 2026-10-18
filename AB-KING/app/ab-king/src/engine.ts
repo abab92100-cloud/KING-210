@@ -324,7 +324,7 @@ function loadAll(){ try{
 }catch(e){ logSwallow("silent-catch", e); } }
 
 /* ---------- السجل ---------- */
-function pushLog(kind:any,text:any){ S.logs=[{id:uid('l'),at:Date.now(),kind,text},...S.logs].slice(0,80); }
+export function pushLog(kind:any,text:any){ S.logs=[{id:uid('l'),at:Date.now(),kind,text},...S.logs].slice(0,80); }
 const _swallowAt={};
 function logSwallow(where:any,err:any){
   try{
@@ -508,7 +508,7 @@ export async function backgroundPipeline(){
     S._nextStudiedAt=Date.now();
     if(S._nextSymbol!==nxt.symbol){
       S._nextSymbol=nxt.symbol;
-      if(Date.now()-(S._bgLogAt||0)>120000){ S._bgLogAt=Date.now();
+      if(Date.now()-(S._bgLogAt||0)>600000){ S._bgLogAt=Date.now();
         pushLog('server','\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A '+nxt.disp+' (\u062F\u0631\u062C\u0629 '+nxt.score+') \u0645\u0631\u0634\u0651\u062D \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A \u2014 \u064A\u064F\u062E\u062A\u0627\u0631 \u0625\u0646 \u0643\u0627\u0646\u062A \u0645\u0646\u0637\u0642\u062A\u0647 \u0623\u0642\u0648\u0649'); } }
   }catch(e){ logSwallow('silent-catch', e); }
 }
@@ -647,6 +647,11 @@ export async function postHarvestReselect(){
   if(S.status!=='running'||S.position) return;
   if(!S._harvestAt||S._reselectDone) return;
   if(Date.now()-S._harvestAt>15*60*1000){ S._reselectDone=true; return; } // فاتت النافذة — استمر عاديًا
+  // تعذّر إتمام المسح أكثر من 5 دقائق (شبكة متقطعة)؟ استئناف فوري بدل تجميد الدخول
+  if(Date.now()-S._harvestAt>5*60*1000&&!S._reselectBusy){
+    S._reselectDone=true;
+    pushLog('server','⏱ بعد الجني: تعذر اكتمال مسح الرادار — استئناف الصيد على العملة الحالية');
+    return; }
   try{
     const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
     const cur=r.list.find(l=>l.symbol===S.config.symbol);
@@ -895,11 +900,11 @@ export async function maybeSwitchSymbol(){
     // نحن الأفضل بالفعل؟ اكتملت الدراسة هنا وادخل الصفقة
     // بعد جني مكتمل (خلال 10 دقائق): إعادة اختيار حاسمة — الأفضل مطلقاً بلا هامش
     const afterHarvest=!!(S._harvestAt&&Date.now()-S._harvestAt<10*60*1000);
-    // ─── دوران البورة (إصلاح التعليق 3 ساعات بلا صفقة) ───
-    // 25 دقيقة بلا تنفيذ صفقة رغم الدراسة الكاملة = العملة بارة الآن:
+    // ─── دوران البورة (قاعدة المالك: 15 دقيقة بلا تنفيذ) ───
+    // 15 دقيقة بلا تنفيذ صفقة رغم الدراسة الكاملة = العملة بارة الآن:
     // انتقال لأفضل بديل مؤهل حتى لو كانت الحالية متصدرة — لا جلوس أبدي أوامر مسلحة لا تُنفذ
     const idleMs=Date.now()-(S.lastHuntAt||S._dwellAt||S.startedAt||S._savedAt||Date.now()); // _savedAt = لحظة الإيقاف الأخيرة — العدّاد لا يُصفَّر بعد إعادة التشغيل
-    const barren=idleMs>25*60*1000;
+    const barren=idleMs>15*60*1000;
     if(barren&&best){ _lastSwitchAt=Date.now();
       const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
       pushLog('server','🔄 دوران البورة ('+Math.round(idleMs/60000)+' د بلا تنفيذ): '+curDisp+' ('+curSc+') → '+best.disp+' ('+best.score+') — لا جلوس على عملة خامدة');

@@ -1217,7 +1217,7 @@ async function backgroundPipeline() {
     S._nextStudiedAt = Date.now();
     if (S._nextSymbol !== nxt.symbol) {
       S._nextSymbol = nxt.symbol;
-      if (Date.now() - (S._bgLogAt || 0) > 12e4) {
+      if (Date.now() - (S._bgLogAt || 0) > 6e5) {
         S._bgLogAt = Date.now();
         pushLog("server", "\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A " + nxt.disp + " (\u062F\u0631\u062C\u0629 " + nxt.score + ") \u0645\u0631\u0634\u0651\u062D \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A \u2014 \u064A\u064F\u062E\u062A\u0627\u0631 \u0625\u0646 \u0643\u0627\u0646\u062A \u0645\u0646\u0637\u0642\u062A\u0647 \u0623\u0642\u0648\u0649");
       }
@@ -1437,6 +1437,11 @@ async function postHarvestReselect() {
   if (!S._harvestAt || S._reselectDone) return;
   if (Date.now() - S._harvestAt > 15 * 60 * 1e3) {
     S._reselectDone = true;
+    return;
+  }
+  if (Date.now() - S._harvestAt > 5 * 60 * 1e3 && !S._reselectBusy) {
+    S._reselectDone = true;
+    pushLog("server", "\u23F1 \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u062A\u0639\u0630\u0631 \u0627\u0643\u062A\u0645\u0627\u0644 \u0645\u0633\u062D \u0627\u0644\u0631\u0627\u062F\u0627\u0631 \u2014 \u0627\u0633\u062A\u0626\u0646\u0627\u0641 \u0627\u0644\u0635\u064A\u062F \u0639\u0644\u0649 \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u062D\u0627\u0644\u064A\u0629");
     return;
   }
   try {
@@ -1719,7 +1724,7 @@ async function maybeSwitchSymbol() {
     if (!best) return;
     const afterHarvest = !!(S._harvestAt && Date.now() - S._harvestAt < 10 * 60 * 1e3);
     const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || S._savedAt || Date.now());
-    const barren = idleMs > 25 * 60 * 1e3;
+    const barren = idleMs > 15 * 60 * 1e3;
     if (barren && best) {
       _lastSwitchAt = Date.now();
       const curDisp2 = cur ? cur.disp : S.config.displaySymbol, curSc2 = cur ? cur.score : 0;
@@ -4806,6 +4811,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
+var SRV_VER = "AB-KING-1.4.4";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {
@@ -4817,6 +4823,15 @@ function send(res, code, obj) {
   });
   res.end(JSON.stringify(obj));
 }
+pushLog("server", "\u2705 " + SRV_VER + " \u064A\u0639\u0645\u0644 \u0627\u0644\u0622\u0646 \u2014 \u0627\u0644\u062A\u0628\u062F\u064A\u0644 \u0627\u0644\u062A\u0644\u0642\u0627\u0626\u064A \u0645\u0641\u0639\u0651\u0644: \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A \u0641\u0648\u0631\u064B\u0627 + \u062F\u0648\u0631\u0627\u0646 \u0627\u0644\u0628\u0648\u0631\u0629 \u0639\u0646\u062F 15 \u062F\u0642\u064A\u0642\u0629 \u0628\u0644\u0627 \u062A\u0646\u0641\u064A\u0630");
+setInterval(() => {
+  try {
+    const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || S._savedAt || Date.now());
+    const idleMin = Math.max(0, Math.round(idleMs / 6e4));
+    pushLog("server", "\u{1F4A1} \u0646\u0628\u0636\u0629 " + SRV_VER + " \u2014 \u0627\u0644\u0639\u0645\u0644\u0629: " + (S.config.displaySymbol || "?") + " \u2014 \u0628\u0644\u0627 \u062A\u0646\u0641\u064A\u0630 \u0645\u0646\u0630 " + idleMin + " \u062F" + (S.position ? " \u2014 \u0645\u0631\u0643\u0632 \u0645\u0641\u062A\u0648\u062D \u064A\u064F\u062F\u0627\u0631 \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A" : " \u2014 \u0627\u0644\u062F\u0648\u0631\u0627\u0646 \u0627\u0644\u062A\u0644\u0642\u0627\u0626\u064A \u0639\u0646\u062F 15 \u062F") + " \u2014 \u0627\u0644\u062D\u0627\u0644\u0629: " + (S.status || "\u061F"));
+  } catch {
+  }
+}, 30 * 60 * 1e3).unref?.();
 var srv = createServer(async (req, res) => {
   try {
     if (req.method === "OPTIONS") {
@@ -4829,7 +4844,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.4.3", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: SRV_VER, at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {
