@@ -912,7 +912,14 @@ function saveAll() {
       status: S.status,
       history: S.history,
       logs: S.logs,
-      savedAt: Date.now()
+      savedAt: Date.now(),
+      // أعلام دورة الجني (قاعدة المالك: إعادة الاختيار بعد الجني) — تُحفظ حتى لا
+      // تضيع إعادة الاختيار عند إعادة تشغيل السيرفر/الجوال بعد الجني مباشرة
+      _harvestAt: S._harvestAt || 0,
+      _reselectDone: !!S._reselectDone,
+      lastHuntAt: S.lastHuntAt || 0,
+      _dwellAt: S._dwellAt || 0,
+      startedAt: S.startedAt || 0
     };
     localStorage.setItem("abking:rt", JSON.stringify(rt));
     localStorage.setItem("abking:mem", JSON.stringify(S.memory || { pairs: {}, cycles: 0, totalPnl: 0 }));
@@ -952,7 +959,12 @@ function loadAll() {
         activeCycle: rt.activeCycle || null,
         status: rt.status || "idle",
         history: rt.history || [],
-        logs: rt.logs || []
+        logs: rt.logs || [],
+        _harvestAt: rt._harvestAt || 0,
+        _reselectDone: !!rt._reselectDone,
+        lastHuntAt: rt.lastHuntAt || 0,
+        _dwellAt: rt._dwellAt || 0,
+        startedAt: rt.startedAt || 0
       });
       S._savedAt = rt.savedAt || 0;
     }
@@ -1706,7 +1718,7 @@ async function maybeSwitchSymbol() {
     const best = r.list.filter((l) => l.symbol !== S.config.symbol).find((l) => (l.score || 0) >= 55);
     if (!best) return;
     const afterHarvest = !!(S._harvestAt && Date.now() - S._harvestAt < 10 * 60 * 1e3);
-    const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || Date.now());
+    const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || S._savedAt || Date.now());
     const barren = idleMs > 25 * 60 * 1e3;
     if (barren && best) {
       _lastSwitchAt = Date.now();
@@ -4817,7 +4829,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.4.2", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.4.3", at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {

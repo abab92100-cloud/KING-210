@@ -287,7 +287,11 @@ function saveAll(){ try{
   const rt={grid:S.grid,position:S.position,journal:S.journal,realizedPnl:S.realizedPnl,
     feesPaid:S.feesPaid,fundingPaid:S.fundingPaid||0,cycleHarvested:S.cycleHarvested||0,priceTrail:S.priceTrail,cvd:S.cvd,huntCount:S.huntCount,
     lastPrice:S.lastPrice,markPrice:S.markPrice,activeCycle:S.activeCycle,status:S.status,
-    history:S.history,logs:S.logs,savedAt:Date.now()};
+    history:S.history,logs:S.logs,savedAt:Date.now(),
+    // أعلام دورة الجني (قاعدة المالك: إعادة الاختيار بعد الجني) — تُحفظ حتى لا
+    // تضيع إعادة الاختيار عند إعادة تشغيل السيرفر/الجوال بعد الجني مباشرة
+    _harvestAt:S._harvestAt||0,_reselectDone:!!S._reselectDone,
+    lastHuntAt:S.lastHuntAt||0,_dwellAt:S._dwellAt||0,startedAt:S.startedAt||0};
   localStorage.setItem('abking:rt',JSON.stringify(rt));
   localStorage.setItem('abking:mem',JSON.stringify(S.memory||{pairs:{},cycles:0,totalPnl:0}));
 }catch(e){ logSwallow("silent-catch", e); } }
@@ -301,7 +305,9 @@ function loadAll(){ try{
     realizedPnl:rt.realizedPnl||0,feesPaid:rt.feesPaid||0,fundingPaid:rt.fundingPaid||0,cycleHarvested:rt.cycleHarvested||0,priceTrail:rt.priceTrail||[],
     cvd:rt.cvd||0,huntCount:rt.huntCount||0,lastPrice:rt.lastPrice??null,
     markPrice:rt.markPrice??null,activeCycle:rt.activeCycle||null,status:rt.status||'idle',
-    history:rt.history||[],logs:rt.logs||[]});
+    history:rt.history||[],logs:rt.logs||[],
+    _harvestAt:rt._harvestAt||0,_reselectDone:!!rt._reselectDone,
+    lastHuntAt:rt.lastHuntAt||0,_dwellAt:rt._dwellAt||0,startedAt:rt.startedAt||0});
     S._savedAt=rt.savedAt||0; }
   // قتل أندرويد للتطبيق في الخلفية ≠ خروج المالك: جلسة كانت تعمل وقُتلت حديثًا
   // (أقل من 30 دقيقة) تُستأنف تلقائيًا من حيث توقفت — وإلا بقيت القاعدة:
@@ -892,7 +898,7 @@ export async function maybeSwitchSymbol(){
     // ─── دوران البورة (إصلاح التعليق 3 ساعات بلا صفقة) ───
     // 25 دقيقة بلا تنفيذ صفقة رغم الدراسة الكاملة = العملة بارة الآن:
     // انتقال لأفضل بديل مؤهل حتى لو كانت الحالية متصدرة — لا جلوس أبدي أوامر مسلحة لا تُنفذ
-    const idleMs=Date.now()-(S.lastHuntAt||S._dwellAt||S.startedAt||Date.now());
+    const idleMs=Date.now()-(S.lastHuntAt||S._dwellAt||S.startedAt||S._savedAt||Date.now()); // _savedAt = لحظة الإيقاف الأخيرة — العدّاد لا يُصفَّر بعد إعادة التشغيل
     const barren=idleMs>25*60*1000;
     if(barren&&best){ _lastSwitchAt=Date.now();
       const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
