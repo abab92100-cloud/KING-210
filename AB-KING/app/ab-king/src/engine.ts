@@ -498,7 +498,7 @@ export function openNextReady(){
   if(Date.now()-(S._nextStudiedAt||0)>15*60*1000){ S._nextReady=false; S._nextSymbol=null; return false; }
   if(S._nextSymbol===S.config.symbol){ S._nextReady=false; return false; }
   const sym=S._nextSymbol;
-  S._nextReady=false; S._nextSymbol=null;
+  S._nextReady=false; S._nextSymbol=null; S._reselectDone=true; // قفز ما بعد الجني — إعادة الاختيار تمت
   pushLog('server','\u26A1 \u0641\u062A\u062D \u0641\u0648\u0631\u064A \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u0645\u062F\u0631\u0648\u0633\u0629 \u062E\u0644\u0641\u064A\u064B\u0627 '+sym.replace(/USDTM$/i,'')+' \u062A\u062F\u062E\u0644 \u0627\u0644\u0622\u0646');
   saveCfg({symbol:sym,leverage:S.config.leverage,levels:S.config.levels,
     gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
@@ -615,6 +615,42 @@ export async function scanRadar(){
 }
 
 /* ================================================================ */
+/* ─── إعادة الاختيار الإجباري بعد كل جني (قاعدة المالك) ───
+   بعد كل صفقة مكتملة: البحث عن أفضل عملة أخرى بمنطقة أقوى؛ إن وُجدت
+   انتقل إليها مباشرة (تُدرس ثم تدخل)، وإن لم توجد فالعودة للعملة الحالية
+   إن كانت جيدة. القرار داخل نافذة 15 دقيقة ثم يستمر التداول عاديًا. */
+export async function postHarvestReselect(){
+  if(S.status!=='running'||S.position) return;
+  if(!S._harvestAt||S._reselectDone) return;
+  if(Date.now()-S._harvestAt>15*60*1000){ S._reselectDone=true; return; } // فاتت النافذة — استمر عاديًا
+  try{
+    const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
+    const cur=r.list.find(l=>l.symbol===S.config.symbol);
+    const bestOther=r.list.filter(l=>l.symbol!==S.config.symbol).find(l=>(l.score||0)>=55);
+    S._reselectDone=true; S._nextReady=false; S._nextSymbol=null; // القرار اتخذ — لا قفز مزدوج
+    if(!bestOther){
+      pushLog('server','🔎 بعد الجني: لا عملة أقوى من '+
+        (cur?cur.disp:S.config.displaySymbol)+' في الرادار — استئناف الصيد على العملة الحالية');
+      return; }
+    const curSc=cur?(cur.score||0):0;
+    // الحالية أقوى بوضوح من كل البدائل؟ العودة إليها واستئناف الصيد
+    if(cur&&curSc-bestOther.score>10&&curSc>=55){
+      pushLog('server','✅ بعد الجني: '+cur.disp+' ('+curSc+') أقوى من كل البدائل — العودة إليها واستئناف الصيد');
+      return; }
+    // عملة أخرى أفضل أو منافسة → انتقال مباشر ثم دراسة ثم دخول
+    _lastSwitchAt=Date.now();
+    const curDisp=cur?cur.disp:S.config.displaySymbol;
+    pushLog('server','🔄 بعد الجني: انتقال مباشر من '+curDisp+' ('+curSc+') إلى '+
+      bestOther.disp+' ('+bestOther.score+') — منطقة أقوى — تُدرس ثم تُفتح الصفقة');
+    toast('🔄 بعد الجني: '+bestOther.disp+' — '+bestOther.score);
+    nativeNotify('AB-KING — انتقال بعد الجني',bestOther.disp+' درجة '+bestOther.score);
+    saveCfg({symbol:bestOther.symbol,leverage:S.config.leverage,levels:S.config.levels,
+      gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+      cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
+      mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
+  }catch(e){ logSwallow('silent-catch',e); }
+}
+
 /* BG RADAR: permanent study every 5 min while bot runs (never miss a chance) */
 let _bgScanAt=0;
 export function bgRadarTick(){ if(!R()){
@@ -1515,8 +1551,40 @@ function syncPositionTp(){ if(S.status!=='running'||!S.position) return;
   if(need<0){ /* الهدف مجني بالك\u0627\u0645\u0644 */ }
   const needPos=Math.max(0,need);
   const cov=(entryFees+exitFee+needPos)/notional; // النسبة فوق المتوسط التي تضمن الصافي
-  const want=roundTick(pos.side==='long'?pos.entry*(1+cov):pos.entry*(1-cov),S.tickSize);
+  let want=roundTick(pos.side==='long'?pos.entry*(1+cov):pos.entry*(1-cov),S.tickSize);
   if(!(want>0)) return;
+  /* ─── منطقة الجني الديناميكية (دراسة السيولة الحية) ───
+     الأرضية الصلبة: تعادل + رسوم + الهدف الصافي — لا خروج بخسارة أبدًا.
+     الدراسة المستمرة (كل 60 ثانية) ترفع المنطقة فقط نحو:
+     · ما بعد أقرب جدار سيولة بارز (3× الوسيط) — بيع قبيل انكسار الجدار
+     · تقلب مرتفع مقاس من بصمة العملة — مساحة حركة أوسع
+     سقف الرفع: نصف المسافة الأصلية فوق المتوسط — لا طمع يعطّل الجني */
+  const nowT=Date.now();
+  if(!S._dynTpAt||nowT-S._dynTpAt>60000){
+    S._dynTpAt=nowT; S._dynTp=0;
+    try{
+      const ob=S.orderBook||{};
+      const lv=pos.side==='long'?(ob.asks||[]):(ob.bids||[]); // لونغ يبيع في العروض
+      if(lv.length>=8){
+        const sizes=lv.map(l=>+l.size||0).sort((a,b)=>a-b);
+        const med=sizes[Math.floor(sizes.length/2)]||1;
+        const cap=want+(pos.side==='long'?1:-1)*Math.abs(want-pos.entry)*0.5;
+        // أقرب جدار بارز في اتجاه الجني
+        let wall=0;
+        for(const l of lv){ const lp=+l.price||0, lsz=+l.size||0;
+          if(pos.side==='long'?lp>want:lp<want){ if(lsz>med*3){ wall=lp; break; } } }
+        if(wall>0){ const justBeyond=wall*(pos.side==='long'?1.0012:0.9988);
+          if(pos.side==='long'?justBeyond<=cap:justBeyond>=cap) S._dynTp=justBeyond; }
+        else{
+          const prof=profOf(); const vol=(prof&&prof.vol)||0.05;
+          if(vol>0.12){ // تقلب مرتفع: مدّ بجزء من التقلب داخل السقف
+            const ext=want*(pos.side==='long'?Math.min(1.002+vol*0.008,1.006):Math.max(1-(0.002+vol*0.008),0.994));
+            S._dynTp=pos.side==='long'?Math.min(ext,cap):Math.max(ext,cap); } }
+      }
+    }catch(e){ logSwallow('silent-catch',e); }
+  }
+  if(S._dynTp>0){ const d=roundTick(S._dynTp,S.tickSize);
+    if(pos.side==='long'?d>want:d<want) want=d; } // رفع فقط — الأرضية لا تُخترق
   const tickTol=S.tickSize>0?S.tickSize*0.5:Math.abs(want)*1e-9;
   const liveTp=S.grid.filter(g=>g.reduceOnly&&(g.status==='armed'||g.status==='open'));
   // كمية الأمر الحيّة = أصله ناقص ما نُفّذ منه جزئيًا على المنصة
@@ -1544,6 +1612,7 @@ function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
     exCancelAll(S.config.symbol).catch(()=>{});
     exCancelStops(S.config.symbol).catch(()=>{}); }
   S._harvestAt=Date.now(); // لحظة اكتمال الدورة — القفز للعملة التالية مسموح بعدها فقط
+  S._reselectDone=false; // إعادة الاختيار الإجباري بعد كل جني (قاعدة المالك)
   S._guardId=null; S._tpBanked=0; S._trailFloor=0;
   for(const g of S.grid){ if(g.status==='armed'||g.status==='open'||g.status==='staged'){
     g.status='cancelled'; g.exchangeOrderId=null; } }
@@ -1967,6 +2036,8 @@ function packHunt(p:any){
   return {side:S.config.direction==='short'?'sell':'buy',qty:contractsForLevel(p)}; }
 function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(!warmedUp()) return null;
+  // بعد الجني: إعادة اختيار إلزامية قبل أي دخول — لا إعادة دخول فورية على نفس العملة
+  if(!S.position&&S._harvestAt&&!S._reselectDone&&Date.now()-S._harvestAt<15*60*1000) return null;
   if(studying()) return null; // العملة قيد الدراسة — لا دخول قبل اكتمال بصمتها
   // هدنة الخسارة المخففة: خسارتان متتاليتان بنفس الاتجاه خلال دقيقتين فقط — لا شلل 5 دقائق لخسارة واحدة
   if(!S.position&&S._lossStreak&&S._lossStreak.side===S.config.direction&&
@@ -2577,10 +2648,11 @@ export async function botTick(){
     if(S.position&&S.status==='running'){ syncPositionTp();
       backgroundPipeline().catch(()=>{}); } // تبع سريع: يتحدّث كل ثانية مع الربح العائم
     if(!S.position&&S.status==='running'){
+      // إعادة الاختيار الإجباري بعد الجني — قبل أي دخول جديد (قاعدة المالك)
+      postHarvestReselect().catch(()=>{});
       if(openNextReady()) return;
       backgroundPipeline().catch(()=>{});
-      // إصلاح القفز المتسارع: أُلغي تصفير مهلة التبريد — مهلة 45 ثانية تحمي العملة
-      // الحالية من التبديل كل بضع ثوانٍ، والدراسة تكتمل فعلًا قبل أي قرار تبديل
+      // مهلة 45 ثانية + حاجز الدراسة يكملان حماية العملة الحالية من التبديل المتسارع
       maybeSwitchSymbol().catch(()=>{}); }
     // انضباط الاتجاه: أي انقلاب يلغي فورًا سلم الجهة القديمة المسلّح —
     // بقاؤه بعد الانقلاب كان يملأ مستويات معاكسة فوق مركز جديد فيغلقه

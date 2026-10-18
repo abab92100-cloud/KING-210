@@ -1223,6 +1223,7 @@ function openNextReady() {
   const sym = S._nextSymbol;
   S._nextReady = false;
   S._nextSymbol = null;
+  S._reselectDone = true;
   pushLog("server", "\u26A1 \u0641\u062A\u062D \u0641\u0648\u0631\u064A \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u0645\u062F\u0631\u0648\u0633\u0629 \u062E\u0644\u0641\u064A\u064B\u0627 " + sym.replace(/USDTM$/i, "") + " \u062A\u062F\u062E\u0644 \u0627\u0644\u0622\u0646");
   saveCfg({
     symbol: sym,
@@ -1406,6 +1407,52 @@ async function scanRadar() {
     return S.radar;
   } finally {
     S._radarBusy = false;
+  }
+}
+async function postHarvestReselect() {
+  if (S.status !== "running" || S.position) return;
+  if (!S._harvestAt || S._reselectDone) return;
+  if (Date.now() - S._harvestAt > 15 * 60 * 1e3) {
+    S._reselectDone = true;
+    return;
+  }
+  try {
+    const r = await scanRadar();
+    if (!r || !r.list || !r.list.length) return;
+    const cur = r.list.find((l) => l.symbol === S.config.symbol);
+    const bestOther = r.list.filter((l) => l.symbol !== S.config.symbol).find((l) => (l.score || 0) >= 55);
+    S._reselectDone = true;
+    S._nextReady = false;
+    S._nextSymbol = null;
+    if (!bestOther) {
+      pushLog("server", "\u{1F50E} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0644\u0627 \u0639\u0645\u0644\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 " + (cur ? cur.disp : S.config.displaySymbol) + " \u0641\u064A \u0627\u0644\u0631\u0627\u062F\u0627\u0631 \u2014 \u0627\u0633\u062A\u0626\u0646\u0627\u0641 \u0627\u0644\u0635\u064A\u062F \u0639\u0644\u0649 \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u062D\u0627\u0644\u064A\u0629");
+      return;
+    }
+    const curSc = cur ? cur.score || 0 : 0;
+    if (cur && curSc - bestOther.score > 10 && curSc >= 55) {
+      pushLog("server", "\u2705 \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: " + cur.disp + " (" + curSc + ") \u0623\u0642\u0648\u0649 \u0645\u0646 \u0643\u0644 \u0627\u0644\u0628\u062F\u0627\u0626\u0644 \u2014 \u0627\u0644\u0639\u0648\u062F\u0629 \u0625\u0644\u064A\u0647\u0627 \u0648\u0627\u0633\u062A\u0626\u0646\u0627\u0641 \u0627\u0644\u0635\u064A\u062F");
+      return;
+    }
+    _lastSwitchAt = Date.now();
+    const curDisp = cur ? cur.disp : S.config.displaySymbol;
+    pushLog("server", "\u{1F504} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0646\u062A\u0642\u0627\u0644 \u0645\u0628\u0627\u0634\u0631 \u0645\u0646 " + curDisp + " (" + curSc + ") \u0625\u0644\u0649 " + bestOther.disp + " (" + bestOther.score + ") \u2014 \u0645\u0646\u0637\u0642\u0629 \u0623\u0642\u0648\u0649 \u2014 \u062A\u064F\u062F\u0631\u0633 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
+    toast("\u{1F504} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: " + bestOther.disp + " \u2014 " + bestOther.score);
+    nativeNotify("AB-KING \u2014 \u0627\u0646\u062A\u0642\u0627\u0644 \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A", bestOther.disp + " \u062F\u0631\u062C\u0629 " + bestOther.score);
+    saveCfg({
+      symbol: bestOther.symbol,
+      leverage: S.config.leverage,
+      levels: S.config.levels,
+      gridStepPct: S.config.gridStepPct,
+      huntPct: S.config.huntPct,
+      tpNet: S.config.tpNet,
+      cycleBalance: S.config.cycleBalance,
+      directionMode: S.config.directionMode,
+      mode: S.config.mode,
+      sound: S.sound,
+      soundTone: S.soundTone
+    });
+  } catch (e) {
+    logSwallow("silent-catch", e);
   }
 }
 var _bgScanAt = 0;
@@ -2694,8 +2741,49 @@ function syncPositionTp() {
   }
   const needPos = Math.max(0, need);
   const cov = (entryFees + exitFee + needPos) / notional;
-  const want = roundTick(pos.side === "long" ? pos.entry * (1 + cov) : pos.entry * (1 - cov), S.tickSize);
+  let want = roundTick(pos.side === "long" ? pos.entry * (1 + cov) : pos.entry * (1 - cov), S.tickSize);
   if (!(want > 0)) return;
+  const nowT = Date.now();
+  if (!S._dynTpAt || nowT - S._dynTpAt > 6e4) {
+    S._dynTpAt = nowT;
+    S._dynTp = 0;
+    try {
+      const ob = S.orderBook || {};
+      const lv = pos.side === "long" ? ob.asks || [] : ob.bids || [];
+      if (lv.length >= 8) {
+        const sizes = lv.map((l) => +l.size || 0).sort((a, b) => a - b);
+        const med = sizes[Math.floor(sizes.length / 2)] || 1;
+        const cap = want + (pos.side === "long" ? 1 : -1) * Math.abs(want - pos.entry) * 0.5;
+        let wall = 0;
+        for (const l of lv) {
+          const lp = +l.price || 0, lsz = +l.size || 0;
+          if (pos.side === "long" ? lp > want : lp < want) {
+            if (lsz > med * 3) {
+              wall = lp;
+              break;
+            }
+          }
+        }
+        if (wall > 0) {
+          const justBeyond = wall * (pos.side === "long" ? 1.0012 : 0.9988);
+          if (pos.side === "long" ? justBeyond <= cap : justBeyond >= cap) S._dynTp = justBeyond;
+        } else {
+          const prof = profOf();
+          const vol = prof && prof.vol || 0.05;
+          if (vol > 0.12) {
+            const ext = want * (pos.side === "long" ? Math.min(1.002 + vol * 8e-3, 1.006) : Math.max(1 - (2e-3 + vol * 8e-3), 0.994));
+            S._dynTp = pos.side === "long" ? Math.min(ext, cap) : Math.max(ext, cap);
+          }
+        }
+      }
+    } catch (e) {
+      logSwallow("silent-catch", e);
+    }
+  }
+  if (S._dynTp > 0) {
+    const d = roundTick(S._dynTp, S.tickSize);
+    if (pos.side === "long" ? d > want : d < want) want = d;
+  }
   const tickTol = S.tickSize > 0 ? S.tickSize * 0.5 : Math.abs(want) * 1e-9;
   const liveTp = S.grid.filter((g) => g.reduceOnly && (g.status === "armed" || g.status === "open"));
   const remQty = (g) => Math.max(0, g.qty - (g.exFilled || 0));
@@ -2746,6 +2834,7 @@ function _harvestCleanup(fp) {
     });
   }
   S._harvestAt = Date.now();
+  S._reselectDone = false;
   S._guardId = null;
   S._tpBanked = 0;
   S._trailFloor = 0;
@@ -3303,6 +3392,7 @@ function packHunt(p) {
 function huntTrigger(p) {
   if (S.status !== "running" || !p) return null;
   if (!warmedUp()) return null;
+  if (!S.position && S._harvestAt && !S._reselectDone && Date.now() - S._harvestAt < 15 * 60 * 1e3) return null;
   if (studying()) return null;
   if (!S.position && S._lossStreak && S._lossStreak.side === S.config.direction && S._lossStreak.n >= 2 && Date.now() - S._lossStreak.at < 12e4) return null;
   const flipping = !!(S.position && S.config.direction !== S.position.side);
@@ -4176,6 +4266,8 @@ async function botTick() {
       });
     }
     if (!S.position && S.status === "running") {
+      postHarvestReselect().catch(() => {
+      });
       if (openNextReady()) return;
       backgroundPipeline().catch(() => {
       });
@@ -4694,7 +4786,7 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.2.0", at: Date.now() });
+      return send(res, 200, { ok: true, name: "KING Termux Server", version: "AB-KING-1.3.0", at: Date.now() });
     if (req.method === "GET" && u.pathname === "/state")
       return send(res, 200, { ok: true, at: Date.now(), state: S });
     if (req.method === "POST" && u.pathname === "/cmd") {

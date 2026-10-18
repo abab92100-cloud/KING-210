@@ -37,7 +37,7 @@ const srv = createServer(async (req, res) => {
     const u = new URL(req.url || '/', 'http://127.0.0.1');
 
     if (req.method === 'GET' && (u.pathname === '/' || u.pathname === '/health'))
-      return send(res, 200, { ok: true, name: 'KING Termux Server', version: 'AB-KING-1.2.0', at: Date.now() });
+      return send(res, 200, { ok: true, name: 'KING Termux Server', version: 'AB-KING-1.3.0', at: Date.now() });
 
     if (req.method === 'GET' && u.pathname === '/state')
       return send(res, 200, { ok: true, at: Date.now(), state: S });
