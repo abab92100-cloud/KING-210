@@ -1723,7 +1723,7 @@ async function maybeSwitchSymbol() {
     const best = r.list.filter((l) => l.symbol !== S.config.symbol).find((l) => (l.score || 0) >= 55);
     if (!best) return;
     const afterHarvest = !!(S._harvestAt && Date.now() - S._harvestAt < 10 * 60 * 1e3);
-    const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || S._savedAt || Date.now());
+    const idleMs = Date.now() - (S._dwellAt || S.startedAt || S._savedAt || Date.now());
     const barren = idleMs > 15 * 60 * 1e3;
     if (barren && best) {
       _lastSwitchAt = Date.now();
@@ -4811,7 +4811,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.4.4";
+var SRV_VER = "AB-KING-1.4.5";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {

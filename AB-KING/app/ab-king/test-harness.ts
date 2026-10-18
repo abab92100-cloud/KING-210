@@ -74,8 +74,35 @@ async function main() {
   log(pass2 ? '✅✅ سيناريو 2 نجح: الأعلام محفوظة في الحالة' : '❌ الأعلام لم تُحفظ');
   log('للاختبار الكامل عبر إقلاع جديد شغّل: node test-bundle.mjs revive');
 
-  /* ─── سيناريو 3: دوران البورة — 40 دقيقة بلا تنفيذ ─── */
-  log('— سيناريو 3: 16 دقيقة بلا تنفيذ صفقة (عتبة المالك الجديدة 15 د) — دوران البورة يجب أن يعمل —');
+  /* ─── سيناريو 3أ: الصيد لا يُجوَّع — صفقة قديمة 4 ساعات + وصول حديث = لا دوران ─── */
+  log('— سيناريو 3أ: آخر صفقة قبل 4 ساعات ووصلنا العملة قبل 5 دقائق — يجب ألا يدور —');
+  S.status = 'paused'; S.position = null; S.grid = [];
+  await new Promise(r => setTimeout(r, 47000));
+  S.status = 'running'; S.position = null; S.studyUntil = 0; S.studyAcc = null;
+  S._harvestAt = 0; S._reselectDone = true;
+  S.lastHuntAt = Date.now() - 4 * 60 * 60 * 1000;  // الصفقة السابقة قديمة جداً
+  S._dwellAt = Date.now() - 5 * 60 * 1000;          // لكننا وصلنا هذه العملة قبل 5 دقائق فقط
+  const beforeA = S.config.symbol;
+  await maybeSwitchSymbol();
+  await new Promise(r => setTimeout(r, 1500));
+  const stayOK = S.config.symbol === beforeA;
+  log(stayOK ? '✅✅ سيناريو 3أ نجح: لا دوران — الصيد يكمل على العملة الحالية (الإصلاح يعمل)'
+             : '❌ دار خطأً: ' + beforeA + ' → ' + S.config.symbol + ' — تجويع الصيد مستمر');
+  log('قرار 3أ: ' + JSON.stringify(lastLogs(1)));
+
+  /* ─── سيناريو 3ب: جلوس 16 دقيقة = دوران البورة يجب أن يعمل ─── */
+  log('— سيناريو 3ب: 16 دقيقة على العملة بلا تنفيذ — الدوران يجب أن يعمل —');
+  S.position = null; S.studyUntil = 0; S.studyAcc = null;
+  S.lastHuntAt = Date.now() - 4 * 60 * 60 * 1000;
+  S._dwellAt = Date.now() - 16 * 60 * 1000;         // جلسناها 16 دقيقة كاملة
+  await new Promise(r => setTimeout(r, 50000));    // تبريد التبديل 45 ثانية
+  const beforeB = S.config.symbol;
+  await maybeSwitchSymbol();
+  await new Promise(r => setTimeout(r, 1500));
+  const rotatedB = S.config.symbol !== beforeB;
+  log(rotatedB ? '✅✅ سيناريو 3ب نجح: دوران البورة عند 15 دقيقة (' + beforeB + ' → ' + S.config.symbol + ')'
+              : '❌ لم يدور عند 16 دقيقة');
+  log('قرار 3ب: ' + JSON.stringify(lastLogs(2)));
   S.lastHuntAt = Date.now() - 40 * 60 * 1000; S._harvestAt = 0; S._reselectDone = true;
   S.position = null; S.status = 'running';
   S.studyUntil = 0; S.studyAcc = null; // لا دراسة جارية — كما بعد ساعات تشغيل
@@ -85,14 +112,6 @@ async function main() {
   await new Promise(r => setTimeout(r, 47000));
   // كما بعد إعادة تشغيل حقيقية: لا صفقة 40 دقيقة، الحالة تعود من الذاكرة
   S.status = 'running'; S.position = null; S.studyUntil = 0; S.studyAcc = null;
-  S.lastHuntAt = Date.now() - 16 * 60 * 1000; S._savedAt = Date.now() - 16 * 60 * 1000;
-  const before3 = S.config.symbol;
-  await maybeSwitchSymbol();
-  await new Promise(r => setTimeout(r, 1500));
-  const rotated = S.config.symbol !== before3;
-  log(rotated ? '✅✅ سيناريو 3 نجح: دوران البورة غيّر العملة (' + before3 + ' → ' + S.config.symbol + ')' : '❌ لم يدور');
-  log('قرار الدوران: ' + JSON.stringify(lastLogs(2)));
-
   const ok = (S.config.symbol !== before || rotated);
   log(ok ? '=== النتيجة: المنطق المصلح يعمل على بيانات حية ===' : '=== فشل — يجب التصحيح ===');
   process.exit(ok ? 0 : 1);

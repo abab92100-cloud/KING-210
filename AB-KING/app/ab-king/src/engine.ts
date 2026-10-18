@@ -903,7 +903,11 @@ export async function maybeSwitchSymbol(){
     // ─── دوران البورة (قاعدة المالك: 15 دقيقة بلا تنفيذ) ───
     // 15 دقيقة بلا تنفيذ صفقة رغم الدراسة الكاملة = العملة بارة الآن:
     // انتقال لأفضل بديل مؤهل حتى لو كانت الحالية متصدرة — لا جلوس أبدي أوامر مسلحة لا تُنفذ
-    const idleMs=Date.now()-(S.lastHuntAt||S._dwellAt||S.startedAt||S._savedAt||Date.now()); // _savedAt = لحظة الإيقاف الأخيرة — العدّاد لا يُصفَّر بعد إعادة التشغيل
+    // ─── إصلاح تجويع الصيد: عدّاد البورة يقيس «مدة الجلوس على العملة الحالية» ───
+    // من _dwellAt (لحظة الوصول للعملة) — لا من lastHuntAt (آخر صفقة في التاريخ).
+    // القياس من lastHuntAt كان يجعل كل عملة تُدار بعد دقيقة (الصفقة السابقة قديمة
+    // دائماً) فلا يكمل أي صيد أبداً — صفر صفقات لساعات
+    const idleMs=Date.now()-(S._dwellAt||S.startedAt||S._savedAt||Date.now());
     const barren=idleMs>15*60*1000;
     if(barren&&best){ _lastSwitchAt=Date.now();
       const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;

@@ -10,7 +10,7 @@ import {
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog,
 } from './engine';
 
-const SRV_VER = 'AB-KING-1.4.4';
+const SRV_VER = 'AB-KING-1.4.5';
 import { createServer } from 'node:http';
 
 const PORT = 8787;
