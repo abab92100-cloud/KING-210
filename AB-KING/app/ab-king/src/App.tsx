@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
-  S, subscribe, initEngine, startBot, pauseBot, stopBot, newCycle,
+  S, subscribe, initEngine, remoteSync, detectRemoteServer, startBot, pauseBot, stopBot, newCycle,
   saveKeys, clearKeys, saveCfg, equity, desk, pulseAge, fmtPx, fmtUsd, fmtTime,
-  listContracts, effLevels, scanRadar, detectRemoteServer, netIsDown, netDownSince,
+  listContracts, effLevels, scanRadar, netIsDown, netDownSince,
 } from './engine';
 import { streamState } from './ws';
 import Chart from './Chart';
@@ -551,6 +551,19 @@ function SettingsScreen() {
 
 /* ---------- الجذر ---------- */
 export default function App() {
+  useEffect(() => {
+    // إعادة اتصال فورية عند عودة التطبيق للمقدمة — لا نافذة «منقطع» بعد الآن
+    const resync = () => {
+      remoteSync().catch(() => {});
+      detectRemoteServer().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') resync();
+    });
+    window.addEventListener('focus', resync);
+    return () => window.removeEventListener('focus', resync);
+  }, []);
+
   useEngine();
   const [tab, setTab] = useState('home');
   const [now,setToastTick]=useState(()=>Date.now());

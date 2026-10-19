@@ -7,10 +7,10 @@
 import './server-shims'; // أولًا دائمًا: يثبّت البيئة قبل تقييم المحرك
 import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
-  saveCfg, saveKeys, clearKeys, scanRadar, pushLog,
+  saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync,
 } from './engine';
 
-const SRV_VER = 'AB-KING-1.4.5';
+const SRV_VER = 'AB-KING-1.4.6';
 import { createServer } from 'node:http';
 
 const PORT = 8787;
@@ -28,6 +28,13 @@ function send(res, code, obj) {
 
 // ─── لافتة الإصدار + نبضة الحالة (إثبات مرئي داخل سجل التطبيق) ───
 pushLog('server','✅ '+SRV_VER+' يعمل الآن — التبديل التلقائي مفعّل: بعد الجني فورًا + دوران البورة عند 15 دقيقة بلا تنفيذ');
+// مراجعة الوضع عند الإقلاع (قاعدة المالك): أي إعادة تشغيل — مجمدة كانت أو تعطلًا —
+// تبدأ بمراجعة كاملة: المركز الحقيقي على المنصة، الأوامر اليتيمة، ومنطقة الجني
+setTimeout(() => {
+  liveSync().then(() => pushLog('server', '🔧 اكتملت مراجعة الوضع عند الإقلاع — الأوامر والمراكز متطابقة مع المنصة'))
+    .catch(() => pushLog('server', '⏳ بانتظار المنصة — تُعاد المراجعة تلقائيًا فور توفر الشبكة'));
+  scanRadar().catch(() => {});
+}, 1500);
 setInterval(() => {
   try {
     const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || S._savedAt || Date.now());

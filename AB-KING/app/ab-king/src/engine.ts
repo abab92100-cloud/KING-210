@@ -264,8 +264,10 @@ export function netAlivePing(ok){
     const wasDown=_netDownAt>0; _netFailStreak=0; _netDownAt=0;
     if(wasDown){
       const secs=Math.round((Date.now()-_wasDownStart)/1000);
-      pushLog('recover','عودة الاتصال بالمنصة بعد انقطاع '+secs+' ث — مزامنة كاملة للأوامر والمراكز');
-      liveSync().catch(()=>{}); scanRadar().catch(()=>{});
+      pushLog('recover','عودة الاتصال بالمنصة بعد انقطاع '+secs+' ث — بدأت مراجعة الوضع وإصلاح الأوامر');
+      liveSync().then(()=>pushLog('recover','🔧 اكتملت المراجعة بعد الانقطاع — المراكز والأوامر والجني متطابقة مع المنصة'))
+        .catch(()=>pushLog('error','تعذرت مزامنة المنصة بعد العودة — سيتكرر المحاولة كل 5 ث'));
+      scanRadar().catch(()=>{});
     }
   } else {
     // لا انقطاع إلا إذا كانت القناة اللحظية صامتة أيضًا — فشل REST العابر وحده ليس دليلًا
@@ -2502,7 +2504,7 @@ async function loadMarket(full){
 // كبح أخطاء المزامنة على السيرفر — لا window في Node: متغيرات وحدات عادية
 let _ordErrAt=0, _syncErrAt=0, _syncErrMsg='';
 let _huntErrAt=0; // خنق فشل الصيد — كل ثانية كان يغرق السجل بلا فائدة
-async function liveSync(){ if(R()) return; // وضع المرآة: الحالة ملك السيرفر — لا مزامنة منصّة محلية تزاحمه
+export async function liveSync(){ if(R()) return; // وضع المرآة: الحالة ملك السيرفر — لا مزامنة منصّة محلية تزاحمه
   if(S.config.mode!=='live'||!S.keys) return;
   const sym=S.config.symbol;
   try{
