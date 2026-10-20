@@ -2419,8 +2419,8 @@ export function studiedEarlyExit(p:any){
     const sizes=lv.map(l=>+l.size||0).sort((a,b)=>a-b);
     const med=sizes[Math.floor(sizes.length/2)]||1;
     for(const l of lv){ const lp=+l.price||0, lsz=+l.size||0;
-      const dist=(lp-p)/p*dir; if(dist<=0) continue; if(dist>0.0012) break;
-      if(dist>0&&dist<=0.0010&&lsz>med*3)
+      const dist=(lp-p)/p*dir; if(dist<=0) continue; if(dist>0.0018) break;
+      if(dist>0&&dist<=0.0015&&lsz>med*3)
         return {netNow,why:'جدار سيولة بارز قبله بـ'+(dist*100).toFixed(2)+'% — ارتداد مرجح',tag:'wall'}; } }
   // ─── الشهادة 2: حيتان تعصر عكس الاتجاه والربح معقول — بيع قبل الضغط ───
   const f=tapeFlow();

@@ -3804,8 +3804,8 @@ function studiedEarlyExit(p) {
       const lp = +l.price || 0, lsz = +l.size || 0;
       const dist = (lp - p) / p * dir2;
       if (dist <= 0) continue;
-      if (dist > 12e-4) break;
-      if (dist > 0 && dist <= 1e-3 && lsz > med * 3)
+      if (dist > 18e-4) break;
+      if (dist > 0 && dist <= 15e-4 && lsz > med * 3)
         return { netNow, why: "\u062C\u062F\u0627\u0631 \u0633\u064A\u0648\u0644\u0629 \u0628\u0627\u0631\u0632 \u0642\u0628\u0644\u0647 \u0628\u0640" + (dist * 100).toFixed(2) + "% \u2014 \u0627\u0631\u062A\u062F\u0627\u062F \u0645\u0631\u062C\u062D", tag: "wall" };
     }
   }
@@ -4888,7 +4888,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.4.8";
+var SRV_VER = "AB-KING-1.4.9";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {
