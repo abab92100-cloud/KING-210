@@ -1164,7 +1164,7 @@ export function volBrakeActive(){
   const vol=retStdev()||0;
   const shocked=!!(S.regime&&S.regime.shock);
   const oppWave=(S._waveN||0)>=3;
-  return !!(shocked||vol>0.15||oppWave); }
+  return !!(shocked||vol>0.25||oppWave); }
 
 function retStdev(){ const t=S.priceTrail; if(t.length<4) return 0;
   const r:any[]=[]; for(let i=1;i<t.length;i++) if(t[i-1]>0) r.push((t[i]-t[i-1])/t[i-1]*100);
@@ -2407,11 +2407,13 @@ export function studiedEarlyExit(p:any){
   const openFees=S.journal.filter(j=>j.status==='open').reduce((a,j)=>a+(j.fees||0),0)
     ||qty*mult*pos.entry*(S.makerFee||0.0002);
   const exitFee=qty*mult*p*(S.takerFee||0.0006);
-  // الصافي الحقيقي الآن = العائم - رسوم الدخول الفعلية - رسوم الخروج المقدرة
-  const netNow=(pos.unrealized||0)-openFees-exitFee;
-  if(!(netNow>0.02)) return null; // بربح صافٍ فقط — لا إقفال بخسارة أبداً ولا مجاناً
+  // الصافي يُحسب من سعر التنفيذ نفسه (p) — لا من قيمة عائمة مخزنة قابلة
+  // للانزلاق بين القرار والتنفيذ: شريحة واحدة كانت تقلب +0.02 إلى -0.02
+  const grossNow=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*qty;
+  const netNow=grossNow-openFees-exitFee;
+  if(!(netNow>0.05)) return null; // بربح صافٍ مضمون ≥ 5 سنت — لا إقفال بخسارة أبداً ولا مجاناً
   const dir=pos.side==='long'?1:-1; // اتجاه الربح
-  S._earlyExitAt=Date.now(); // تهدئة مضمونة داخل القرار — لا قرار مزدوج أياً كان المستدعي
+  let hit:any=null; // القرار يُجمع أولاً — التهدئة لا تُستهلك إلا بقرار فعلي
   // ─── الشهادة 1: جدار سيولة في اتجاه الربح قريب — الارتداد منه مرجح ───
   const ob=S.orderBook||{};
   const lv=pos.side==='long'?(ob.asks||[]):(ob.bids||[]);
@@ -2421,20 +2423,38 @@ export function studiedEarlyExit(p:any){
     for(const l of lv){ const lp=+l.price||0, lsz=+l.size||0;
       const dist=(lp-p)/p*dir; if(dist<=0) continue; if(dist>0.0018) break;
       if(dist>0&&dist<=0.0015&&lsz>med*3)
-        return {netNow,why:'جدار سيولة بارز قبله بـ'+(dist*100).toFixed(2)+'% — ارتداد مرجح',tag:'wall'}; } }
+        { hit={netNow,why:'جدار سيولة بارز قبله بـ'+(dist*100).toFixed(2)+'% — ارتداد مرجح',tag:'wall'}; break; } } }
   // ─── الشهادة 2: حيتان تعصر عكس الاتجاه والربح معقول — بيع قبل الضغط ───
-  const f=tapeFlow();
-  const whaleAgainst=pos.side==='long'?(f.whale<-0.45):(f.whale>0.45);
-  if(f.whaleVol>0.25&&whaleAgainst&&netNow>=Math.max(0.05,dynamicTpNet()*0.35))
-    return {netNow,why:'حيتان '+((pos.side==='long')?'شراء':'بيع')+' مضادة ('+(f.whale>0?'+':'')+f.whale.toFixed(2)+') تضغط عكس الصفقة',tag:'whales'};
+  if(!hit){ const f=tapeFlow();
+    const whaleAgainst=pos.side==='long'?(f.whale<-0.45):(f.whale>0.45);
+    if(f.whaleVol>0.25&&whaleAgainst&&netNow>=Math.max(0.05,dynamicTpNet()*0.35))
+      hit={netNow,why:'حيتان '+((pos.side==='long')?'شراء':'بيع')+' مضادة ('+(f.whale>0?'+':'')+f.whale.toFixed(2)+') تضغط عكس الصفقة',tag:'whales'}; }
   // ─── الشهادة 3: زخم انقلب ضد الصفقة بعد بلوغ نصف الهدف المدروس — اقطف ───
-  const mom=S.confluence?S.confluence.momentum:0;
-  const momAgainst=(pos.side==='long'&&mom<-0.05)||(pos.side==='short'&&mom>0.05);
-  if(momAgainst&&netNow>=dynamicTpNet()*0.5)
-    return {netNow,why:'زخم انقلب ضد الصفقة ('+(mom>0?'+':'')+mom.toFixed(2)+') بعد ربح نصف الهدف',tag:'momentum'};
+  if(!hit){ const mom=S.confluence?S.confluence.momentum:0;
+    const momAgainst=(pos.side==='long'&&mom<-0.05)||(pos.side==='short'&&mom>0.05);
+    if(momAgainst&&netNow>=dynamicTpNet()*0.5)
+      hit={netNow,why:'زخم انقلب ضد الصفقة ('+(mom>0?'+':'')+mom.toFixed(2)+') بعد ربح نصف الهدف',tag:'momentum'}; }
+  if(hit){ S._earlyExitAt=Date.now(); return hit; } // تهدئة تُستهلك بالقرار الفعلي فقط
   return null; }
 
-async function flattenAt(p:any,source:any){ const pos=S.position;
+export async function flattenAt(p:any,source:any){ const pos=S.position;
+  /* ─── الحاجز المطلق (قاعدة المالك): لا إغلاق بخسارة أبداً ───
+     مهما كان المصدر (جني مبكر، حد صبر، عودة إندكس...) — الإغلاق ينفّذ
+     فقط بصافٍ موجب. الاستثناءان الوحيدان: خطر التصفية الداهم (وإلا ضاع
+     كل شيء) وإيقاف المالك بيده. رفض الإغلاق = صمود حتى الجني */
+  if(pos&&p>0){
+    const mult=S.multiplier||1, q=pos.size||0;
+    const openFees=S.journal.filter(j=>j.status==='open').reduce((a,j)=>a+(j.fees||0),0)
+      ||q*mult*pos.entry*(S.makerFee||0.0002);
+    const exitFee=q*mult*p*(S.takerFee||0.0006);
+    const gross=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*q;
+    const net=gross-openFees-exitFee;
+    const sanctioned=source==='إيقاف'||source==='مركز'||source==='كابح الكارثة';
+    if(net<0.01&&!sanctioned){
+      if(!S._refuseAt||Date.now()-S._refuseAt>120000){ S._refuseAt=Date.now();
+        pushLog('server','🛡️ رفض إغلاق بخسارة ('+source+'): الصافي الآن '+fmtUsd(net)+
+          ' — الصمود حتى الجني — لا إقفال بخسارة أبداً'); }
+      return; } }
   // إغلاق حقيقي على المنصة أولًا — لا إغلاق محلي صوري في الوضع الحقيقي
   if(pos&&S.config.mode==='live'&&S.keys){
     exCancelAll(S.config.symbol).catch(()=>{});

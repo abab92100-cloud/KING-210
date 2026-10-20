@@ -2111,7 +2111,7 @@ function volBrakeActive() {
   const vol = retStdev() || 0;
   const shocked = !!(S.regime && S.regime.shock);
   const oppWave = (S._waveN || 0) >= 3;
-  return !!(shocked || vol > 0.15 || oppWave);
+  return !!(shocked || vol > 0.25 || oppWave);
 }
 function retStdev() {
   const t = S.priceTrail;
@@ -3791,10 +3791,11 @@ function studiedEarlyExit(p) {
   const mult = S.multiplier || 1, qty = pos.size || 0;
   const openFees = S.journal.filter((j) => j.status === "open").reduce((a, j) => a + (j.fees || 0), 0) || qty * mult * pos.entry * (S.makerFee || 2e-4);
   const exitFee = qty * mult * p * (S.takerFee || 6e-4);
-  const netNow = (pos.unrealized || 0) - openFees - exitFee;
-  if (!(netNow > 0.02)) return null;
+  const grossNow = (pos.side === "long" ? p - pos.entry : pos.entry - p) * mult * qty;
+  const netNow = grossNow - openFees - exitFee;
+  if (!(netNow > 0.05)) return null;
   const dir2 = pos.side === "long" ? 1 : -1;
-  S._earlyExitAt = Date.now();
+  let hit = null;
   const ob = S.orderBook || {};
   const lv = pos.side === "long" ? ob.asks || [] : ob.bids || [];
   if (lv.length >= 8) {
@@ -3805,22 +3806,47 @@ function studiedEarlyExit(p) {
       const dist = (lp - p) / p * dir2;
       if (dist <= 0) continue;
       if (dist > 18e-4) break;
-      if (dist > 0 && dist <= 15e-4 && lsz > med * 3)
-        return { netNow, why: "\u062C\u062F\u0627\u0631 \u0633\u064A\u0648\u0644\u0629 \u0628\u0627\u0631\u0632 \u0642\u0628\u0644\u0647 \u0628\u0640" + (dist * 100).toFixed(2) + "% \u2014 \u0627\u0631\u062A\u062F\u0627\u062F \u0645\u0631\u062C\u062D", tag: "wall" };
+      if (dist > 0 && dist <= 15e-4 && lsz > med * 3) {
+        hit = { netNow, why: "\u062C\u062F\u0627\u0631 \u0633\u064A\u0648\u0644\u0629 \u0628\u0627\u0631\u0632 \u0642\u0628\u0644\u0647 \u0628\u0640" + (dist * 100).toFixed(2) + "% \u2014 \u0627\u0631\u062A\u062F\u0627\u062F \u0645\u0631\u062C\u062D", tag: "wall" };
+        break;
+      }
     }
   }
-  const f = tapeFlow();
-  const whaleAgainst = pos.side === "long" ? f.whale < -0.45 : f.whale > 0.45;
-  if (f.whaleVol > 0.25 && whaleAgainst && netNow >= Math.max(0.05, dynamicTpNet() * 0.35))
-    return { netNow, why: "\u062D\u064A\u062A\u0627\u0646 " + (pos.side === "long" ? "\u0634\u0631\u0627\u0621" : "\u0628\u064A\u0639") + " \u0645\u0636\u0627\u062F\u0629 (" + (f.whale > 0 ? "+" : "") + f.whale.toFixed(2) + ") \u062A\u0636\u063A\u0637 \u0639\u0643\u0633 \u0627\u0644\u0635\u0641\u0642\u0629", tag: "whales" };
-  const mom = S.confluence ? S.confluence.momentum : 0;
-  const momAgainst = pos.side === "long" && mom < -0.05 || pos.side === "short" && mom > 0.05;
-  if (momAgainst && netNow >= dynamicTpNet() * 0.5)
-    return { netNow, why: "\u0632\u062E\u0645 \u0627\u0646\u0642\u0644\u0628 \u0636\u062F \u0627\u0644\u0635\u0641\u0642\u0629 (" + (mom > 0 ? "+" : "") + mom.toFixed(2) + ") \u0628\u0639\u062F \u0631\u0628\u062D \u0646\u0635\u0641 \u0627\u0644\u0647\u062F\u0641", tag: "momentum" };
+  if (!hit) {
+    const f = tapeFlow();
+    const whaleAgainst = pos.side === "long" ? f.whale < -0.45 : f.whale > 0.45;
+    if (f.whaleVol > 0.25 && whaleAgainst && netNow >= Math.max(0.05, dynamicTpNet() * 0.35))
+      hit = { netNow, why: "\u062D\u064A\u062A\u0627\u0646 " + (pos.side === "long" ? "\u0634\u0631\u0627\u0621" : "\u0628\u064A\u0639") + " \u0645\u0636\u0627\u062F\u0629 (" + (f.whale > 0 ? "+" : "") + f.whale.toFixed(2) + ") \u062A\u0636\u063A\u0637 \u0639\u0643\u0633 \u0627\u0644\u0635\u0641\u0642\u0629", tag: "whales" };
+  }
+  if (!hit) {
+    const mom = S.confluence ? S.confluence.momentum : 0;
+    const momAgainst = pos.side === "long" && mom < -0.05 || pos.side === "short" && mom > 0.05;
+    if (momAgainst && netNow >= dynamicTpNet() * 0.5)
+      hit = { netNow, why: "\u0632\u062E\u0645 \u0627\u0646\u0642\u0644\u0628 \u0636\u062F \u0627\u0644\u0635\u0641\u0642\u0629 (" + (mom > 0 ? "+" : "") + mom.toFixed(2) + ") \u0628\u0639\u062F \u0631\u0628\u062D \u0646\u0635\u0641 \u0627\u0644\u0647\u062F\u0641", tag: "momentum" };
+  }
+  if (hit) {
+    S._earlyExitAt = Date.now();
+    return hit;
+  }
   return null;
 }
 async function flattenAt(p, source) {
   const pos = S.position;
+  if (pos && p > 0) {
+    const mult = S.multiplier || 1, q = pos.size || 0;
+    const openFees = S.journal.filter((j) => j.status === "open").reduce((a, j) => a + (j.fees || 0), 0) || q * mult * pos.entry * (S.makerFee || 2e-4);
+    const exitFee = q * mult * p * (S.takerFee || 6e-4);
+    const gross = (pos.side === "long" ? p - pos.entry : pos.entry - p) * mult * q;
+    const net = gross - openFees - exitFee;
+    const sanctioned = source === "\u0625\u064A\u0642\u0627\u0641" || source === "\u0645\u0631\u0643\u0632" || source === "\u0643\u0627\u0628\u062D \u0627\u0644\u0643\u0627\u0631\u062B\u0629";
+    if (net < 0.01 && !sanctioned) {
+      if (!S._refuseAt || Date.now() - S._refuseAt > 12e4) {
+        S._refuseAt = Date.now();
+        pushLog("server", "\u{1F6E1}\uFE0F \u0631\u0641\u0636 \u0625\u063A\u0644\u0627\u0642 \u0628\u062E\u0633\u0627\u0631\u0629 (" + source + "): \u0627\u0644\u0635\u0627\u0641\u064A \u0627\u0644\u0622\u0646 " + fmtUsd(net) + " \u2014 \u0627\u0644\u0635\u0645\u0648\u062F \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A \u2014 \u0644\u0627 \u0625\u0642\u0641\u0627\u0644 \u0628\u062E\u0633\u0627\u0631\u0629 \u0623\u0628\u062F\u0627\u064B");
+      }
+      return;
+    }
+  }
   if (pos && S.config.mode === "live" && S.keys) {
     exCancelAll(S.config.symbol).catch(() => {
     });
@@ -4888,7 +4914,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.4.9";
+var SRV_VER = "AB-KING-1.5.0";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {
