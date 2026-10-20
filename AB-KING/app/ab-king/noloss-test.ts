@@ -26,7 +26,7 @@ async function main() {
   S.journal = [{ id: 'j2', status: 'open', side: 'long', qty: 500000, entry: p * 0.99, fees: 0.02, source: 'صيد' }];
   // هامش رفيع جداً (0.03$) — يجب ألا يبيع (أقل من 5 سنت)
   const near = studiedEarlyExit(p * 0.99735);
-  log('ربح هامشه 0.03$ (تحت أرضية 5 سنت): ' + (near ? '❌ باع بمنخفض' : '✅ لا بيع — الأرضية مضمونة'));
+  log('ربح هامشه 0.03$ (تحت أرضية الجني المبكر): ' + (near ? '❌ باع بمنخفض' : '✅ لا بيع — لا جني تافه'));
   // ربح واضح 0.20$ مع جدار — يبيع
   const asks: any[] = [];
   for (let i = 1; i <= 10; i++) asks.push({ price: p * (1 + 0.0002 * i), size: 40 });

@@ -45,8 +45,9 @@ export function dynamicTpNet(){
   const vol=Math.max(0.005,+prof.vol||0.05);    // تقلب % المقاس من دراسة البصمة
   const spread=Math.max(0,+prof.spread||0.02);  // سبريد % المقاس
   const volMult=clamp(vol/0.05,0.6,3);          // مرجع التقلب 0.05%
-  // نسبة من رصيد الدورة تتناسب مع التقلب: 0.12% .. 0.6%
-  let target=bal*clamp(0.0018*volMult,0.0012,0.006);
+  // نسبة من حجم الصفقة تتوسع مع التقلب المقاس: 0.2% .. 1.2% (مراجعة شاملة —
+  // لا أهداف تافهة: الربح المستحق مساحة حقيقية من الحركة)
+  let target=bal*clamp(0.003*volMult,0.002,0.012);
   // احتكاك السبريد مغطى بالكامل مع ربح صافٍ
   target=Math.max(target, bal*spread/100*2+0.05);
   if(hf) target=Math.min(target,0.05);           // وضع الجني السريع
@@ -1630,22 +1631,24 @@ function syncPositionTp(){ if(S.status!=='running'||!S.position) return;
   const cov=(entryFees+exitFee+needPos)/notional; // النسبة فوق المتوسط التي تضمن الصافي
   let want=roundTick(pos.side==='long'?pos.entry*(1+cov):pos.entry*(1-cov),S.tickSize);
   if(!(want>0)) return;
-  /* ─── منطقة الجني المدروسة (قاعدة المالك) — تُقرأ من المنصة كل 4 ثوان ───
-     الهدف الرأسماليّ أساس احتياطي فقط؛ المنطقة المدروسة (جدار الارتداد) هي
-     التي تحدد نقطة الجني — أقرب أو أبعد — ما دامت فوق أرضية اللاخسارة:
-     تعادل + كل الرسوم + أدنى ربح. تحديث الأمر فقط عند تحرك ملموس للمنطقة */
+  /* ─── مراجعة شاملة (قاعدة المالك): الجني يهدف صافياً مدروساً واسعاً ───
+     الهدف = نسبة من حجم الصفقة تتوسع مع التقلب المقاس (لا تافه ولا ضيقة).
+     جدار الارتداد القريب يرفع الجني نحوه فقط (قبيل انكساره — ربح أوسع)
+     ولا ينزله تحت الهدف أبداً — البيع القريب قبل الارتداد شأن «الجني
+     المبكر» بشهادة حيتان/زخم، لا شأن أمر الجني الموقف. تحديث مستمر كل 4 ثوان
+     للأمر فقط عند تحرك ملموس — لا قصف أوامر */
   const nowT=Date.now();
   if(!S._zoneAt||nowT-S._zoneAt>4000){
     S._zoneAt=nowT;
     const z=studiedTpZone(pos,S.lastPrice||0);
     if(z&&z.zone>0){
-      S._zone=z.zone; S._zoneWhy=z.why;
-      const floorCov=(entryFees+exitFee+0.03)/notional; // أرضية اللاخسارة: الرسوم + 3 سنت
-      const floor=roundTick(pos.side==='long'?pos.entry*(1+floorCov):pos.entry*(1-floorCov),S.tickSize);
-      S._zone=pos.side==='long'?Math.max(z.zone,floor):Math.min(z.zone,floor); } }
+      const cap=want+(pos.side==='long'?1:-1)*Math.abs(want-pos.entry)*0.5; // سقف: نصف المسافة إضافة
+      S._zone=pos.side==='long'?Math.min(z.zone,cap):Math.max(z.zone,cap); }
+    else S._zone=0; }
   if(S._zone>0){ const z=roundTick(S._zone,S.tickSize);
-    // تحديث الأمر فقط عند تحرك ملموس — لا قصف أوامر كل 4 ثوان
-    if(Math.abs(z-want)>Math.max(S.tickSize*2,want*0.0004)) want=z; }
+    // رفع فقط — الجني لا يُنزل تحت هدفه الصافي المدروس أبداً
+    if(pos.side==='long'?z>want:z<want){
+      if(Math.abs(z-want)>Math.max(S.tickSize*2,want*0.0004)) want=z; } }
   const tickTol=S.tickSize>0?S.tickSize*0.5:Math.abs(want)*1e-9;
   const liveTp=S.grid.filter(g=>g.reduceOnly&&(g.status==='armed'||g.status==='open'));
   // كمية الأمر الحيّة = أصله ناقص ما نُفّذ منه جزئيًا على المنصة
@@ -2411,7 +2414,7 @@ export function studiedEarlyExit(p:any){
   // للانزلاق بين القرار والتنفيذ: شريحة واحدة كانت تقلب +0.02 إلى -0.02
   const grossNow=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*qty;
   const netNow=grossNow-openFees-exitFee;
-  if(!(netNow>0.05)) return null; // بربح صافٍ مضمون ≥ 5 سنت — لا إقفال بخسارة أبداً ولا مجاناً
+  if(!(netNow>=Math.max(0.10,dynamicTpNet()*0.4))) return null; // بربح يستحق: ≥ 10 سنت أو 40% من الهدف — لا جني تافه
   const dir=pos.side==='long'?1:-1; // اتجاه الربح
   let hit:any=null; // القرار يُجمع أولاً — التهدئة لا تُستهلك إلا بقرار فعلي
   // ─── الشهادة 1: جدار سيولة في اتجاه الربح قريب — الارتداد منه مرجح ───

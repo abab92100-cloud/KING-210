@@ -16,8 +16,8 @@ async function main() {
   log('هبوط حاد -1.5% + لونغ مراد: kick.down=' + kick.down.toFixed(2) + '% → ' + (vetoLongOk ? '✅ الفيتو يعمل بالاتجاه المعاكس (يمنع اللونغ ضد الانهيار)' : '❌'));
 
   // ─── 2) منطقة الجني للشورت: جدار طلبات ضخم تحت السعر (دعم) ───
-  S.position = { side: 'short', size: 2000, entry: p, unrealized: 0.05, openedAt: Date.now() };
-  S.journal = [{ id: 'j1', status: 'open', side: 'short', qty: 2000, entry: p, fees: 0.01, source: 'صيد' }];
+  S.position = { side: 'short', size: 500000, entry: p * 1.004, unrealized: 0, openedAt: Date.now() };
+  S.journal = [{ id: 'j1', status: 'open', side: 'short', qty: 500000, entry: p * 1.004, fees: 0.01, source: 'صيد' }];
   const bids: any[] = [];
   for (let i = 1; i <= 10; i++) bids.push({ price: p * (1 - 0.0002 * i), size: 40 });
   bids.push({ price: p * 0.9988, size: 400 }); // جدار دعم عند -0.12%
@@ -27,12 +27,12 @@ async function main() {
   log('شورت + جدار دعم عند -0.12%: ' + (z ? '✅ منطقة الجني @ ' + z.zone.toPrecision(6) + ' (فوق الجدار — جني قبل الارتداد الصاعد) — ' + z.why : '❌'));
 
   // ─── 3) الجني المبكر للشورت: جدار + ربح صافٍ ───
-  S.position.unrealized = 0.14;
+  // الربح من السعر الحي: الدخول 1.004p والسعر الآن p
   const ex = studiedEarlyExit(p);
   log('شورت رابح 0.14 + جدار ارتداد صاعد: ' + (ex ? '✅ يبيع فوراً بصافي ' + ex.netNow.toFixed(3) + '$ — ' + ex.why : '❌ لم يبع'));
 
   // ─── 4) لا خسارة للشورت ───
-  S.position.unrealized = -0.40;
+  S.position.entry = p * 0.996; // خاسر: الدخول تحت السعر للشورت
   const exL = studiedEarlyExit(p * 1.001);
   log('شورت خاسر مع نفس الجدار: ' + (exL ? '❌ باع بخسارة!' : '✅ لا بيع — لا إقفال بخسارة في الاتجاهين'));
 

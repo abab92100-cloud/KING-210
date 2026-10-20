@@ -393,7 +393,7 @@ function dynamicTpNet() {
   const vol = Math.max(5e-3, +prof.vol || 0.05);
   const spread = Math.max(0, +prof.spread || 0.02);
   const volMult = clamp(vol / 0.05, 0.6, 3);
-  let target = bal * clamp(18e-4 * volMult, 12e-4, 6e-3);
+  let target = bal * clamp(3e-3 * volMult, 2e-3, 0.012);
   target = Math.max(target, bal * spread / 100 * 2 + 0.05);
   if (hf) target = Math.min(target, 0.05);
   return Math.max(0.05, Math.round(target * 100) / 100);
@@ -2819,16 +2819,15 @@ function syncPositionTp() {
     S._zoneAt = nowT;
     const z = studiedTpZone(pos, S.lastPrice || 0);
     if (z && z.zone > 0) {
-      S._zone = z.zone;
-      S._zoneWhy = z.why;
-      const floorCov = (entryFees + exitFee + 0.03) / notional;
-      const floor = roundTick(pos.side === "long" ? pos.entry * (1 + floorCov) : pos.entry * (1 - floorCov), S.tickSize);
-      S._zone = pos.side === "long" ? Math.max(z.zone, floor) : Math.min(z.zone, floor);
-    }
+      const cap = want + (pos.side === "long" ? 1 : -1) * Math.abs(want - pos.entry) * 0.5;
+      S._zone = pos.side === "long" ? Math.min(z.zone, cap) : Math.max(z.zone, cap);
+    } else S._zone = 0;
   }
   if (S._zone > 0) {
     const z = roundTick(S._zone, S.tickSize);
-    if (Math.abs(z - want) > Math.max(S.tickSize * 2, want * 4e-4)) want = z;
+    if (pos.side === "long" ? z > want : z < want) {
+      if (Math.abs(z - want) > Math.max(S.tickSize * 2, want * 4e-4)) want = z;
+    }
   }
   const tickTol = S.tickSize > 0 ? S.tickSize * 0.5 : Math.abs(want) * 1e-9;
   const liveTp = S.grid.filter((g) => g.reduceOnly && (g.status === "armed" || g.status === "open"));
@@ -3793,7 +3792,7 @@ function studiedEarlyExit(p) {
   const exitFee = qty * mult * p * (S.takerFee || 6e-4);
   const grossNow = (pos.side === "long" ? p - pos.entry : pos.entry - p) * mult * qty;
   const netNow = grossNow - openFees - exitFee;
-  if (!(netNow > 0.05)) return null;
+  if (!(netNow >= Math.max(0.1, dynamicTpNet() * 0.4))) return null;
   const dir2 = pos.side === "long" ? 1 : -1;
   let hit = null;
   const ob = S.orderBook || {};
@@ -4914,7 +4913,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.5.0";
+var SRV_VER = "AB-KING-1.5.1";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {
