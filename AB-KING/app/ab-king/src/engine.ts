@@ -35,9 +35,12 @@ const LOSS_STOP_USD = 16;
    · سبريد العملة المقاس: احتكاك التنفيذ مغطى بالكامل فوق الرسوم
    · التتبع الصاعد فوق الهدف (trailTarget) يكمل اقتناص الموجات القوية
    الأرضية الصلبة: الرسوم مغطاة + 5 سنت صافياً على الأقل — لا يقفل بخسارة أبداً */
-function dynamicTpNet(){
+export function dynamicTpNet(){
   const hf=S&&S.config&&S.config.hfMode;
-  const bal=Math.max(1,(S.config&&S.config.cycleBalance)||100);
+  // الأساس حجم الصفقة الفعلي (قاعدة المالك) — لا رأس المال وحده: المركز
+  // الكبير يُجنى بمساحته الحقيقية والصغير بمساحته، والدراسة تعدّل المسافة
+  const posN=S.position?Math.max(0,(S.position.size||0)*(S.multiplier||1)*(S.position.entry||0)):0;
+  const bal=Math.max(1,posN||((S.config&&S.config.cycleBalance)||100)*0.8);
   const prof=profOf()||{};
   const vol=Math.max(0.005,+prof.vol||0.05);    // تقلب % المقاس من دراسة البصمة
   const spread=Math.max(0,+prof.spread||0.02);  // سبريد % المقاس
@@ -2357,6 +2360,46 @@ function ensureGrid(){ if(S.status!=='running') return;
   S.grid=[...keep,...buildGrid(center,false,4)].filter(g=>
     keep.includes(g)||g.reduceOnly||g.status!=='armed'||!shouldFill(g,center));
   S.gridAnchor=center; S.grid.sort((a,b)=>b.price-a.price); }
+/* ─── الجني المبكر المدروس (قاعدة المالك) ───
+   لا تعصّب بنقطة جني رقمية: الدراسة الحية (دفتر الأوامر + حيتان الشريط +
+   زخم السوق) تحدد منطقة الارتداد — فإذا اجتمعت شهادة ارتداد مع ربح صافٍ
+   موجب: بيع فوري قبل ذوبان الأرباح. أحياناً ربح بسيط وأحياناً كبير —
+   ولا إقفال بخسارة أبداً (الصافي بعد كل الرسوم موجب حتماً). */
+export function studiedEarlyExit(p:any){
+  const pos=S.position;
+  if(!pos||!p||S.status!=='running') return null;
+  if(Date.now()-(S._earlyExitAt||0)<90000) return null; // تهدئة: قرار كل 90 ثانية كحد أقصى
+  const mult=S.multiplier||1, qty=pos.size||0;
+  const openFees=S.journal.filter(j=>j.status==='open').reduce((a,j)=>a+(j.fees||0),0)
+    ||qty*mult*pos.entry*(S.makerFee||0.0002);
+  const exitFee=qty*mult*p*(S.takerFee||0.0006);
+  // الصافي الحقيقي الآن = العائم - رسوم الدخول الفعلية - رسوم الخروج المقدرة
+  const netNow=(pos.unrealized||0)-openFees-exitFee;
+  if(!(netNow>0.02)) return null; // بربح صافٍ فقط — لا إقفال بخسارة أبداً ولا مجاناً
+  const dir=pos.side==='long'?1:-1; // اتجاه الربح
+  S._earlyExitAt=Date.now(); // تهدئة مضمونة داخل القرار — لا قرار مزدوج أياً كان المستدعي
+  // ─── الشهادة 1: جدار سيولة في اتجاه الربح قريب — الارتداد منه مرجح ───
+  const ob=S.orderBook||{};
+  const lv=pos.side==='long'?(ob.asks||[]):(ob.bids||[]);
+  if(lv.length>=8){
+    const sizes=lv.map(l=>+l.size||0).sort((a,b)=>a-b);
+    const med=sizes[Math.floor(sizes.length/2)]||1;
+    for(const l of lv){ const lp=+l.price||0, lsz=+l.size||0;
+      const dist=(lp-p)/p*dir; if(dist<=0) continue; if(dist>0.0012) break;
+      if(dist>0&&dist<=0.0010&&lsz>med*3)
+        return {netNow,why:'جدار سيولة بارز قبله بـ'+(dist*100).toFixed(2)+'% — ارتداد مرجح',tag:'wall'}; } }
+  // ─── الشهادة 2: حيتان تعصر عكس الاتجاه والربح معقول — بيع قبل الضغط ───
+  const f=tapeFlow();
+  const whaleAgainst=pos.side==='long'?(f.whale<-0.45):(f.whale>0.45);
+  if(f.whaleVol>0.25&&whaleAgainst&&netNow>=Math.max(0.05,dynamicTpNet()*0.35))
+    return {netNow,why:'حيتان '+((pos.side==='long')?'شراء':'بيع')+' مضادة ('+(f.whale>0?'+':'')+f.whale.toFixed(2)+') تضغط عكس الصفقة',tag:'whales'};
+  // ─── الشهادة 3: زخم انقلب ضد الصفقة بعد بلوغ نصف الهدف المدروس — اقطف ───
+  const mom=S.confluence?S.confluence.momentum:0;
+  const momAgainst=(pos.side==='long'&&mom<-0.05)||(pos.side==='short'&&mom>0.05);
+  if(momAgainst&&netNow>=dynamicTpNet()*0.5)
+    return {netNow,why:'زخم انقلب ضد الصفقة ('+(mom>0?'+':'')+mom.toFixed(2)+') بعد ربح نصف الهدف',tag:'momentum'};
+  return null; }
+
 async function flattenAt(p:any,source:any){ const pos=S.position;
   // إغلاق حقيقي على المنصة أولًا — لا إغلاق محلي صوري في الوضع الحقيقي
   if(pos&&S.config.mode==='live'&&S.keys){
@@ -2697,7 +2740,16 @@ export async function botTick(){
     if(S.config.gapMode&&!S.position&&S.status==='running'){
       gapHunterTick().catch(()=>{}); }
     if(S.position&&S.status==='running'){ syncPositionTp();
-      backgroundPipeline().catch(()=>{}); } // تبع سريع: يتحدّث كل ثانية مع الربح العائم
+      backgroundPipeline().catch(()=>{}); // تبع سريع: يتحدّث كل ثانية مع الربح العائم
+      // ─── الجني المبكر المدروس: شهادة ارتداد مع ربح صافٍ = بيع قبل ذوبانه ───
+      const ex=studiedEarlyExit(S.lastPrice||0);
+      if(ex){ S._earlyExitAt=Date.now();
+        pushLog('server','🎯 جني مبكر مدروس ('+ex.tag+'): '+ex.why+' — البيع الآن بصافي '+fmtUsd(ex.netNow)+' قبل الارتداد');
+        toast('🎯 جني مبكر: +'+ex.netNow.toFixed(2)+'$ قبل الارتداد');
+        nativeNotify('AB-KING — جني مبكر مدروس','بيع قبل الارتداد بصافي +'+ex.netNow.toFixed(2)+'$');
+        await flattenAt(S.lastPrice||0,'جني مبكر مدروس');
+        _harvestCleanup(S.lastPrice||0); // دورة مكتملة — إعادة اختيار الأفضل تبدأ
+        return; } }
     if(!S.position&&S.status==='running'){
       // إعادة الاختيار الإجباري بعد الجني — قبل أي دخول جديد (قاعدة المالك)
       postHarvestReselect().catch(()=>{});

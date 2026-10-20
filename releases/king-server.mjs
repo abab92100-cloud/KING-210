@@ -387,7 +387,8 @@ var TP_BASE_NET = 0.12;
 var LOSS_STOP_USD = 16;
 function dynamicTpNet() {
   const hf = S && S.config && S.config.hfMode;
-  const bal = Math.max(1, S.config && S.config.cycleBalance || 100);
+  const posN = S.position ? Math.max(0, (S.position.size || 0) * (S.multiplier || 1) * (S.position.entry || 0)) : 0;
+  const bal = Math.max(1, posN || (S.config && S.config.cycleBalance || 100) * 0.8);
   const prof = profOf() || {};
   const vol = Math.max(5e-3, +prof.vol || 0.05);
   const spread = Math.max(0, +prof.spread || 0.02);
@@ -3751,6 +3752,41 @@ function ensureGrid() {
   S.gridAnchor = center;
   S.grid.sort((a, b) => b.price - a.price);
 }
+function studiedEarlyExit(p) {
+  const pos = S.position;
+  if (!pos || !p || S.status !== "running") return null;
+  if (Date.now() - (S._earlyExitAt || 0) < 9e4) return null;
+  const mult = S.multiplier || 1, qty = pos.size || 0;
+  const openFees = S.journal.filter((j) => j.status === "open").reduce((a, j) => a + (j.fees || 0), 0) || qty * mult * pos.entry * (S.makerFee || 2e-4);
+  const exitFee = qty * mult * p * (S.takerFee || 6e-4);
+  const netNow = (pos.unrealized || 0) - openFees - exitFee;
+  if (!(netNow > 0.02)) return null;
+  const dir2 = pos.side === "long" ? 1 : -1;
+  S._earlyExitAt = Date.now();
+  const ob = S.orderBook || {};
+  const lv = pos.side === "long" ? ob.asks || [] : ob.bids || [];
+  if (lv.length >= 8) {
+    const sizes = lv.map((l) => +l.size || 0).sort((a, b) => a - b);
+    const med = sizes[Math.floor(sizes.length / 2)] || 1;
+    for (const l of lv) {
+      const lp = +l.price || 0, lsz = +l.size || 0;
+      const dist = (lp - p) / p * dir2;
+      if (dist <= 0) continue;
+      if (dist > 12e-4) break;
+      if (dist > 0 && dist <= 1e-3 && lsz > med * 3)
+        return { netNow, why: "\u062C\u062F\u0627\u0631 \u0633\u064A\u0648\u0644\u0629 \u0628\u0627\u0631\u0632 \u0642\u0628\u0644\u0647 \u0628\u0640" + (dist * 100).toFixed(2) + "% \u2014 \u0627\u0631\u062A\u062F\u0627\u062F \u0645\u0631\u062C\u062D", tag: "wall" };
+    }
+  }
+  const f = tapeFlow();
+  const whaleAgainst = pos.side === "long" ? f.whale < -0.45 : f.whale > 0.45;
+  if (f.whaleVol > 0.25 && whaleAgainst && netNow >= Math.max(0.05, dynamicTpNet() * 0.35))
+    return { netNow, why: "\u062D\u064A\u062A\u0627\u0646 " + (pos.side === "long" ? "\u0634\u0631\u0627\u0621" : "\u0628\u064A\u0639") + " \u0645\u0636\u0627\u062F\u0629 (" + (f.whale > 0 ? "+" : "") + f.whale.toFixed(2) + ") \u062A\u0636\u063A\u0637 \u0639\u0643\u0633 \u0627\u0644\u0635\u0641\u0642\u0629", tag: "whales" };
+  const mom = S.confluence ? S.confluence.momentum : 0;
+  const momAgainst = pos.side === "long" && mom < -0.05 || pos.side === "short" && mom > 0.05;
+  if (momAgainst && netNow >= dynamicTpNet() * 0.5)
+    return { netNow, why: "\u0632\u062E\u0645 \u0627\u0646\u0642\u0644\u0628 \u0636\u062F \u0627\u0644\u0635\u0641\u0642\u0629 (" + (mom > 0 ? "+" : "") + mom.toFixed(2) + ") \u0628\u0639\u062F \u0631\u0628\u062D \u0646\u0635\u0641 \u0627\u0644\u0647\u062F\u0641", tag: "momentum" };
+  return null;
+}
 async function flattenAt(p, source) {
   const pos = S.position;
   if (pos && S.config.mode === "live" && S.keys) {
@@ -4311,6 +4347,16 @@ async function botTick() {
       syncPositionTp();
       backgroundPipeline().catch(() => {
       });
+      const ex = studiedEarlyExit(S.lastPrice || 0);
+      if (ex) {
+        S._earlyExitAt = Date.now();
+        pushLog("server", "\u{1F3AF} \u062C\u0646\u064A \u0645\u0628\u0643\u0631 \u0645\u062F\u0631\u0648\u0633 (" + ex.tag + "): " + ex.why + " \u2014 \u0627\u0644\u0628\u064A\u0639 \u0627\u0644\u0622\u0646 \u0628\u0635\u0627\u0641\u064A " + fmtUsd(ex.netNow) + " \u0642\u0628\u0644 \u0627\u0644\u0627\u0631\u062A\u062F\u0627\u062F");
+        toast("\u{1F3AF} \u062C\u0646\u064A \u0645\u0628\u0643\u0631: +" + ex.netNow.toFixed(2) + "$ \u0642\u0628\u0644 \u0627\u0644\u0627\u0631\u062A\u062F\u0627\u062F");
+        nativeNotify("AB-KING \u2014 \u062C\u0646\u064A \u0645\u0628\u0643\u0631 \u0645\u062F\u0631\u0648\u0633", "\u0628\u064A\u0639 \u0642\u0628\u0644 \u0627\u0644\u0627\u0631\u062A\u062F\u0627\u062F \u0628\u0635\u0627\u0641\u064A +" + ex.netNow.toFixed(2) + "$");
+        await flattenAt(S.lastPrice || 0, "\u062C\u0646\u064A \u0645\u0628\u0643\u0631 \u0645\u062F\u0631\u0648\u0633");
+        _harvestCleanup(S.lastPrice || 0);
+        return;
+      }
     }
     if (!S.position && S.status === "running") {
       postHarvestReselect().catch(() => {
@@ -4810,7 +4856,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.4.6";
+var SRV_VER = "AB-KING-1.4.7";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {
