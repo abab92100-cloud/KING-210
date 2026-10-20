@@ -2098,6 +2098,21 @@ function medLevelSz(ob) {
   const s = [...ob.bids.slice(0, 10), ...ob.asks.slice(0, 10)].map((x) => x.size).sort((a, b) => a - b);
   return s.length ? s[Math.floor(s.length / 2)] : 0;
 }
+function priceKick() {
+  const t = S.priceTrail || [];
+  if (t.length < 12) return { up: 0, down: 0 };
+  const n = Math.min(45, t.length), p0 = t[t.length - n], p1 = t[t.length - 1];
+  if (!(p0 > 0)) return { up: 0, down: 0 };
+  const chg = (p1 - p0) / p0 * 100;
+  return { up: chg > 0 ? chg : 0, down: chg < 0 ? -chg : 0 };
+}
+function volBrakeActive() {
+  if (!S.position) return false;
+  const vol = retStdev() || 0;
+  const shocked = !!(S.regime && S.regime.shock);
+  const oppWave = (S._waveN || 0) >= 3;
+  return !!(shocked || vol > 0.15 || oppWave);
+}
 function retStdev() {
   const t = S.priceTrail;
   if (t.length < 4) return 0;
@@ -2389,6 +2404,14 @@ function buildGrid(center, wide, initialCount) {
 function armProgressive() {
   if (S.status !== "running") return;
   if (!S.position && S._harvestAt && !S._reselectDone && Date.now() - S._harvestAt < 15 * 60 * 1e3) return;
+  if (volBrakeActive()) {
+    if (!S._volBrakeAt || Date.now() - S._volBrakeAt > 12e4) {
+      S._volBrakeAt = Date.now();
+      const vol = retStdev() || 0;
+      pushLog("server", "\u{1F30A} \u0641\u0631\u0645\u0644\u0629 \u0627\u0644\u062A\u0642\u0644\u0628: " + (S.regime && S.regime.shock ? "\u0635\u062F\u0645\u0629 \u0646\u0638\u0627\u0645\u064A\u0629" : "\u062A\u0642\u0644\u0628 " + (vol * 100).toFixed(0) + "%") + " \u2014 \u062A\u062C\u0645\u064A\u062F \u062A\u0633\u0644\u064A\u062D \u062F\u062E\u0648\u0644 \u062C\u062F\u064A\u062F \u062D\u062A\u0649 \u064A\u0633\u062A\u0642\u0631 \u0627\u0644\u0633\u0648\u0642 \u062B\u0645 \u062A\u0639\u0648\u062F \u0627\u0644\u0623\u0648\u0627\u0645\u0631");
+    }
+    return;
+  }
   const armed = S.grid.filter((g) => g.status === "armed" || g.status === "open");
   const staged = S.grid.filter((g) => g.status === "staged");
   if (!staged.length) return;
@@ -2792,45 +2815,20 @@ function syncPositionTp() {
   let want = roundTick(pos.side === "long" ? pos.entry * (1 + cov) : pos.entry * (1 - cov), S.tickSize);
   if (!(want > 0)) return;
   const nowT = Date.now();
-  if (!S._dynTpAt || nowT - S._dynTpAt > 6e4) {
-    S._dynTpAt = nowT;
-    S._dynTp = 0;
-    try {
-      const ob = S.orderBook || {};
-      const lv = pos.side === "long" ? ob.asks || [] : ob.bids || [];
-      if (lv.length >= 8) {
-        const sizes = lv.map((l) => +l.size || 0).sort((a, b) => a - b);
-        const med = sizes[Math.floor(sizes.length / 2)] || 1;
-        const cap = want + (pos.side === "long" ? 1 : -1) * Math.abs(want - pos.entry) * 0.5;
-        let wall = 0;
-        for (const l of lv) {
-          const lp = +l.price || 0, lsz = +l.size || 0;
-          if (pos.side === "long" ? lp > want : lp < want) {
-            if (lsz > med * 3) {
-              wall = lp;
-              break;
-            }
-          }
-        }
-        if (wall > 0) {
-          const justBeyond = wall * (pos.side === "long" ? 1.0012 : 0.9988);
-          if (pos.side === "long" ? justBeyond <= cap : justBeyond >= cap) S._dynTp = justBeyond;
-        } else {
-          const prof = profOf();
-          const vol = prof && prof.vol || 0.05;
-          if (vol > 0.12) {
-            const ext = want * (pos.side === "long" ? Math.min(1.002 + vol * 8e-3, 1.006) : Math.max(1 - (2e-3 + vol * 8e-3), 0.994));
-            S._dynTp = pos.side === "long" ? Math.min(ext, cap) : Math.max(ext, cap);
-          }
-        }
-      }
-    } catch (e) {
-      logSwallow("silent-catch", e);
+  if (!S._zoneAt || nowT - S._zoneAt > 4e3) {
+    S._zoneAt = nowT;
+    const z = studiedTpZone(pos, S.lastPrice || 0);
+    if (z && z.zone > 0) {
+      S._zone = z.zone;
+      S._zoneWhy = z.why;
+      const floorCov = (entryFees + exitFee + 0.03) / notional;
+      const floor = roundTick(pos.side === "long" ? pos.entry * (1 + floorCov) : pos.entry * (1 - floorCov), S.tickSize);
+      S._zone = pos.side === "long" ? Math.max(z.zone, floor) : Math.min(z.zone, floor);
     }
   }
-  if (S._dynTp > 0) {
-    const d = roundTick(S._dynTp, S.tickSize);
-    if (pos.side === "long" ? d > want : d < want) want = d;
+  if (S._zone > 0) {
+    const z = roundTick(S._zone, S.tickSize);
+    if (Math.abs(z - want) > Math.max(S.tickSize * 2, want * 4e-4)) want = z;
   }
   const tickTol = S.tickSize > 0 ? S.tickSize * 0.5 : Math.abs(want) * 1e-9;
   const liveTp = S.grid.filter((g) => g.reduceOnly && (g.status === "armed" || g.status === "open"));
@@ -3440,6 +3438,15 @@ function packHunt(p) {
 function huntTrigger(p) {
   if (S.status !== "running" || !p) return null;
   if (!warmedUp()) return null;
+  const kick = priceKick();
+  const againstPump = S.config.direction === "short" && kick.up > 0.8 || S.config.direction === "long" && kick.down > 0.8;
+  if (againstPump) {
+    if (!S._kickVetoAt || Date.now() - S._kickVetoAt > 12e4) {
+      S._kickVetoAt = Date.now();
+      pushLog("server", "\u26D4 \u0641\u064A\u062A\u0648 \u0627\u0646\u062F\u0641\u0627\u0639: \u062A\u062D\u0631\u0643 " + (S.config.direction === "short" ? "\u0635\u0627\u0639\u062F" : "\u0647\u0627\u0628\u0637") + " \u0642\u0648\u064A " + (S.config.direction === "short" ? kick.up : kick.down).toFixed(2) + "% \u062E\u0644\u0627\u0644 \u062F\u0642\u064A\u0642\u0629 \u2014 \u0644\u0627 \u062F\u062E\u0648\u0644 \u0636\u062F\u0647 \u062D\u062A\u0649 \u064A\u0633\u062A\u0642\u0631");
+    }
+    return null;
+  }
   if (!S.position && S._harvestAt && !S._reselectDone && Date.now() - S._harvestAt < 15 * 60 * 1e3) return null;
   if (studying()) return null;
   if (!S.position && S._lossStreak && S._lossStreak.side === S.config.direction && S._lossStreak.n >= 2 && Date.now() - S._lossStreak.at < 12e4) return null;
@@ -3751,6 +3758,31 @@ function ensureGrid() {
   S.grid = [...keep, ...buildGrid(center, false, 4)].filter((g) => keep.includes(g) || g.reduceOnly || g.status !== "armed" || !shouldFill(g, center));
   S.gridAnchor = center;
   S.grid.sort((a, b) => b.price - a.price);
+}
+function studiedTpZone(pos, p) {
+  try {
+    const dir2 = pos.side === "long" ? 1 : -1;
+    const ob = S.orderBook || {};
+    const lv = pos.side === "long" ? ob.asks || [] : ob.bids || [];
+    if (lv.length >= 8) {
+      const sizes = lv.map((l) => +l.size || 0).sort((a, b) => a - b);
+      const med = sizes[Math.floor(sizes.length / 2)] || 1;
+      for (const l of lv) {
+        const lp = +l.price || 0, lsz = +l.size || 0;
+        const dist = (lp - p) / p * dir2;
+        if (dist <= 0) continue;
+        if (dist > 3e-3) break;
+        if (lsz > med * 3) return {
+          zone: lp * (dir2 > 0 ? 0.9995 : 1.0005),
+          dist: dist * 100,
+          why: "\u062C\u062F\u0627\u0631 \u0633\u064A\u0648\u0644\u0629 \u0628\u0627\u0631\u0632 \u0639\u0644\u0649 \u0628\u0639\u062F " + (dist * 100).toFixed(2) + "% \u2014 \u0627\u0644\u0627\u0631\u062A\u062F\u0627\u062F \u0645\u0646\u0647 \u0645\u0631\u062C\u062D"
+        };
+      }
+    }
+  } catch (e) {
+    logSwallow("silent-catch", e);
+  }
+  return null;
 }
 function studiedEarlyExit(p) {
   const pos = S.position;
@@ -4856,7 +4888,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.4.7";
+var SRV_VER = "AB-KING-1.4.8";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {

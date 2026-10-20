@@ -1150,6 +1150,22 @@ function bookQuality(){ const b=S.orderBook,p=S.lastPrice||0;
 // وسيط أحجام مستويات الدفتر — مرجع لكشف الجدران الضخمة وتطبيع تدفق الأوامر
 function medLevelSz(ob){ const s=[...ob.bids.slice(0,10),...ob.asks.slice(0,10)].map(x=>x.size).sort((a,b)=>a-b);
   return s.length?s[Math.floor(s.length/2)]:0; }
+/* ─── قياس الاندفاع (قاعدة المالك): تحرك السعر خلال آخر ~45 نبضة ───
+   صعود قوي جارٍ؟ لا دخول شورت ضده حتى يستقر — وعكسه صحيح */
+export function priceKick(){ const t=S.priceTrail||[]; if(t.length<12) return {up:0,down:0};
+  const n=Math.min(45,t.length), p0=t[t.length-n], p1=t[t.length-1];
+  if(!(p0>0)) return {up:0,down:0};
+  const chg=(p1-p0)/p0*100;
+  return {up:chg>0?chg:0, down:chg<0?-chg:0}; }
+/* ─── فرملة التقلب (قاعدة المالك): انزلاق/موجة قوية = تجميد تسليح الدخول الجديد
+   حتى يستقر السوق ثم تعود الأوامر — لا 13 أمراً في ربع ساعة بعد الآن ─── */
+export function volBrakeActive(){
+  if(!S.position) return false;
+  const vol=retStdev()||0;
+  const shocked=!!(S.regime&&S.regime.shock);
+  const oppWave=(S._waveN||0)>=3;
+  return !!(shocked||vol>0.15||oppWave); }
+
 function retStdev(){ const t=S.priceTrail; if(t.length<4) return 0;
   const r:any[]=[]; for(let i=1;i<t.length;i++) if(t[i-1]>0) r.push((t[i]-t[i-1])/t[i-1]*100);
   if(r.length<3) return 0; const m=r.reduce((a,b)=>a+b,0)/r.length;
@@ -1362,6 +1378,13 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
 function armProgressive(){ if(S.status!=='running') return;
   // بعد الجني: لا تسليح دخول جديد حتى تكتمل إعادة اختيار العملة — لا تعبئة مبكرة تكسر الدورة
   if(!S.position&&S._harvestAt&&!S._reselectDone&&Date.now()-S._harvestAt<15*60*1000) return;
+  // ─── فرملة التقلب (قاعدة المالك): انزلاق/صدمة/موجة معاكسة = تجميد التسليح حتى الاستقرار ───
+  if(volBrakeActive()){
+    if(!S._volBrakeAt||Date.now()-S._volBrakeAt>120000){ S._volBrakeAt=Date.now();
+      const vol=retStdev()||0;
+      pushLog('server','🌊 فرملة التقلب: '+(S.regime&&S.regime.shock?'صدمة نظامية':'تقلب '+(vol*100).toFixed(0)+'%')+
+        ' — تجميد تسليح دخول جديد حتى يستقر السوق ثم تعود الأوامر'); }
+    return; }
   const armed=S.grid.filter(g=>g.status==='armed'||g.status==='open');
   const staged=S.grid.filter(g=>g.status==='staged');
   if(!staged.length) return;
@@ -1607,38 +1630,22 @@ function syncPositionTp(){ if(S.status!=='running'||!S.position) return;
   const cov=(entryFees+exitFee+needPos)/notional; // النسبة فوق المتوسط التي تضمن الصافي
   let want=roundTick(pos.side==='long'?pos.entry*(1+cov):pos.entry*(1-cov),S.tickSize);
   if(!(want>0)) return;
-  /* ─── منطقة الجني الديناميكية (دراسة السيولة الحية) ───
-     الأرضية الصلبة: تعادل + رسوم + الهدف الصافي — لا خروج بخسارة أبدًا.
-     الدراسة المستمرة (كل 60 ثانية) ترفع المنطقة فقط نحو:
-     · ما بعد أقرب جدار سيولة بارز (3× الوسيط) — بيع قبيل انكسار الجدار
-     · تقلب مرتفع مقاس من بصمة العملة — مساحة حركة أوسع
-     سقف الرفع: نصف المسافة الأصلية فوق المتوسط — لا طمع يعطّل الجني */
+  /* ─── منطقة الجني المدروسة (قاعدة المالك) — تُقرأ من المنصة كل 4 ثوان ───
+     الهدف الرأسماليّ أساس احتياطي فقط؛ المنطقة المدروسة (جدار الارتداد) هي
+     التي تحدد نقطة الجني — أقرب أو أبعد — ما دامت فوق أرضية اللاخسارة:
+     تعادل + كل الرسوم + أدنى ربح. تحديث الأمر فقط عند تحرك ملموس للمنطقة */
   const nowT=Date.now();
-  if(!S._dynTpAt||nowT-S._dynTpAt>60000){
-    S._dynTpAt=nowT; S._dynTp=0;
-    try{
-      const ob=S.orderBook||{};
-      const lv=pos.side==='long'?(ob.asks||[]):(ob.bids||[]); // لونغ يبيع في العروض
-      if(lv.length>=8){
-        const sizes=lv.map(l=>+l.size||0).sort((a,b)=>a-b);
-        const med=sizes[Math.floor(sizes.length/2)]||1;
-        const cap=want+(pos.side==='long'?1:-1)*Math.abs(want-pos.entry)*0.5;
-        // أقرب جدار بارز في اتجاه الجني
-        let wall=0;
-        for(const l of lv){ const lp=+l.price||0, lsz=+l.size||0;
-          if(pos.side==='long'?lp>want:lp<want){ if(lsz>med*3){ wall=lp; break; } } }
-        if(wall>0){ const justBeyond=wall*(pos.side==='long'?1.0012:0.9988);
-          if(pos.side==='long'?justBeyond<=cap:justBeyond>=cap) S._dynTp=justBeyond; }
-        else{
-          const prof=profOf(); const vol=(prof&&prof.vol)||0.05;
-          if(vol>0.12){ // تقلب مرتفع: مدّ بجزء من التقلب داخل السقف
-            const ext=want*(pos.side==='long'?Math.min(1.002+vol*0.008,1.006):Math.max(1-(0.002+vol*0.008),0.994));
-            S._dynTp=pos.side==='long'?Math.min(ext,cap):Math.max(ext,cap); } }
-      }
-    }catch(e){ logSwallow('silent-catch',e); }
-  }
-  if(S._dynTp>0){ const d=roundTick(S._dynTp,S.tickSize);
-    if(pos.side==='long'?d>want:d<want) want=d; } // رفع فقط — الأرضية لا تُخترق
+  if(!S._zoneAt||nowT-S._zoneAt>4000){
+    S._zoneAt=nowT;
+    const z=studiedTpZone(pos,S.lastPrice||0);
+    if(z&&z.zone>0){
+      S._zone=z.zone; S._zoneWhy=z.why;
+      const floorCov=(entryFees+exitFee+0.03)/notional; // أرضية اللاخسارة: الرسوم + 3 سنت
+      const floor=roundTick(pos.side==='long'?pos.entry*(1+floorCov):pos.entry*(1-floorCov),S.tickSize);
+      S._zone=pos.side==='long'?Math.max(z.zone,floor):Math.min(z.zone,floor); } }
+  if(S._zone>0){ const z=roundTick(S._zone,S.tickSize);
+    // تحديث الأمر فقط عند تحرك ملموس — لا قصف أوامر كل 4 ثوان
+    if(Math.abs(z-want)>Math.max(S.tickSize*2,want*0.0004)) want=z; }
   const tickTol=S.tickSize>0?S.tickSize*0.5:Math.abs(want)*1e-9;
   const liveTp=S.grid.filter(g=>g.reduceOnly&&(g.status==='armed'||g.status==='open'));
   // كمية الأمر الحيّة = أصله ناقص ما نُفّذ منه جزئيًا على المنصة
@@ -2090,6 +2097,14 @@ function packHunt(p:any){
   return {side:S.config.direction==='short'?'sell':'buy',qty:contractsForLevel(p)}; }
 function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(!warmedUp()) return null;
+  // ─── فيتو الاندفاع (قاعدة المالك): حركة قوية جارية ضد الاتجاه = لا دخول حتى تستقر ───
+  const kick=priceKick();
+  const againstPump=(S.config.direction==='short'&&kick.up>0.8)||(S.config.direction==='long'&&kick.down>0.8);
+  if(againstPump){
+    if(!S._kickVetoAt||Date.now()-S._kickVetoAt>120000){ S._kickVetoAt=Date.now();
+      pushLog('server','⛔ فيتو اندفاع: تحرك '+(S.config.direction==='short'?'صاعد':'هابط')+' قوي '+
+        (S.config.direction==='short'?kick.up:kick.down).toFixed(2)+'% خلال دقيقة — لا دخول ضده حتى يستقر'); }
+    return null; }
   // بعد الجني: إعادة اختيار إلزامية قبل أي دخول — لا إعادة دخول فورية على نفس العملة
   if(!S.position&&S._harvestAt&&!S._reselectDone&&Date.now()-S._harvestAt<15*60*1000) return null;
   if(studying()) return null; // العملة قيد الدراسة — لا دخول قبل اكتمال بصمتها
@@ -2365,6 +2380,25 @@ function ensureGrid(){ if(S.status!=='running') return;
    زخم السوق) تحدد منطقة الارتداد — فإذا اجتمعت شهادة ارتداد مع ربح صافٍ
    موجب: بيع فوري قبل ذوبان الأرباح. أحياناً ربح بسيط وأحياناً كبير —
    ولا إقفال بخسارة أبداً (الصافي بعد كل الرسوم موجب حتماً). */
+/* ─── منطقة الجني المدروسة (قاعدة المالك): تُقرأ من دفتر المنصة —
+   أقرب جدار سيولة بارز في اتجاه الربح = نقطة الارتداد المحتملة — الجني
+   قبيلها مباشرة. تتحدث كل 4 ثوان، وتظل فوق أرضية اللاخسارة دائماً ─── */
+export function studiedTpZone(pos:any,p:any){
+  try{
+    const dir=pos.side==='long'?1:-1; // اتجاه الربح
+    const ob=S.orderBook||{};
+    const lv=pos.side==='long'?(ob.asks||[]):(ob.bids||[]);
+    if(lv.length>=8){
+      const sizes=lv.map(l=>+l.size||0).sort((a,b)=>a-b);
+      const med=sizes[Math.floor(sizes.length/2)]||1;
+      for(const l of lv){ const lp=+l.price||0, lsz=+l.size||0;
+        const dist=(lp-p)/p*dir;
+        if(dist<=0) continue; if(dist>0.003) break; // مدى دراسة 0.30%
+        if(lsz>med*3) return {zone:lp*(dir>0?0.9995:1.0005),dist:dist*100,
+          why:'جدار سيولة بارز على بعد '+((dist*100).toFixed(2))+'% — الارتداد منه مرجح'}; } }
+  }catch(e){ logSwallow('silent-catch',e); }
+  return null; }
+
 export function studiedEarlyExit(p:any){
   const pos=S.position;
   if(!pos||!p||S.status!=='running') return null;
