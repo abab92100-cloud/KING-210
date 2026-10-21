@@ -1160,6 +1160,14 @@ export function priceKick(){ const t=S.priceTrail||[]; if(t.length<12) return {u
   return {up:chg>0?chg:0, down:chg<0?-chg:0}; }
 /* ─── فرملة التقلب (قاعدة المالك): انزلاق/موجة قوية = تجميد تسليح الدخول الجديد
    حتى يستقر السوق ثم تعود الأوامر — لا 13 أمراً في ربع ساعة بعد الآن ─── */
+/* ─── سقف التعرّض (بديل وقف الخسارة — قرار المالك: لا إقفال بخسارة أبداً) ───
+   الكارثة: التعرض بلغ ~12× رصيد الدورة فكانت التصفية عند ~-7% فقط.
+   الحماية الرياضية: التعرض الكلي ≤ 4× رصيد الدورة → التصفية تحتاج حركة
+   -25%+ بلا ارتداد — وبهامش كهذا تكفي الشبكة والصمود والجني المدروس */
+export function exposureCapped(){ const pos=S.position; if(!pos) return false;
+  const notional=pos.size*(S.multiplier||1)*(pos.entry||0);
+  return notional>Math.max(20,(S.config.cycleBalance||0)*4); }
+
 export function volBrakeActive(){
   if(!S.position) return false;
   const vol=retStdev()||0;
@@ -1377,6 +1385,11 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
   return grid.sort((a,b)=>b.price-a.price); }
 /* PROGRESSIVE GRID: open with 4 orders; when only 1 armed remains, arm 2 more */
 function armProgressive(){ if(S.status!=='running') return;
+  // سقف التعرّض: لا مزيد من المستويات عند بلوغه — حماية من التصفية بلا وقف خسارة
+  if(exposureCapped()){
+    if(!S._expCapAt||Date.now()-S._expCapAt>300000){ S._expCapAt=Date.now();
+      pushLog('server','🧮 سقف التعرّض (4× رصيد الدورة): السلم مكتمل — لا مزيد من المستويات — الصمود والجني المدروس يتكفلان'); }
+    return; }
   // بعد الجني: لا تسليح دخول جديد حتى تكتمل إعادة اختيار العملة — لا تعبئة مبكرة تكسر الدورة
   if(!S.position&&S._harvestAt&&!S._reselectDone&&Date.now()-S._harvestAt<15*60*1000) return;
   // ─── فرملة التقلب (قاعدة المالك): انزلاق/صدمة/موجة معاكسة = تجميد التسليح حتى الاستقرار ───
@@ -2123,6 +2136,8 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
     if(toxicBlocked(S.config.direction)) return null;
     return packHunt(p); }
   if(toxicBlocked(S.config.direction)) return null;
+  // سقف التعرّض: لا إضافات جديدة عنده — الحجم الكلي محكوم رياضياً
+  if(S.position&&exposureCapped()) return null;
   // ─── إصلاح الكارثة: لا إضافات صيد مادامت فرملة التقلب نشطة — لا تغذية للانهيار ───
   if(S.position&&volBrakeActive()){
     if(!S._brkVetoAt||Date.now()-S._brkVetoAt>180000){ S._brkVetoAt=Date.now();
@@ -2301,24 +2316,7 @@ async function circuitBreak(p:any){ if(!p||S.status!=='running') return;
     return; } }
 async function escapeAdverse(p:any){ if(S.status!=='running'||!S.position||!p) return;
   const pos=S.position;
-  /* ─── صمام حماية رأس المال (درس الكارثة: -156.52 من دورة 170$) ───
-     الانتظار الأبدي مع «لا إقفال بخسارة» انتهى بتغذية الانهيار ثم التصفية.
-     السقف الجديد: صدمة مؤكدة ضد المركز + خسارة الدورة ≥ (16$ أو 10% من
-     رصيدها) → خروج محدود يقطع الخسارة ويحفظ 90% من رأس المال. هذا هو
-     البديل الحسابي الوحيد بين خسارة محدودة ومحقرة */
-  { const cyc=(S.realizedPnl||0)+(pos.unrealized||0)-(S.feesPaid||0)-(S.slipCost||0)-(S.fundingPaid||0);
-    const capLoss=Math.max(LOSS_STOP_USD,(S.config.cycleBalance||0)*0.10);
-    const momNow=S.confluence?S.confluence.momentum:0;
-    const shockAgainst=!!(S.regime&&S.regime.shock)&&
-      ((pos.side==='long'&&momNow<-0.15)||(pos.side==='short'&&momNow>0.15));
-    if(cyc<=-capLoss&&shockAgainst&&adversePct(p)>1.5){
-      pushLog('server','\u{1F6E2}\uFE0F حماية رأس المال: خروج محدود عند '+fmtUsd(cyc)+' (سقف '+capLoss.toFixed(1)+
-        '$) — صدمة مؤكدة ضد المركز — حفظ بقية الدورة بدل التصفية الكاملة');
-      toast('\u{1F6E2}\uFE0F حماية رأس المال: خروج محدود — حفظ الدورة');
-      nativeNotify('AB-KING — حماية رأس المال','خروج محدود قبل التصفية — حفظ بقية رأس المال');
-      await flattenAt(p,'حماية رأس المال');
-      S._postDisaster=Date.now();
-      return; } }
+  
   let danger=liqDanger(p); reversalAgainst(p);
   // تأكيد المنصة قبل الإقفال الطارئ: سعر تصفية معلن من KuCoin سليم الجهة
   // وبعيد عن السعر = الإنذار المحلي كاذب (قراءة وهمية أقفلت صفقات بخسارة) — لا إقفال
@@ -2482,7 +2480,7 @@ export async function flattenAt(p:any,source:any){ const pos=S.position;
     const exitFee=q*mult*p*(S.takerFee||0.0006);
     const gross=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*q;
     const net=gross-openFees-exitFee;
-    const sanctioned=source==='إيقاف'||source==='مركز'||source==='كابح الكارثة'||source==='حماية رأس المال';
+    const sanctioned=source==='إيقاف'||source==='مركز'||source==='كابح الكارثة';
     if(net<0.01&&!sanctioned){
       if(!S._refuseAt||Date.now()-S._refuseAt>120000){ S._refuseAt=Date.now();
         pushLog('server','🛡️ رفض إغلاق بخسارة ('+source+'): الصافي الآن '+fmtUsd(net)+
