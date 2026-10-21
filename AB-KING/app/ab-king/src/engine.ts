@@ -1690,6 +1690,7 @@ function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
     exCancelStops(S.config.symbol).catch(()=>{}); }
   S._harvestAt=Date.now(); // لحظة اكتمال الدورة — القفز للعملة التالية مسموح بعدها فقط
   S._reselectDone=false; // إعادة الاختيار الإجباري بعد كل جني (قاعدة المالك)
+  S._posPeakNet=null; // ذروة جديدة لكل دورة — قفل الذروة لا يتسرب بين الصفقات
   S._guardId=null; S._tpBanked=0; S._trailFloor=0;
   for(const g of S.grid){ if(g.status==='armed'||g.status==='open'||g.status==='staged'){
     g.status='cancelled'; g.exchangeOrderId=null; } }
@@ -2443,6 +2444,8 @@ export function studiedEarlyExit(p:any){
   const grossNow=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*qty;
   const netNow=grossNow-openFees-exitFee;
   if(!(netNow>=Math.max(0.10,dynamicTpNet()*0.4))) return null; // بربح يستحق: ≥ 10 سنت أو 40% من الهدف — لا جني تافه
+  // ─── تتبع ذروة الربح (قاعدة المالك): لا تعيد الربح المكتشف للسوق ───
+  S._posPeakNet=Math.max(S._posPeakNet||0,netNow);
   const dir=pos.side==='long'?1:-1; // اتجاه الربح
   let hit:any=null; // القرار يُجمع أولاً — التهدئة لا تُستهلك إلا بقرار فعلي
   // ─── الشهادة 1: جدار سيولة في اتجاه الربح قريب — الارتداد منه مرجح ───
@@ -2465,6 +2468,18 @@ export function studiedEarlyExit(p:any){
     const momAgainst=(pos.side==='long'&&mom<-0.05)||(pos.side==='short'&&mom>0.05);
     if(momAgainst&&netNow>=dynamicTpNet()*0.5)
       hit={netNow,why:'زخم انقلب ضد الصفقة ('+(mom>0?'+':'')+mom.toFixed(2)+') بعد ربح نصف الهدف',tag:'momentum'}; }
+  /* ─── الشهادة 4: قفل ذروة الربح ───
+     بلغ الربح العائم 40%+ من الهدف ثم تراجع عن 60% من ذروته؟ السوق رفض
+     الذروة وارتد — البيع فوراً بمنطقة مرتدة مدروسة بدل مشاهدته يذوب
+     كاملاً ثم الانتظار الطويل. (مثال المالك: ذروة 0.60$ والهدف 1.03$ —
+     كان يجب البيع عند ~0.36$ بدل ذوبانها وعودة المركز للخسارة) */
+  if(!hit){ const peak=S._posPeakNet||0, tgt=dynamicTpNet();
+    const engaged=peak>=Math.max(0.15,tgt*0.4);        // ذروة ذات شأن تُقفل
+    const retraced=netNow<=peak*0.6;                    // تراجع 40% من الذروة
+    const worthwhile=netNow>=Math.max(0.08,tgt*0.25);   // والمتبقي يستحق
+    if(engaged&&retraced&&worthwhile)
+      hit={netNow,why:'ذروة الربح كانت '+peak.toFixed(2)+'$ وتراجعت إلى '+netNow.toFixed(2)+
+        '$ — قفل الربح قبل ذوبانه الكامل',tag:'peaklock'}; }
   if(hit){ S._earlyExitAt=Date.now(); return hit; } // تهدئة تُستهلك بالقرار الفعلي فقط
   return null; }
 

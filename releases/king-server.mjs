@@ -2893,6 +2893,7 @@ function _harvestCleanup(fp) {
   }
   S._harvestAt = Date.now();
   S._reselectDone = false;
+  S._posPeakNet = null;
   S._guardId = null;
   S._tpBanked = 0;
   S._trailFloor = 0;
@@ -3821,6 +3822,7 @@ function studiedEarlyExit(p) {
   const grossNow = (pos.side === "long" ? p - pos.entry : pos.entry - p) * mult * qty;
   const netNow = grossNow - openFees - exitFee;
   if (!(netNow >= Math.max(0.1, dynamicTpNet() * 0.4))) return null;
+  S._posPeakNet = Math.max(S._posPeakNet || 0, netNow);
   const dir2 = pos.side === "long" ? 1 : -1;
   let hit = null;
   const ob = S.orderBook || {};
@@ -3850,6 +3852,14 @@ function studiedEarlyExit(p) {
     const momAgainst = pos.side === "long" && mom < -0.05 || pos.side === "short" && mom > 0.05;
     if (momAgainst && netNow >= dynamicTpNet() * 0.5)
       hit = { netNow, why: "\u0632\u062E\u0645 \u0627\u0646\u0642\u0644\u0628 \u0636\u062F \u0627\u0644\u0635\u0641\u0642\u0629 (" + (mom > 0 ? "+" : "") + mom.toFixed(2) + ") \u0628\u0639\u062F \u0631\u0628\u062D \u0646\u0635\u0641 \u0627\u0644\u0647\u062F\u0641", tag: "momentum" };
+  }
+  if (!hit) {
+    const peak = S._posPeakNet || 0, tgt = dynamicTpNet();
+    const engaged = peak >= Math.max(0.15, tgt * 0.4);
+    const retraced = netNow <= peak * 0.6;
+    const worthwhile = netNow >= Math.max(0.08, tgt * 0.25);
+    if (engaged && retraced && worthwhile)
+      hit = { netNow, why: "\u0630\u0631\u0648\u0629 \u0627\u0644\u0631\u0628\u062D \u0643\u0627\u0646\u062A " + peak.toFixed(2) + "$ \u0648\u062A\u0631\u0627\u062C\u0639\u062A \u0625\u0644\u0649 " + netNow.toFixed(2) + "$ \u2014 \u0642\u0641\u0644 \u0627\u0644\u0631\u0628\u062D \u0642\u0628\u0644 \u0630\u0648\u0628\u0627\u0646\u0647 \u0627\u0644\u0643\u0627\u0645\u0644", tag: "peaklock" };
   }
   if (hit) {
     S._earlyExitAt = Date.now();
@@ -4941,7 +4951,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.5.4";
+var SRV_VER = "AB-KING-1.5.5";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {
