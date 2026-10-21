@@ -47,11 +47,11 @@ export function dynamicTpNet(){
   const volMult=clamp(vol/0.05,0.6,3);          // مرجع التقلب 0.05%
   // نسبة من حجم الصفقة تتوسع مع التقلب المقاس: 0.2% .. 1.2% (مراجعة شاملة —
   // لا أهداف تافهة: الربح المستحق مساحة حقيقية من الحركة)
-  let target=bal*clamp(0.003*volMult,0.002,0.012);
+  let target=bal*clamp(0.005*volMult,0.004,0.018);
   // احتكاك السبريد مغطى بالكامل مع ربح صافٍ
   target=Math.max(target, bal*spread/100*2+0.05);
   if(hf) target=Math.min(target,0.05);           // وضع الجني السريع
-  return Math.max(0.05,Math.round(target*100)/100); }
+  return Math.max(0.15,Math.round(target*100)/100); } // أرضية 15 سنت — لا أهداف تافهة
 function tpBase(){ return dynamicTpNet(); } // الهدف المرجعي في كل المواضع = المدروس
 
 /* ---------- أدوات ---------- */
@@ -2146,15 +2146,19 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   // جودة المنطقة: إشارة واحدة لا تكفي — الدخول المدروس يتطلب إشارتين
   // متوافقتين على الأقل (مرساة + دعم) — يمنع الدخول بقمم الحركة
   if(sig.length<2){
-    // إشارة واحدة تكفي إن كانت قوية: مرساة كبيرة (≥1.5×عتبة الصيد) أو فجوة مارك واضحة
+    // ─── جودة الدخول (قاعدة المالك): إشارة التأكيد وحدها لا تفتح صفقة ───
+    // الزخم/الاتجاه/الحيتان/الانحراف/ضغط الأوامر/قائد BTC = شهود تعزيز فقط —
+    // الدخول المنفرد يفتحه سعر حقيقي: مرساة ارتداد واضحة أو فجوة مارك أو فخ
+    // اختراق. المطاردة على شهود التعزيز وحدها كانت تفتح دخولاً يعلق 6 ساعات
     const need=effectiveHuntPct();
     const markGap=sig.some(x=>x.indexOf('\u0641\u062c\u0648\u0629 \u0645\u0627\u0631\u0643')===0);
-    const decentRetrace=sig.some(x=>x.indexOf('\u0645\u0631\u0633\u0627\u0629')===0&&parseFloat(x.replace(/[^\u0660-\u0669.]/g,''))>=need*0.8);
-    const strongSingle=markGap||decentRetrace||(sig.length===1&&(
-      sig[0].indexOf('\u0632\u062e\u0645')===0||sig[0].indexOf('\u0627\u062a\u062c\u0627\u0647')===0||
-      sig[0].indexOf('\u062d\u064a\u062a\u0627\u0646')===0||sig[0].indexOf('\u0627\u0646\u062d\u0631\u0627\u0641')===0||
-      sig[0].indexOf('\u0641\u062e \u0627\u062e\u062a\u0631\u0627\u0642')===0||sig[0].indexOf('\u0636\u063a\u0637 \u0623\u0648\u0627\u0645\u0631')===0));
-    if(!strongSingle) return null; }
+    const decentRetrace=sig.some(x=>x.indexOf('\u0645\u0631\u0633\u0627\u0629')===0&&parseFloat(x.replace(/[^\u0660-\u0669.]/g,''))>=need*0.9);
+    const trap=sig.some(x=>x.indexOf('\u0641\u062e \u0627\u062e\u062a\u0631\u0627\u0642')===0);
+    const priceEdge=markGap||decentRetrace||trap;
+    if(!priceEdge){
+      if(!S._confVetoAt||Date.now()-S._confVetoAt>300000){ S._confVetoAt=Date.now();
+        pushLog('server','\u{1F512} \u0628\u0627\u0628 \u062A\u0623\u0643\u064A\u062F \u0648\u062D\u062F\u0647 \u0644\u0627 \u064A\u0641\u062A\u062D \u0635\u0641\u0642\u0629 ('+sig[0]+') \u2014 \u064A\u0646\u062A\u0638\u0631 \u0625\u0634\u0627\u0631\u0629 \u0633\u0639\u0631 \u062D\u0642\u064A\u0642\u064A\u0629: \u0645\u0631\u0633\u0627\u0629 \u0648\u0627\u0636\u062D\u0629 \u0623\u0648 \u0641\u062C\u0648\u0629 \u0645\u0627\u0631\u0643 \u0623\u0648 \u0641\u062E \u0627\u062E\u062A\u0631\u0627\u0642'); }
+      return null; } }
   S._lastSig=sig.slice(0,3).join(' · ');
   return packHunt(p); }
 function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
