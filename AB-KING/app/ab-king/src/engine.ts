@@ -2123,6 +2123,11 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
     if(toxicBlocked(S.config.direction)) return null;
     return packHunt(p); }
   if(toxicBlocked(S.config.direction)) return null;
+  // ─── إصلاح الكارثة: لا إضافات صيد مادامت فرملة التقلب نشطة — لا تغذية للانهيار ───
+  if(S.position&&volBrakeActive()){
+    if(!S._brkVetoAt||Date.now()-S._brkVetoAt>180000){ S._brkVetoAt=Date.now();
+      pushLog('server','🔒 لا إضافات أثناء فرملة التقلب — السلم قائم بلا تغذية حتى يستقر'); }
+    return null; }
   if(S.position){ if(!inAddZone(p)) return null; }
   if(S.startedAt&&Date.now()-S.startedAt<SCOUT_MS&&filledAdds()>=1) return null;
   if(S.lastAddAt&&Date.now()-S.lastAddAt<ADD_COOLDOWN) return null;
@@ -2296,6 +2301,24 @@ async function circuitBreak(p:any){ if(!p||S.status!=='running') return;
     return; } }
 async function escapeAdverse(p:any){ if(S.status!=='running'||!S.position||!p) return;
   const pos=S.position;
+  /* ─── صمام حماية رأس المال (درس الكارثة: -156.52 من دورة 170$) ───
+     الانتظار الأبدي مع «لا إقفال بخسارة» انتهى بتغذية الانهيار ثم التصفية.
+     السقف الجديد: صدمة مؤكدة ضد المركز + خسارة الدورة ≥ (16$ أو 10% من
+     رصيدها) → خروج محدود يقطع الخسارة ويحفظ 90% من رأس المال. هذا هو
+     البديل الحسابي الوحيد بين خسارة محدودة ومحقرة */
+  { const cyc=(S.realizedPnl||0)+(pos.unrealized||0)-(S.feesPaid||0)-(S.slipCost||0)-(S.fundingPaid||0);
+    const capLoss=Math.max(LOSS_STOP_USD,(S.config.cycleBalance||0)*0.10);
+    const momNow=S.confluence?S.confluence.momentum:0;
+    const shockAgainst=!!(S.regime&&S.regime.shock)&&
+      ((pos.side==='long'&&momNow<-0.15)||(pos.side==='short'&&momNow>0.15));
+    if(cyc<=-capLoss&&shockAgainst&&adversePct(p)>1.5){
+      pushLog('server','\u{1F6E2}\uFE0F حماية رأس المال: خروج محدود عند '+fmtUsd(cyc)+' (سقف '+capLoss.toFixed(1)+
+        '$) — صدمة مؤكدة ضد المركز — حفظ بقية الدورة بدل التصفية الكاملة');
+      toast('\u{1F6E2}\uFE0F حماية رأس المال: خروج محدود — حفظ الدورة');
+      nativeNotify('AB-KING — حماية رأس المال','خروج محدود قبل التصفية — حفظ بقية رأس المال');
+      await flattenAt(p,'حماية رأس المال');
+      S._postDisaster=Date.now();
+      return; } }
   let danger=liqDanger(p); reversalAgainst(p);
   // تأكيد المنصة قبل الإقفال الطارئ: سعر تصفية معلن من KuCoin سليم الجهة
   // وبعيد عن السعر = الإنذار المحلي كاذب (قراءة وهمية أقفلت صفقات بخسارة) — لا إقفال
@@ -2351,7 +2374,10 @@ function ensureGrid(){ if(S.status!=='running') return;
   // تجميد إعادة التسليح أثناء موجة معاكسة: بلا هذا القفل كان السلم يُعاد بناؤه
   // في النبضة التالية لسحب الدرع فيُلغى مفعول السحب وتُكنس المستويات من جديد.
   // أمر الجني (reduceOnly) لا يُمس أبدًا — يبقى حيًا على المنصة طوال التجميد
-  if(S.position&&S._waveHoldUntil&&Date.now()<S._waveHoldUntil){
+  // ─── إصلاح الكارثة: الفرملة تسود على ثغرة الـ 60 ثانية — مادام الخطر قائماً
+  // (تقلب قوي/صدمة/موجة معاكسة) لا إعادة تسليح إطلاقاً. كانت الثغرة تُعيد
+  // السلم في كل هدنة قصيرة فتُلتهم المستويات خلال انهيار من دقائق ───
+  if(S.position&&((S._waveHoldUntil&&Date.now()<S._waveHoldUntil)||volBrakeActive())){
     syncPositionTp(); return; }
   const dual=S.grid.some(g=>g.lane==='hold'&&(g.status==='armed'||g.status==='open'))&&
     S.grid.some(g=>g.lane==='trend'&&(g.status==='armed'||g.status==='open'));
@@ -2456,7 +2482,7 @@ export async function flattenAt(p:any,source:any){ const pos=S.position;
     const exitFee=q*mult*p*(S.takerFee||0.0006);
     const gross=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*q;
     const net=gross-openFees-exitFee;
-    const sanctioned=source==='إيقاف'||source==='مركز'||source==='كابح الكارثة';
+    const sanctioned=source==='إيقاف'||source==='مركز'||source==='كابح الكارثة'||source==='حماية رأس المال';
     if(net<0.01&&!sanctioned){
       if(!S._refuseAt||Date.now()-S._refuseAt>120000){ S._refuseAt=Date.now();
         pushLog('server','🛡️ رفض إغلاق بخسارة ('+source+'): الصافي الآن '+fmtUsd(net)+

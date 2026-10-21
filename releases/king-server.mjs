@@ -3459,6 +3459,13 @@ function huntTrigger(p) {
     return packHunt(p);
   }
   if (toxicBlocked(S.config.direction)) return null;
+  if (S.position && volBrakeActive()) {
+    if (!S._brkVetoAt || Date.now() - S._brkVetoAt > 18e4) {
+      S._brkVetoAt = Date.now();
+      pushLog("server", "\u{1F512} \u0644\u0627 \u0625\u0636\u0627\u0641\u0627\u062A \u0623\u062B\u0646\u0627\u0621 \u0641\u0631\u0645\u0644\u0629 \u0627\u0644\u062A\u0642\u0644\u0628 \u2014 \u0627\u0644\u0633\u0644\u0645 \u0642\u0627\u0626\u0645 \u0628\u0644\u0627 \u062A\u063A\u0630\u064A\u0629 \u062D\u062A\u0649 \u064A\u0633\u062A\u0642\u0631");
+    }
+    return null;
+  }
   if (S.position) {
     if (!inAddZone(p)) return null;
   }
@@ -3669,6 +3676,20 @@ async function circuitBreak(p) {
 async function escapeAdverse(p) {
   if (S.status !== "running" || !S.position || !p) return;
   const pos = S.position;
+  {
+    const cyc = (S.realizedPnl || 0) + (pos.unrealized || 0) - (S.feesPaid || 0) - (S.slipCost || 0) - (S.fundingPaid || 0);
+    const capLoss = Math.max(LOSS_STOP_USD, (S.config.cycleBalance || 0) * 0.1);
+    const momNow = S.confluence ? S.confluence.momentum : 0;
+    const shockAgainst = !!(S.regime && S.regime.shock) && (pos.side === "long" && momNow < -0.15 || pos.side === "short" && momNow > 0.15);
+    if (cyc <= -capLoss && shockAgainst && adversePct(p) > 1.5) {
+      pushLog("server", "\u{1F6E2}\uFE0F \u062D\u0645\u0627\u064A\u0629 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644: \u062E\u0631\u0648\u062C \u0645\u062D\u062F\u0648\u062F \u0639\u0646\u062F " + fmtUsd(cyc) + " (\u0633\u0642\u0641 " + capLoss.toFixed(1) + "$) \u2014 \u0635\u062F\u0645\u0629 \u0645\u0624\u0643\u062F\u0629 \u0636\u062F \u0627\u0644\u0645\u0631\u0643\u0632 \u2014 \u062D\u0641\u0638 \u0628\u0642\u064A\u0629 \u0627\u0644\u062F\u0648\u0631\u0629 \u0628\u062F\u0644 \u0627\u0644\u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u0643\u0627\u0645\u0644\u0629");
+      toast("\u{1F6E2}\uFE0F \u062D\u0645\u0627\u064A\u0629 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644: \u062E\u0631\u0648\u062C \u0645\u062D\u062F\u0648\u062F \u2014 \u062D\u0641\u0638 \u0627\u0644\u062F\u0648\u0631\u0629");
+      nativeNotify("AB-KING \u2014 \u062D\u0645\u0627\u064A\u0629 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644", "\u062E\u0631\u0648\u062C \u0645\u062D\u062F\u0648\u062F \u0642\u0628\u0644 \u0627\u0644\u062A\u0635\u0641\u064A\u0629 \u2014 \u062D\u0641\u0638 \u0628\u0642\u064A\u0629 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644");
+      await flattenAt(p, "\u062D\u0645\u0627\u064A\u0629 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644");
+      S._postDisaster = Date.now();
+      return;
+    }
+  }
   let danger = liqDanger(p);
   reversalAgainst(p);
   if (danger) {
@@ -3728,7 +3749,7 @@ function ensureGrid() {
   const center = S.lastPrice || S.gridAnchor || (S.position ? S.position.entry : 0);
   if (!center) return;
   sanitizeAdds();
-  if (S.position && S._waveHoldUntil && Date.now() < S._waveHoldUntil) {
+  if (S.position && (S._waveHoldUntil && Date.now() < S._waveHoldUntil || volBrakeActive())) {
     syncPositionTp();
     return;
   }
@@ -3844,7 +3865,7 @@ async function flattenAt(p, source) {
     const exitFee = q * mult * p * (S.takerFee || 6e-4);
     const gross = (pos.side === "long" ? p - pos.entry : pos.entry - p) * mult * q;
     const net = gross - openFees - exitFee;
-    const sanctioned = source === "\u0625\u064A\u0642\u0627\u0641" || source === "\u0645\u0631\u0643\u0632" || source === "\u0643\u0627\u0628\u062D \u0627\u0644\u0643\u0627\u0631\u062B\u0629";
+    const sanctioned = source === "\u0625\u064A\u0642\u0627\u0641" || source === "\u0645\u0631\u0643\u0632" || source === "\u0643\u0627\u0628\u062D \u0627\u0644\u0643\u0627\u0631\u062B\u0629" || source === "\u062D\u0645\u0627\u064A\u0629 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644";
     if (net < 0.01 && !sanctioned) {
       if (!S._refuseAt || Date.now() - S._refuseAt > 12e4) {
         S._refuseAt = Date.now();
@@ -4920,7 +4941,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.5.2";
+var SRV_VER = "AB-KING-1.5.3";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {
