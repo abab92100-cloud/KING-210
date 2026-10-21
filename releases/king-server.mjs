@@ -393,9 +393,10 @@ function dynamicTpNet() {
   const vol = Math.max(5e-3, +prof.vol || 0.05);
   const spread = Math.max(0, +prof.spread || 0.02);
   const volMult = clamp(vol / 0.05, 0.6, 3);
-  let target = bal * clamp(5e-3 * volMult, 4e-3, 0.018);
+  let target = bal * clamp(3e-3 * volMult, 2e-3, 8e-3);
   target = Math.max(target, bal * spread / 100 * 2 + 0.05);
   if (hf) target = Math.min(target, 0.05);
+  target = Math.min(target, Math.max(0.3, (S.config && S.config.cycleBalance || 0) * 0.015));
   return Math.max(0.15, Math.round(target * 100) / 100);
 }
 function tpBase() {
@@ -3821,8 +3822,8 @@ function studiedEarlyExit(p) {
   const exitFee = qty * mult * p * (S.takerFee || 6e-4);
   const grossNow = (pos.side === "long" ? p - pos.entry : pos.entry - p) * mult * qty;
   const netNow = grossNow - openFees - exitFee;
-  if (!(netNow >= Math.max(0.1, dynamicTpNet() * 0.4))) return null;
-  S._posPeakNet = Math.max(S._posPeakNet || 0, netNow);
+  if (netNow > 0) S._posPeakNet = Math.max(S._posPeakNet || 0, netNow);
+  if (!(netNow >= Math.max(0.08, dynamicTpNet() * 0.2))) return null;
   const dir2 = pos.side === "long" ? 1 : -1;
   let hit = null;
   const ob = S.orderBook || {};
@@ -3855,9 +3856,9 @@ function studiedEarlyExit(p) {
   }
   if (!hit) {
     const peak = S._posPeakNet || 0, tgt = dynamicTpNet();
-    const engaged = peak >= Math.max(0.15, tgt * 0.4);
+    const engaged = peak >= Math.max(0.12, tgt * 0.3);
     const retraced = netNow <= peak * 0.6;
-    const worthwhile = netNow >= Math.max(0.08, tgt * 0.25);
+    const worthwhile = netNow >= Math.max(0.08, tgt * 0.08);
     if (engaged && retraced && worthwhile)
       hit = { netNow, why: "\u0630\u0631\u0648\u0629 \u0627\u0644\u0631\u0628\u062D \u0643\u0627\u0646\u062A " + peak.toFixed(2) + "$ \u0648\u062A\u0631\u0627\u062C\u0639\u062A \u0625\u0644\u0649 " + netNow.toFixed(2) + "$ \u2014 \u0642\u0641\u0644 \u0627\u0644\u0631\u0628\u062D \u0642\u0628\u0644 \u0630\u0648\u0628\u0627\u0646\u0647 \u0627\u0644\u0643\u0627\u0645\u0644", tag: "peaklock" };
   }
@@ -4951,7 +4952,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.5.5";
+var SRV_VER = "AB-KING-1.5.6";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {

@@ -47,10 +47,14 @@ export function dynamicTpNet(){
   const volMult=clamp(vol/0.05,0.6,3);          // مرجع التقلب 0.05%
   // نسبة من حجم الصفقة تتوسع مع التقلب المقاس: 0.2% .. 1.2% (مراجعة شاملة —
   // لا أهداف تافهة: الربح المستحق مساحة حقيقية من الحركة)
-  let target=bal*clamp(0.005*volMult,0.004,0.018);
+  let target=bal*clamp(0.003*volMult,0.002,0.008);
   // احتكاك السبريد مغطى بالكامل مع ربح صافٍ
   target=Math.max(target, bal*spread/100*2+0.05);
   if(hf) target=Math.min(target,0.05);           // وضع الجني السريع
+  // سقف المنع (درس PENGU): التعرض المضخم بمستويات المتوسط كان يضخم الهدف معه
+  // (4.44$ على مركز 6 مستويات) فيصبح منالًا لا يدانيه السوق فيعلق المركز ساعات.
+  // الهدف لا يتجاوز 1.5% من رصيد الدورة مهما كبر المتوسط
+  target=Math.min(target,Math.max(0.30,(S.config&&S.config.cycleBalance||0)*0.015));
   return Math.max(0.15,Math.round(target*100)/100); } // أرضية 15 سنت — لا أهداف تافهة
 function tpBase(){ return dynamicTpNet(); } // الهدف المرجعي في كل المواضع = المدروس
 
@@ -2443,9 +2447,10 @@ export function studiedEarlyExit(p:any){
   // للانزلاق بين القرار والتنفيذ: شريحة واحدة كانت تقلب +0.02 إلى -0.02
   const grossNow=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*qty;
   const netNow=grossNow-openFees-exitFee;
-  if(!(netNow>=Math.max(0.10,dynamicTpNet()*0.4))) return null; // بربح يستحق: ≥ 10 سنت أو 40% من الهدف — لا جني تافه
-  // ─── تتبع ذروة الربح (قاعدة المالك): لا تعيد الربح المكتشف للسوق ───
-  S._posPeakNet=Math.max(S._posPeakNet||0,netNow);
+  // ─── تتبع ذروة الربح من أول سنت رابح (درس PENGU: ذروة 0.84\$ لم تُقفل
+  // لأن عتبة التتبع كانت أعلى منها) — لا تعيد الربح المكتشف للسوق ───
+  if(netNow>0) S._posPeakNet=Math.max(S._posPeakNet||0,netNow);
+  if(!(netNow>=Math.max(0.08,dynamicTpNet()*0.2))) return null; // بوابة أدنى: الجني المبكر ببربح يستحق
   const dir=pos.side==='long'?1:-1; // اتجاه الربح
   let hit:any=null; // القرار يُجمع أولاً — التهدئة لا تُستهلك إلا بقرار فعلي
   // ─── الشهادة 1: جدار سيولة في اتجاه الربح قريب — الارتداد منه مرجح ───
@@ -2474,9 +2479,9 @@ export function studiedEarlyExit(p:any){
      كاملاً ثم الانتظار الطويل. (مثال المالك: ذروة 0.60$ والهدف 1.03$ —
      كان يجب البيع عند ~0.36$ بدل ذوبانها وعودة المركز للخسارة) */
   if(!hit){ const peak=S._posPeakNet||0, tgt=dynamicTpNet();
-    const engaged=peak>=Math.max(0.15,tgt*0.4);        // ذروة ذات شأن تُقفل
-    const retraced=netNow<=peak*0.6;                    // تراجع 40% من الذروة
-    const worthwhile=netNow>=Math.max(0.08,tgt*0.25);   // والمتبقي يستحق
+    const engaged=peak>=Math.max(0.12,tgt*0.3);         // ذروة 30%+ من الهدف تُقفل (كانت 40% تُقصّر الذروات)
+    const retraced=netNow<=peak*0.6;                     // تراجع 40% من الذروة
+    const worthwhile=netNow>=Math.max(0.08,tgt*0.08);    // والمتبقي يستحق (8%+ من الهدف)
     if(engaged&&retraced&&worthwhile)
       hit={netNow,why:'ذروة الربح كانت '+peak.toFixed(2)+'$ وتراجعت إلى '+netNow.toFixed(2)+
         '$ — قفل الربح قبل ذوبانه الكامل',tag:'peaklock'}; }
