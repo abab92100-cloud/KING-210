@@ -55,7 +55,9 @@ export function dynamicTpNet(){
   // (4.44$ على مركز 6 مستويات) فيصبح منالًا لا يدانيه السوق فيعلق المركز ساعات.
   // الهدف لا يتجاوز 1.5% من رصيد الدورة مهما كبر المتوسط
   target=Math.min(target,Math.max(0.30,(S.config&&S.config.cycleBalance||0)*0.015));
-  return Math.max(0.15,Math.round(target*100)/100); } // أرضية 15 سنت — لا أهداف تافهة
+  // الأرضية 8 سنت (كانت 15): على الأحجام الصغيرة كانت الأرضية تضخم مسافة
+  // الجني إلى ~1% — النطاق النسبي (0.2-0.8%) هو الحاكم والحجم الأكبر يجني أوسع
+  return Math.max(0.08,Math.round(target*100)/100); }
 function tpBase(){ return dynamicTpNet(); } // الهدف المرجعي في كل المواضع = المدروس
 
 /* ---------- أدوات ---------- */
@@ -1264,7 +1266,7 @@ function resolveDirection(now){ const mode=S.config.directionMode;
   return S.config.direction;
 }
 // حجم صفقة الصيد = الدرجة الأولى من سلّم التدرج الحسابي (أصغر أمر)
-function contractsForLevel(p){ const q=levelQtys(p,effLevels()); return q.length?q[0]:1; }
+export function contractsForLevel(p){ const q=levelQtys(p,effLevels()); return q.length?q[0]:1; }
 // المستويات الفعّالة: رأس المال الصغير يُركَّز لا يُفتَّت —
 // عدد يضمن أن يغطي جني كل مستوى هدف الصافي $0.12 بخطوة شبكة واحدة بعد الرسوم
 export function effLevels(){ const c=S.config;
@@ -1293,7 +1295,7 @@ function tooClose(a,b,st){ return a>0&&b>0&&Math.abs(a-b)/Math.max(a,b)*100<st*0
 // 20% من رصيد الدورة احتياطي هامش لا يُتداول أبدًا، والباقي (80%) يُقسم على
 // مجموع النسب، فيخرج أول أمر = وحدة واحدة وكل لاحق يزيد نصف وحدة بالنسبة.
 // رصيد 100 → وحدة صغيرة · رصيد 186 → وحدة أكبر · ويتدرج تلقائيًا مع أي مبلغ
-function levelQtys(center,n){ const c=S.config;
+export function levelQtys(center,n){ const c=S.config;
   const cv=Math.max(1e-12,(S.multiplier||1)*center); // قيمة العقد الواحد بالدولار
   // الرافعة ثابتة = ما ضبطه المالك حرفيًا (بأمره: لا تكيّف ولا مرونة) —
   // وتُفرض القيمة نفسها على المنصة عبر changeCrossUserLeverage في liveSync
@@ -1312,7 +1314,7 @@ function levelQtys(center,n){ const c=S.config;
   if(c.mode==='live'&&S.exAvail>0) budget=Math.min(budget,Math.max(0,S.exAvail*0.95));
   else if(c.mode==='live'&&S.exEquity>0) budget=Math.min(budget,Math.max(0,S.exEquity*0.95-used));
   // مجموع نسب السلم = m + 0.25·m(m−1) — الوحدة = الميزانية ÷ المجموع
-  const denom=mm=>mm+0.25*mm*(mm-1);
+  const denom=mm=>mm+0.08*mm*(mm-1); // تسطيح التدرج (طلب المالك): أوائل المستويات أكبر بكثير — لا فتات
   let m=Math.max(1,n);
   // قلّص العدد فقط إن عجز أصغر مستوى عن شراء عقد واحد — لا أرضية $1 تُفسد النسبة
   while(m>1&&Math.floor((budget/denom(m))*lev/cv)<1) m--;

@@ -397,7 +397,7 @@ function dynamicTpNet() {
   target = Math.max(target, bal * spread / 100 * 2 + 0.05);
   if (hf) target = Math.min(target, 0.05);
   target = Math.min(target, Math.max(0.3, (S.config && S.config.cycleBalance || 0) * 0.015));
-  return Math.max(0.15, Math.round(target * 100) / 100);
+  return Math.max(0.08, Math.round(target * 100) / 100);
 }
 function tpBase() {
   return dynamicTpNet();
@@ -2329,7 +2329,7 @@ function levelQtys(center, n) {
   let budget = Math.max(0, total - used) * (S.regime ? S.regime.sizeMult : 1) * memSizeMult();
   if (c.mode === "live" && S.exAvail > 0) budget = Math.min(budget, Math.max(0, S.exAvail * 0.95));
   else if (c.mode === "live" && S.exEquity > 0) budget = Math.min(budget, Math.max(0, S.exEquity * 0.95 - used));
-  const denom = (mm) => mm + 0.25 * mm * (mm - 1);
+  const denom = (mm) => mm + 0.08 * mm * (mm - 1);
   let m = Math.max(1, n);
   while (m > 1 && Math.floor(budget / denom(m) * lev / cv) < 1) m--;
   const unit = budget / denom(m);
@@ -4945,7 +4945,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.5.7";
+var SRV_VER = "AB-KING-1.5.8";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {
