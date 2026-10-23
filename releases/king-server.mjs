@@ -749,7 +749,8 @@ async function remoteSync() {
   const base = R();
   if (!base) return false;
   try {
-    const r = await fetch(base + "/state");
+    const __sel = typeof window !== "undefined" && window.__FLEET_SEL || 0;
+    const r = await fetch(base + "/state" + (__sel ? "?sel=" + __sel : ""));
     const j = await r.json();
     if (!j || !j.ok) throw new Error("bad state");
     Object.assign(S, j.state);
