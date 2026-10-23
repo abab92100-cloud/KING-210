@@ -137,8 +137,16 @@ const srv = createServer(async (req, res) => {
 
     if (SLOT > 0) {
       // ─── محرك قطاع: نفس واجهة المحرك الأصيلة ───
-      if (req.method === 'GET' && u.pathname === '/state')
-        return send(res, 200, { ok: true, at: Date.now(), state: S });
+      if (req.method === 'GET' && u.pathname === '/state') {
+        // الصفوف المفتوحة تحمل ربحها العائم محسوباً بمضاعف وسعر عملتها
+        // نفسها (لا عملة العرض في الواجهة المدمجة) — إصلاح الأرقام الخيالية
+        const lp=S.lastPrice||0, mult=S.multiplier||1, taker=S.takerFee||0.0006;
+        const st: any={...S, journal:(S.journal||[]).map((r:any)=>{
+          if(r.status!=='open') return r;
+          const feeEst=lp? r.qty*mult*lp*taker:0;
+          const f=lp? ((r.side==='short'?1:-1)*(r.entry-lp)*mult*r.qty-(r.fees||0)-feeEst):0;
+          return {...r, floatNet: Math.round((f+Number.EPSILON)*100)/100}; })};
+        return send(res, 200, { ok: true, at: Date.now(), state: st }); }
       if (req.method === 'POST' && u.pathname === '/cmd') {
         let body = '';
         for await (const chunk of req) body += chunk;
