@@ -2107,6 +2107,22 @@ function priceKick() {
   const chg = (p1 - p0) / p0 * 100;
   return { up: chg > 0 ? chg : 0, down: chg < 0 ? -chg : 0 };
 }
+function batchHoldActive() {
+  if ((S._batchFills || 0) < 4) return false;
+  if (S._batchHoldAt && S._batchStudiedAt && S.studyUntil === 0 && Date.now() - S._batchHoldAt > 12e4 && !volBrakeActive()) {
+    S._batchFills = 0;
+    S._batchHoldAt = 0;
+    S._batchStudiedAt = false;
+    pushLog("server", "\u2705 \u0627\u0644\u0642\u0627\u0637\u0639 \u0623\u064F\u0637\u0644\u0642: \u0627\u0644\u0633\u0648\u0642 \u0627\u0633\u062A\u0642\u0631 \u0648\u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u062F\u0631\u0627\u0633\u0629 \u2014 \u062F\u0641\u0639\u0629 \u062C\u062F\u064A\u062F\u0629 \u062D\u062A\u0649 4 \u0623\u0648\u0627\u0645\u0631 \u0628\u062A\u0628\u0627\u0639\u062F \u0645\u0639\u0642\u0648\u0644");
+    return false;
+  }
+  if (S._batchHoldAt && !S._batchStudiedAt) {
+    S._batchStudiedAt = true;
+    startStudy(false);
+    pushLog("server", "\u{1F50D} \u0628\u062F\u0623\u062A \u062F\u0631\u0627\u0633\u0629 \u0645\u0627 \u0628\u0639\u062F \u0627\u0644\u0642\u0627\u0637\u0639 \u2014 \u0644\u0627 \u0641\u062A\u062D \u0623\u0648\u0627\u0645\u0631 \u062D\u062A\u0649 \u064A\u0643\u062A\u0645\u0644 \u062A\u0642\u064A\u064A\u0645 \u0627\u0644\u0648\u0636\u0639");
+  }
+  return true;
+}
 function exposureCapped() {
   const pos = S.position;
   if (!pos) return false;
@@ -2410,6 +2426,7 @@ function buildGrid(center, wide, initialCount) {
 }
 function armProgressive() {
   if (S.status !== "running") return;
+  if (batchHoldActive()) return;
   if (exposureCapped()) {
     if (!S._expCapAt || Date.now() - S._expCapAt > 3e5) {
       S._expCapAt = Date.now();
@@ -2895,6 +2912,9 @@ function _harvestCleanup(fp) {
   S._harvestAt = Date.now();
   S._reselectDone = false;
   S._posPeakNet = null;
+  S._batchFills = 0;
+  S._batchHoldAt = 0;
+  S._batchStudiedAt = false;
   S._guardId = null;
   S._tpBanked = 0;
   S._trailFloor = 0;
@@ -3006,6 +3026,15 @@ function fillLevel(id, fp, taker) {
   S.feesPaid += fee;
   const d = applyDelta(l.side, effQty, fp);
   if (d.addedQty > 0) {
+    if (!l.reduceOnly) {
+      S._batchFills = (S._batchFills || 0) + 1;
+      if (S._batchFills >= 4 && !S._batchHoldAt) {
+        S._batchHoldAt = Date.now();
+        S._batchStudiedAt = false;
+        cancelPendingAdds();
+        pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0627\u0644\u0645\u0631\u062D\u0644\u064A: \u0627\u0643\u062A\u0645\u0644\u062A 4 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u062A\u0648\u0642\u0641 \u0627\u0644\u0641\u062A\u062D \u062D\u062A\u0649 \u0627\u0644\u0627\u0633\u062A\u0642\u0631\u0627\u0631 + \u062F\u0631\u0627\u0633\u0629 \u062C\u062F\u064A\u062F\u0629 \u062B\u0645 4 \u0623\u062E\u0631\u0649");
+      }
+    }
     const lotId = noteEntry(d.addedQty, fp, fee, l.origin === "hunt" ? "hunt" : "grid");
     l.lotId = l.lotId || lotId;
     if (l.price > 0) {
@@ -3474,6 +3503,7 @@ function huntTrigger(p) {
     return packHunt(p);
   }
   if (toxicBlocked(S.config.direction)) return null;
+  if (S.position && batchHoldActive()) return null;
   if (S.position && exposureCapped()) return null;
   if (S.position && volBrakeActive()) {
     if (!S._brkVetoAt || Date.now() - S._brkVetoAt > 18e4) {
@@ -4945,7 +4975,7 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.5.8";
+var SRV_VER = "AB-KING-1.6.0";
 var PORT = 8787;
 function send(res, code, obj) {
   res.writeHead(code, {

@@ -1170,6 +1170,21 @@ export function priceKick(){ const t=S.priceTrail||[]; if(t.length<12) return {u
    الكارثة: التعرض بلغ ~12× رصيد الدورة فكانت التصفية عند ~-7% فقط.
    الحماية الرياضية: التعرض الكلي ≤ 4× رصيد الدورة → التصفية تحتاج حركة
    -25%+ بلا ارتداد — وبهامش كهذا تكفي الشبكة والصمود والجني المدروس */
+/* ─── القاطع المرحلي (تصميم المالك): دفعات من 4 أوامر بدراسة بينها ───
+   نشطه: بعد 4 تعبئات دخول. إطلاقه: هدوء التقلب (لا فرملة) + مرور دقيقتين
+   + اكتمال دراسة جديدة بدأت بعد التوقف. عند الإطلاق: دفعة جديدة 4 أوامر */
+export function batchHoldActive(){
+  if((S._batchFills||0)<4) return false;
+  if(S._batchHoldAt&&S._batchStudiedAt&&S.studyUntil===0&&
+     Date.now()-S._batchHoldAt>120000&&!volBrakeActive()){
+    S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false;
+    pushLog('server','✅ القاطع أُطلق: السوق استقر واكتملت الدراسة — دفعة جديدة حتى 4 أوامر بتباعد معقول');
+    return false; }
+  if(S._batchHoldAt&&!S._batchStudiedAt){ S._batchStudiedAt=true;
+    startStudy(false); // دراسة جيدة جديدة قبل أي عودة — بصمة محدثة للوضع الحالي
+    pushLog('server','🔍 بدأت دراسة ما بعد القاطع — لا فتح أوامر حتى يكتمل تقييم الوضع'); }
+  return true; }
+
 export function exposureCapped(){ const pos=S.position; if(!pos) return false;
   const notional=pos.size*(S.multiplier||1)*(pos.entry||0);
   return notional>Math.max(20,(S.config.cycleBalance||0)*4); }
@@ -1391,6 +1406,8 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
   return grid.sort((a,b)=>b.price-a.price); }
 /* PROGRESSIVE GRID: open with 4 orders; when only 1 armed remains, arm 2 more */
 function armProgressive(){ if(S.status!=='running') return;
+  // القاطع المرحلي: لا تسليح جديد أثناءه — الدفعة القادمة بعد الدراسة
+  if(batchHoldActive()) return;
   // سقف التعرّض: لا مزيد من المستويات عند بلوغه — حماية من التصفية بلا وقف خسارة
   if(exposureCapped()){
     if(!S._expCapAt||Date.now()-S._expCapAt>300000){ S._expCapAt=Date.now();
@@ -1697,6 +1714,7 @@ function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
   S._harvestAt=Date.now(); // لحظة اكتمال الدورة — القفز للعملة التالية مسموح بعدها فقط
   S._reselectDone=false; // إعادة الاختيار الإجباري بعد كل جني (قاعدة المالك)
   S._posPeakNet=null; // ذروة جديدة لكل دورة — قفل الذروة لا يتسرب بين الصفقات
+  S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false; // القاطع المرحلي: دفعة جديدة لكل دورة
   S._guardId=null; S._tpBanked=0; S._trailFloor=0;
   for(const g of S.grid){ if(g.status==='armed'||g.status==='open'||g.status==='staged'){
     g.status='cancelled'; g.exchangeOrderId=null; } }
@@ -1771,7 +1789,15 @@ function fillLevel(id,fp,taker){ const l=S.grid.find(g=>g.id===id);
   const effQty=l.reduceOnly&&S.position?Math.min(l.qty,S.position.size):l.qty;
   const fee=feeFor(effQty*(S.multiplier||1)*fp,taker); S.feesPaid+=fee;
   const d=applyDelta(l.side,effQty,fp);
-  if(d.addedQty>0){ const lotId=noteEntry(d.addedQty,fp,fee,l.origin==='hunt'?'hunt':'grid');
+  if(d.addedQty>0){
+    // ─── القاطع المرحلي (درس PEPE -136$): عدّ دفعة الأوامر — كل 4 أوامر
+    // دخول متتالية يوقف الفتح كلياً حتى يستقر السوق وتُعاد الدراسة الجيدة
+    if(!l.reduceOnly){ S._batchFills=(S._batchFills||0)+1;
+      if(S._batchFills>=4&&!S._batchHoldAt){
+        S._batchHoldAt=Date.now(); S._batchStudiedAt=false;
+        cancelPendingAdds();
+        pushLog('server','🧷 القاطع المرحلي: اكتملت 4 أوامر دخول — توقف الفتح حتى الاستقرار + دراسة جديدة ثم 4 أخرى'); } }
+    const lotId=noteEntry(d.addedQty,fp,fee,l.origin==='hunt'?'hunt':'grid');
     l.lotId=l.lotId||lotId;
     // قياس انزلاق التنفيذ: فرق سعر التنفيذ الفعلي عن سعر المستوى المطلوب
     if(l.price>0){ const slipUsd=Math.abs(fp-l.price)*(S.multiplier||1)*effQty;
@@ -2143,6 +2169,8 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
     if(toxicBlocked(S.config.direction)) return null;
     return packHunt(p); }
   if(toxicBlocked(S.config.direction)) return null;
+  // القاطع المرحلي: لا إضافات صيد أثناءه
+  if(S.position&&batchHoldActive()) return null;
   // سقف التعرّض: لا إضافات جديدة عنده — الحجم الكلي محكوم رياضياً
   if(S.position&&exposureCapped()) return null;
   // ─── إصلاح الكارثة: لا إضافات صيد مادامت فرملة التقلب نشطة — لا تغذية للانهيار ───
