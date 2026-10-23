@@ -323,7 +323,12 @@ function loadAll(){ try{
     history:rt.history||[],logs:rt.logs||[],
     _harvestAt:rt._harvestAt||0,_reselectDone:!!rt._reselectDone,
     lastHuntAt:rt.lastHuntAt||0,_dwellAt:rt._dwellAt||0,startedAt:rt.startedAt||0});
-    S._savedAt=rt.savedAt||0; }
+    S._savedAt=rt.savedAt||0;
+    // تنظيف الإقلاع: صفوف بقيم شاذة من نافذات انتقال قديمة (قبل وجود درع
+    // الإقفال) — تُصفَّر قيمها الوهمية حتى لا تبقى في السجل والتاريخ
+    { const __bound=Math.max(50,(S.config.cycleBalance||0)*3); let __n=0;
+      (S.journal||[]).forEach(j=>{ if(j.status==='closed'&&typeof j.pnl==='number'&&Math.abs(j.pnl)>__bound){ j.pnl=0; __n++; } });
+      if(__n>0) pushLog('server','🧼 تصحيح '+__n+' صفقة بقيم شاذة من إصدار سابق — صُفّرت قيمها الوهمية'); } }
   // قتل أندرويد للتطبيق في الخلفية ≠ خروج المالك: جلسة كانت تعمل وقُتلت حديثًا
   // (أقل من 30 دقيقة) تُستأنف تلقائيًا من حيث توقفت — وإلا بقيت القاعدة:
   // لا تشغيل بعد فتح التطبيق إلا بضغطة «تشغيل» من المالك (تثبيت جديد / جلسة قديمة)
@@ -1517,7 +1522,7 @@ function noteEntry(qty:any,price:any,fee:any,source?:any,noCount?:any){ const si
   S._entryCtx={rg:S.regime?(S.regime.shock?'صدمة':S.regime.trend==='up'?'صاعد':S.regime.trend==='down'?'هابط':'عرضي'):'عرضي',
     ses:sessionOf(Date.now()),origin:source==='hunt'?'صيد':'شبكة',at:Date.now()};
   const label=source==='hunt'?'صفقة':'شبكة';
-  const ex=S.journal.find(j=>j.status==='open'&&j.side===side&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
+  const ex=S.journal.find(j=>j.status==='open'&&j.side===side&&j.symbol===S.config.displaySymbol);
   if(ex){ const t=ex.qty+qty; ex.entry=(ex.entry*ex.qty+price*qty)/t; ex.qty=t;
     // الاعتمادات الجزئية المتتالية لنفس المستوى لا ترفع عدد الأوامر —
     // تضخم العدّاد كان يوهم addsBlocked بامتلاء الشبكة فيلغي تسليحها كاملة
@@ -1535,23 +1540,42 @@ function noteEntry(qty:any,price:any,fee:any,source?:any,noCount?:any){ const si
 function noteClose(qty:any,exit:any,fee:any,source?:any,pnl?:any,lotId?:any){ const lotId_=lotId;
   const row=(lotId_?S.journal.find(j=>j.id===lotId_&&j.status==='open'):null)
     ||S.journal.find(j=>j.status==='open'&&(source==='إيقاف'||j.source===source)
-      &&(j.symbol===undefined||j.symbol===S.config.displaySymbol))
-    ||S.journal.find(j=>j.status==='open'&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
+      &&j.symbol===S.config.displaySymbol)
+    ||S.journal.find(j=>j.status==='open'&&j.symbol===S.config.displaySymbol);
   if(row){ const share=row.qty>0?row.fees*(qty/row.qty):row.fees;
-    const net=lotNet(row.side,row.entry,exit,qty,share+fee);
+    let net=lotNet(row.side,row.entry,exit,qty,share+fee);
+    // ─── درع الإقفال: سباق بيانات الانتقال بين عملتين (سعر/مضاعف العملة
+    // السابقة يصل متأخراً فيكتب سياقه فوق الجديدة) ينتج نتائج شاذة مثل
+    // -302$ على محرك رصيده 20$. أي نتيجة خارج الحد المادي للمحرك مرفوضة —
+    // الصف يُقفل بصفر لا بقيمة وهمية تسمم الرصيد والتاريخ ───
+    const __bound=Math.max(50,(S.config.cycleBalance||0)*3);
+    if(Number.isFinite(net)&&Math.abs(net)>__bound){
+      pushLog('warn','🛡️ درع الإقفال: رفض نتيجة شاذة '+net.toFixed(2)+'$ (خارج الحد المادي '+
+        __bound.toFixed(0)+'$) — سياق مختلط من انتقال عملة — الصف يُقفل بصفر');
+      net=0; }
     row.status='closed'; row.exit=exit; row.fees+=fee; row.closedAt=Date.now();
     // أرباح الأجزاء المُجناة سابقًا تُضاف لصافي الصفقة المعروض — لا تضيع عند الإقفال
     row.pnl=Math.round((net+(row.partPnl||0))*10000)/10000;
     if(source==='إيقاف') row.source='إيقاف'; pnl=net; }
-  else pushJr({id:uid('jr'),source,side:S.position?S.position.side:S.config.direction,
+  else { const __bound2=Math.max(50,(S.config.cycleBalance||0)*3);
+    if(Number.isFinite(pnl)&&Math.abs(pnl)>__bound2){
+      pushLog('warn','🛡️ درع الإقفال: رفض نتيجة شاذة '+pnl.toFixed(2)+'$ — صُفّرت');
+      pnl=0; }
+    pushJr({id:uid('jr'),source,side:S.position?S.position.side:S.config.direction,
     qty,entry:exit,exit,pnl,fees:fee,openedAt:Date.now(),closedAt:Date.now(),
-    mergedOrders:1,status:'closed'});
+    mergedOrders:1,status:'closed'}); }
   if(S.activeCycle){ S.activeCycle.pnl+=pnl;
     if(!S.position){ S.activeCycle=null; } }
   // الربح المجني يُضاف فورًا لرصيد الدورة — التراكم يكبّر أحجام الصفقات التالية تلقائيًا
   if(Number.isFinite(pnl)&&pnl!==0){
-    S.cycleHarvested=Math.round(((S.cycleHarvested||0)+pnl)*10000)/10000;
-    S.config.cycleBalance=Math.max(1,Math.round((S.config.cycleBalance+pnl)*100)/100); }
+    // درع الرصيد: نتيجة أكبر من أي شيء مادي لهذا المحرك (3× الرصيد) لا تدخل
+    // الرصيد — حماية من أي مسار خلل مستقبلي يسمم دورة كاملة برقم وهمي
+    const __bound=Math.max(50,(S.config.cycleBalance||0)*3);
+    if(Math.abs(pnl)>__bound){
+      pushLog('warn','🛡️ درع الرصيد: تجاهل نتيجة شاذة '+pnl.toFixed(2)+'$ (خارج الحد المادي '+__bound.toFixed(0)+'$) — لم تلمس رصيد الدورة'); }
+    else {
+      S.cycleHarvested=Math.round(((S.cycleHarvested||0)+pnl)*10000)/10000;
+      S.config.cycleBalance=Math.max(1,Math.round((S.config.cycleBalance+pnl)*100)/100); } }
   // تعلّم من نتيجة الصفقة — يُخزَّن في الذاكرة القوية التي لا تُمسح مع الدورات
   { const mem=S.memory; if(mem&&mem.pairs){ const pk=S.config.symbol;
       const pr=mem.pairs[pk]||(mem.pairs[pk]={n:0,w:0,l:0,pnl:0,grossWin:0,grossLoss:0,maxLoseStreak:0,loseStreak:0});
@@ -3078,6 +3102,12 @@ export function saveCfg(v){
     S._btcImp=null; S._btcPrev=null; S._actHist=[]; S._actMed=0; S._actAt=0; S._tradeTs=[];
     S._lossStreak=null; S._lastSig=null; S._vetoAt=0; S._guardPx=0; S._guardLogged=false; S._guardId=null;
     setStreamSymbol(sym);
+    // ─── درس الأرقام الخيالية: صفوف الزوج السابق المفتوحة كانت تُقفل بعملة
+    // جديدة بمضاعفاتها (صف DOGE بمضاعف PEPE = ±40K وهمية تسمم الرصيد!) —
+    // تبديل العملة يعني موت كل صف مفتوح: تُزال ولا تُطابق أبداً ───
+    const __staleOpen=S.journal.filter(j=>j.status==='open');
+    if(__staleOpen.length){ S.journal=S.journal.filter(j=>j.status!=='open');
+      pushLog('server','🧹 أُلغيت '+__staleOpen.length+' صفقات الزوج السابق المفتوحة — سياق قديم لا يُقفل بعملة جديدة'); }
     S._dwellAt=Date.now(); // بداية إقامة جديدة: لا تبديل جديد قبل 10 دقائق عمل فعلي
     // بصمة العملة الجديدة: معروفة وحديثة = إحماء قصير · جديدة = دراسة كاملة قبل التداول
     const pf=S.memory&&S.memory.profiles&&S.memory.profiles[sym];
