@@ -572,7 +572,7 @@ export default function App() {
   return (
     <div>
       <header>
-        <div className="logo">AB</div>
+        <div className="logo">TQ</div>
         <div className="t"><b>TRQ</b><span>TRADING BOT</span></div>
         <span className={'pill ' + (streamState.connected ? 'on' : 'dn-pill')} title="صحة قناة السعر اللحظية">
           <i></i>{streamState.connected ? 'متصل' : 'مقطوع'} · {pulseAge()}
@@ -587,6 +587,19 @@ export default function App() {
           </em>
         </span>
       </header>
+      {Array.isArray((S as any).fleet) && (S as any).fleet.length > 0 && (
+        <div className="fleet-strip" style={{ display:'flex', gap:6, overflowX:'auto', padding:'6px 10px', fontSize:12 }}>
+          {(S as any).fleet.map((f: any, i: number) => (
+            <span key={f.slot || i} className={'pill' + (f.position ? ' on' : f.running ? ' warn' : '')}
+              title={'محرك ' + (f.slot || (i + 1)) + ' — رصيد ' + (f.balance || 0) + '$'}
+              style={{ flex:'0 0 auto', whiteSpace:'nowrap' }}>
+              <i></i>{f.disp || '?'}
+              {f.position ? <b style={{ color: (f.net || 0) >= 0 ? '#2ecc71' : '#f74d5d', marginInlineStart: 4 }}>
+                {(f.net || 0) >= 0 ? '+' : ''}{(f.net || 0).toFixed(2)}</b> : null}
+            </span>
+          ))}
+        </div>
+      )}
       <main>
         {tab === 'home' && <HomeScreen />}
         {tab === 'radar' && <RadarScreen />}
