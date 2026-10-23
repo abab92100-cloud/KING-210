@@ -5238,8 +5238,16 @@ var srv = createServer(async (req, res) => {
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
       return send(res, 200, { ok: true, name: "TRQ-TRADING Fleet Server", version: SRV_VER, fleet: FLEET_N, at: Date.now() });
     if (SLOT > 0) {
-      if (req.method === "GET" && u.pathname === "/state")
-        return send(res, 200, { ok: true, at: Date.now(), state: S });
+      if (req.method === "GET" && u.pathname === "/state") {
+        const lp = S.lastPrice || 0, mult = S.multiplier || 1, taker = S.takerFee || 6e-4;
+        const st = { ...S, journal: (S.journal || []).map((r) => {
+          if (r.status !== "open") return r;
+          const feeEst = lp ? r.qty * mult * lp * taker : 0;
+          const f = lp ? (r.side === "short" ? 1 : -1) * (r.entry - lp) * mult * r.qty - (r.fees || 0) - feeEst : 0;
+          return { ...r, floatNet: Math.round((f + Number.EPSILON) * 100) / 100 };
+        }) };
+        return send(res, 200, { ok: true, at: Date.now(), state: st });
+      }
       if (req.method === "POST" && u.pathname === "/cmd") {
         let body = "";
         for await (const chunk of req) body += chunk;
