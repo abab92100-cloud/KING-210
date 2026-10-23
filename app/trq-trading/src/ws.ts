@@ -28,6 +28,20 @@ export const streamState = {
 let ws:any=null, pingTimer:any=null, watchTimer:any=null, retryTimer:any=null;
 let symbol:any=null, onMessage:any=null, onStatus:any=null;
 let stopped=true, attempts=0, connectSeq=0;
+let offline=false;
+
+function forceReconnect(reason:any){
+  if(stopped) return;
+  if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
+  connectSeq++;
+  clearTimers();
+  if(ws){ try{ws.close();}catch{ /* intentional: optional step */ } ws=null; }
+  streamState.connected=false; streamState.connecting=false;
+  streamState.error=String(reason||'reconnect');
+  attempts=0;
+  connect();
+  if(onStatus) onStatus({...streamState});
+}
 
 async function getBullet(){
   async function tryFetch(base){
@@ -136,12 +150,46 @@ async function connect(){
 
 function scheduleRetry(){
   if(stopped) return;
+  if(offline){
+    // الإنترنت مقطوع: لا تراكم محاولات — أول عودة للشبكة تعيد الاتصال فورًا
+    if(retryTimer) clearTimeout(retryTimer);
+    retryTimer=null;
+    return;
+  }
   attempts++;
   streamState.reconnects++;
   const base=Math.min(15000,1000*Math.pow(1.6,Math.min(attempts,8)));
   const wait=base+Math.floor(Math.random()*750);
   if(retryTimer) clearTimeout(retryTimer);
   retryTimer=setTimeout(connect,wait);
+}
+
+// المراقب الأصلي (Java ConnectivityManager) — يعمل حتى مع التطبيق في الخلفية
+// لأنه حدث نظام لا مؤقت WebView. يبث "netChange" من KingNative.startWatchdog().
+if(typeof window!=='undefined'&&window.Capacitor){
+  const KN=(window.Capacitor.Plugins||{}).KingNative;
+  if(KN&&KN.addListener){
+    try{
+      const sub=KN.addListener('netChange',(d:any)=>{
+        const online=!!(d&&d.online);
+        if(online){
+          offline=false;
+          if(stopped) return;
+          forceReconnect('المراقب الأصلي: عاد الإنترنت — وصل فوري');
+        }else{
+          offline=true;
+          if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
+          streamState.connected=false;
+          streamState.error='انقطع الإنترنت — المراقب الأصلي ينتظر عودة الشبكة';
+          if(onStatus) onStatus({...streamState});
+        }
+      });
+      // addListener يُرجع Promise على بعض المنصات وكائن اشتراك مباشر على أخرى — نتعامل مع الحالتين
+      if(sub&&typeof (sub as any).catch==='function') (sub as any).catch(()=>{});
+    }catch{ /* intentional: optional step */ }
+    // الحالة الأولية من نظام التشغيل مباشرة
+    try{ if(KN.isOnline) KN.isOnline().then((r:any)=>{ offline=!(r&&r.online); }).catch(()=>{}); }catch{ /* intentional: optional step */ }
+  }
 }
 
 export function startStream(sym,handlers){
@@ -178,7 +226,46 @@ if(typeof document!=='undefined'){
   document.addEventListener('visibilitychange',()=>{
     if(!document.hidden&&!stopped){
       const silent=Date.now()-streamState.lastMsgAt;
-      if(!ws||ws.readyState!==1||silent>30000){ if(retryTimer)clearTimeout(retryTimer); connect(); }
+      if(!ws||ws.readyState!==1||silent>30000){ forceReconnect('عودة التطبيق للواجهة والقناة صامتة'); }
     }
   });
+}
+
+// استماع لأحداث الشبكة: عودة الإنترنت تعيد الاتصال فورًا، والانقطاع يوقف المحاولات العبثية
+if(typeof window!=='undefined'){
+  window.addEventListener('online',()=>{
+    offline=false;
+    if(stopped) return;
+    forceReconnect('عودة الاتصال بالإنترنت — إعادة وصل القناة فورًا');
+  });
+  window.addEventListener('offline',()=>{
+    offline=true;
+    streamState.connected=false;
+    streamState.error='انقطع الاتصال بالإنترنت — في انتظار عودة الشبكة';
+    if(onStatus) onStatus({...streamState});
+    if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
+  });
+}
+
+// في الجوال (Capacitor) لا يوجد حدث offline موثوق في WebView دائمًا — فحص دوري لكل من حالة الملاحّح وحياة القناة
+if(typeof navigator!=='undefined'&&navigator.onLine!==undefined){
+  setInterval(()=>{
+    if(stopped) return;
+    const online=typeof navigator.onLine==='boolean'?navigator.onLine:true;
+    if(online&&offline){
+      offline=false;
+      forceReconnect('شُوهدت عودة الشبكة (فحص دوري)');
+    }
+    if(!online&&!offline){
+      offline=true;
+      if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}
+      streamState.connected=false;
+      streamState.error='انقطع الاتصال بالإنترنت';
+      if(onStatus) onStatus({...streamState});
+    }
+    if(online&&!offline&&ws&&ws.readyState===1){
+      const silent=Date.now()-streamState.lastMsgAt;
+      if(silent>45000) forceReconnect('صمت القناة أكثر من 45 ثانية أثناء العمل في الخلفية');
+    }
+  },10000);
 }

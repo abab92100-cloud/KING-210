@@ -1,5 +1,5 @@
 {
-  "name": "king-trading",
+  "name": "ab-king",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "build:server": "esbuild src/server-entry.ts --bundle --platform=node --format=esm --target=node18 --outfile=server-dist/king-server.mjs"
+    "build:server": "esbuild src/server-entry.ts --bundle --platform=node --format=esm --target=node18 --outfile=server-dist/ab-king-server.mjs"
   },
   "dependencies": {
     "@capawesome-team/capacitor-android-battery-optimization": "^8.0.1",
@@ -83,5 +83,6 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4"
-  }
+  },
+  "build:server": "esbuild src/server-entry.ts --bundle --platform=node --format=esm --target=node18 --outfile=server-dist/ab-king-server.mjs"
 }

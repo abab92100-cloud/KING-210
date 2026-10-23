@@ -1,5 +1,5 @@
 /* ================================================================
-   KING Trading — بوت تداول عقود KuCoin الآجلة
+   AB-KING — بوت تداول عقود KuCoin الآجلة
    النسخة المتصلة: بيانات لحظية عبر WebSocket (دفع مستمر) +
    REST عبر بروكسي محلي (/kucoin) لتجاوز CORS.
    منطق المحرك مطابق للنسخة الأصلية: شبكة + صيد + جني +
@@ -11,7 +11,7 @@ declare global {
     Capacitor?: any;
     webkitAudioContext?: any;
     __kingHb?: any;
-    __KING_REMOTE?: string | null;
+    __ABKING_REMOTE?: string | null;
     __chartDbg?: any;
     __S?: any;
   }
@@ -24,12 +24,41 @@ const MIN_NET_USD = 0.05, MAX_HUNT_OPEN = 3, HUNT_COOLDOWN = 10000,
 // جني الربح الصافي بعد الرسوم (بالدولار) — الافتراضي 0.12 ويضبطه المالك من
 // الإعدادات (S.config.tpNet)؛ يُطبَّق على المركز كاملًا بمعادلة واحدة مهما
 // تعددت الأوامر المفتوحة
-const TP_BASE_NET = 0.12,
+const TP_BASE_NET = 0.12; // لم يعد مستخدمًا كهدف ثابت — الهدف الآن مدروس ديناميكي (قاعدة المالك)
 // حد الكارثة (بالدولار): الإغلاق الوحيد بخسارة = انعكاس مؤكد بضغط معاكس قوي
 // مع بلوغ الخسارة هذا المبلغ — ما دونه لا إغلاق بخسارة أبدًا
-      LOSS_STOP_USD = 16;
-// القيمة الحية لهدف الجني — يقرأ إعداد المالك لحظيًا ويسقط على الافتراضي
-function tpBase(){ return Math.max(0.03,Number(S&&S.config&&S.config.tpNet)||TP_BASE_NET); }
+const LOSS_STOP_USD = 16;
+/* ─── هدف الجني المدروس — لا رقم ثابت (قاعدة المالك) ───
+   الهدف يُشتق من دراسة الوضع الحالي ويتحدث باستمرار مع كل دراسة وبكل نبضة:
+   · رصيد الدورة: الهدف نسبة منه — يكبر مع رأس المال ويصغر معه تلقائياً
+   · تقلب العملة المقاس (بصمة الدراسة): تقلب أعلى = مساحة حركة أوسع = هدف أوسع
+   · سبريد العملة المقاس: احتكاك التنفيذ مغطى بالكامل فوق الرسوم
+   · التتبع الصاعد فوق الهدف (trailTarget) يكمل اقتناص الموجات القوية
+   الأرضية الصلبة: الرسوم مغطاة + 5 سنت صافياً على الأقل — لا يقفل بخسارة أبداً */
+export function dynamicTpNet(){
+  const hf=S&&S.config&&S.config.hfMode;
+  // الأساس حجم الصفقة الفعلي (قاعدة المالك) — لا رأس المال وحده: المركز
+  // الكبير يُجنى بمساحته الحقيقية والصغير بمساحته، والدراسة تعدّل المسافة
+  const posN=S.position?Math.max(0,(S.position.size||0)*(S.multiplier||1)*(S.position.entry||0)):0;
+  const bal=Math.max(1,posN||((S.config&&S.config.cycleBalance)||100)*0.8);
+  const prof=profOf()||{};
+  const vol=Math.max(0.005,+prof.vol||0.05);    // تقلب % المقاس من دراسة البصمة
+  const spread=Math.max(0,+prof.spread||0.02);  // سبريد % المقاس
+  const volMult=clamp(vol/0.05,0.6,3);          // مرجع التقلب 0.05%
+  // نسبة من حجم الصفقة تتوسع مع التقلب المقاس: 0.2% .. 1.2% (مراجعة شاملة —
+  // لا أهداف تافهة: الربح المستحق مساحة حقيقية من الحركة)
+  let target=bal*clamp(0.003*volMult,0.002,0.008);
+  // احتكاك السبريد مغطى بالكامل مع ربح صافٍ
+  target=Math.max(target, bal*spread/100*2+0.05);
+  if(hf) target=Math.min(target,0.05);           // وضع الجني السريع
+  // سقف المنع (درس PENGU): التعرض المضخم بمستويات المتوسط كان يضخم الهدف معه
+  // (4.44$ على مركز 6 مستويات) فيصبح منالًا لا يدانيه السوق فيعلق المركز ساعات.
+  // الهدف لا يتجاوز 1.5% من رصيد الدورة مهما كبر المتوسط
+  target=Math.min(target,Math.max(0.30,(S.config&&S.config.cycleBalance||0)*0.015));
+  // الأرضية 8 سنت (كانت 15): على الأحجام الصغيرة كانت الأرضية تضخم مسافة
+  // الجني إلى ~1% — النطاق النسبي (0.2-0.8%) هو الحاكم والحجم الأكبر يجني أوسع
+  return Math.max(0.08,Math.round(target*100)/100); }
+function tpBase(){ return dynamicTpNet(); } // الهدف المرجعي في كل المواضع = المدروس
 
 /* ---------- أدوات ---------- */
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -90,17 +119,32 @@ export function startSilentKeepAlive(){ if(_kaCtx||!(typeof window!=='undefined'
   }catch(e){ logSwallow("silent-catch", e); } }
 /* خدمة أمامية أندرويد: إشعار دائم يُبقي العملية حية ويمنع النظام من قتلها في الخلفية،
    + طلب استثناء «تحسين البطارية» مرة واحدة — السبب الثاني الأكبر لتوقف البوت أثناء النوم */
+let _fsTimer:any=null;
+function fsStart(){ if(!(typeof window!=='undefined'&&window.Capacitor)) return;
+  try{ const FS=((window.Capacitor.Plugins||{}).ForegroundService);
+    if(!FS||!FS.startForegroundService) return;
+    // بلا serviceType صريح: أندرويد يستخدم النوع المعلن في المانيفست (specialUse)
+    // — القيمة القديمة (1 = camera) كانت تُفشل بدء الخدمة وتُسقط التطبيق كليًا
+    FS.startForegroundService({id:7,title:'KING يعمل',
+      body:'متصل بالمنصة ويراقب الصفقات باستمرار',smallIcon:'ic_launcher',silent:true,
+      }).catch(()=>{});
+  }catch(e){ logSwallow("silent-catch", e); } }
 function startForegroundSvc(){ if(!(typeof window!=='undefined'&&window.Capacitor)) return;
   try{ const P=(window.Capacitor&&window.Capacitor.Plugins)||{};
     const FS=P.ForegroundService;
-    if(FS&&FS.startForegroundService)
-      FS.startForegroundService({id:7,title:'KING يعمل',
-        body:'متصل بالمنصة ويراقب الصفقات باستمرار',smallIcon:'ic_launcher',silent:true}).catch(()=>{});
+    fsStart();
+    // إعادة تأكيد الخدمة كل 5 دقائق وعند العودة للواجهة — لو قتلها النظام تعود فورًا
+    if(!_fsTimer) _fsTimer=setInterval(()=>{ try{ fsStart(); }catch(e){ logSwallow("silent-catch", e); } },300000);
+    if(typeof document!=='undefined') document.addEventListener('visibilitychange',()=>{
+      if(!document.hidden){ try{ fsStart(); }catch(e){ logSwallow("silent-catch", e); } } });
+    // أندرويد 13+: إذن الإشعارات مطلوب لإظهار إشعار الخدمة الأمامية
+    try{ if(FS&&FS.requestPermissions&&!(localStorage.getItem('abking_notif_asked')))
+      FS.requestPermissions().then(()=>{ localStorage.setItem('abking_notif_asked','1'); }).catch(()=>{}); }catch(e){ logSwallow("silent-catch", e); }
     const BO=P.BatteryOptimization;
-    if(BO&&BO.isBatteryOptimizationEnabled&&!(localStorage.getItem('king_bo_asked')))
+    if(BO&&BO.isBatteryOptimizationEnabled&&!(localStorage.getItem('abking_bo_asked')))
       BO.isBatteryOptimizationEnabled().then(r=>{
         if(r&&r.enabled&&BO.requestIgnoreBatteryOptimization){
-          localStorage.setItem('king_bo_asked','1');
+          localStorage.setItem('abking_bo_asked','1');
           BO.requestIgnoreBatteryOptimization().catch(()=>{}); } }).catch(()=>{});
   }catch(e){ logSwallow("silent-catch", e); } }
 /* قفل استيقاظ المعالج + منعّاش أصلي: الإضافة المحلية KingNative تمنع نوم المعالج
@@ -114,8 +158,8 @@ function startNativeKeepAlive(){ if(!(typeof window!=='undefined'&&window.Capaci
     try{ N.heartbeat&&N.heartbeat().catch(()=>{}); }catch(e){ logSwallow("silent-catch", e); } },15000);
   pushLog('server','قفل المعالج والمنعّاش الذاتي فعّالان — المحرك لا ينام بإطفاء الشاشة'); }
 // علامة الإنعاش: المنعّاش الأصلي أعاد تحميل التطبيق بعد تجميد — يُسجَّل عند الإقلاع
-function logRevival(){ try{ const at=localStorage.getItem('king_revived');
-  if(at){ localStorage.removeItem('king_revived');
+function logRevival(){ try{ const at=localStorage.getItem('abking_revived');
+  if(at){ localStorage.removeItem('abking_revived');
     const s=Math.max(1,Math.round((Date.now()-+at)/1000));
     pushLog('server','أُنعش التطبيق تلقائيًا بعد تجميد النظام له — استؤنف العمل خلال '+s+' ث'); } }catch(e){ logSwallow("silent-catch", e); } }
 function clearNativeOngoing(){ const LN=lnPlugin(); if(LN) LN.cancel({notifications:[{id:7}]}).catch(()=>{}); }
@@ -125,7 +169,7 @@ function notify(txt:any,kind?:any){ if(S.sound){
     else if(kind==='warn'){ beep('alarm'); }
     else beep(S.soundTone);
     try{ if(typeof navigator!=='undefined'&&navigator.vibrate) navigator.vibrate(kind==='win'?[80,60,140]:120); }catch(e){ logSwallow("silent-catch", e); } }
-  pushLog(kind==='warn'?'error':'fill',txt); nativeNotify('KING Trading',txt); }
+  pushLog(kind==='warn'?'error':'fill',txt); nativeNotify('AB-KING',txt); }
 
 /* ---------- مخزن الحالة + إشعارات الواجهة ---------- */
 const listeners=new Set();
@@ -142,13 +186,13 @@ function toast(m:any){ S.toastMsg={text:m,at:Date.now()}; emit(); }
 
 /* ================================================================
    وضع سيرفر الجوال (Termux) — العقل يعمل في Node دائمًا بلا نوم،
-   والتطبيق واجهة فقط: إن ضُبط window.__KING_REMOTE قبل initEngine
+   والتطبيق واجهة فقط: إن ضُبط window.__ABKING_REMOTE قبل initEngine
    لا يُشغَّل محرك محلي، تُزامَن S من السيرفر كل ثانيتين، وكل أمر
    (تشغيل/إيقاف/إعدادات/مفاتيح) يُرسل إليه عبر HTTP.
    ================================================================ */
-// ملاحظة حاسمة: لا ثابت مُقيَّم عند التحميل — window.__KING_REMOTE يُضبط بعد تقييم الوحدة،
+// ملاحظة حاسمة: لا ثابت مُقيَّم عند التحميل — window.__ABKING_REMOTE يُضبط بعد تقييم الوحدة،
 // فدالة حية تقرأه كل مرة وإلا بقي null للأبد واشتغل محرك محلي موازٍ (أوامر مزدوجة!)
-const R=()=>(typeof window!=='undefined'&&window.__KING_REMOTE)?String(window.__KING_REMOTE):null;
+const R=()=>(typeof window!=='undefined'&&window.__ABKING_REMOTE)?String(window.__ABKING_REMOTE):null;
 async function remoteCmd(action:any,payload?:any){ const base=R(); if(!base) return {ok:false,error:'no server'};
   try{ const r=await fetch(base+'/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action,...(payload||{})})});
@@ -175,7 +219,7 @@ function relayServerLogs(){ // أحداث السيرفر تعيش في Termux و
       if(win){ beep(S.soundTone); setTimeout(()=>{ try{beep('bell');}catch(e){ logSwallow("silent-catch", e); } },200); }
       else if(l.kind==='error') beep('alarm'); else beep(S.soundTone);
       try{navigator.vibrate&&navigator.vibrate(win?[80,60,140]:120);}catch(e){ logSwallow("silent-catch", e); } }
-    nativeNotify('KING Trading',l.text); } }
+    nativeNotify('AB-KING',l.text); } }
 export async function remoteSync(){ const base=R(); if(!base) return false;
   try{ const r=await fetch(base+'/state'); const j=await r.json();
     if(!j||!j.ok) throw new Error('bad state');
@@ -190,9 +234,9 @@ export async function remoteSync(){ const base=R(); if(!base) return false;
 // جسّ نبض السيرفر قبل إقلاع المحرك — 900 مللي ثانية كحد أقصى فلا يتأخر فتح التطبيق
 export async function detectRemoteServer(){ if(typeof window==='undefined') return false;
   try{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),900);
-    const r=await fetch('http://127.0.0.1:8787/state',{signal:c.signal}); clearTimeout(t);
+    const r=await fetch('http://127.0.0.1:8987/state',{signal:c.signal}); clearTimeout(t);
     const j=await r.json();
-    if(j&&j.ok){ window.__KING_REMOTE='http://127.0.0.1:8787'; return true; }
+    if(j&&j.ok){ window.__ABKING_REMOTE='http://127.0.0.1:8987'; return true; }
   }catch(e){ logSwallow("silent-catch", e); }
   return false; }
 
@@ -200,12 +244,12 @@ export async function detectRemoteServer(){ if(typeof window==='undefined') retu
 export const S: any = {
   keys:null,
   config:{symbol:'XBTUSDTM',displaySymbol:'BTC',leverage:3,gridStepPct:0.3,huntPct:0.15,
-    levels:12,direction:'short',directionMode:'auto',cycleBalance:100,mode:'paper',tpNet:0.12},
+    levels:12,direction:'short',directionMode:'auto',cycleBalance:100,mode:'paper',tpNet:0.12,patienceHrs:24,patienceUsd:0,gapMode:false},
   status:'idle', heartbeat:0, lastPrice:null, markPrice:null,
   multiplier:1, tickSize:0.1, makerFee:0.0002, takerFee:0.0006, funding:0,
   _metaSym:null, maxOrderQty:0, exAvail:null, exLeverage:null, // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
   grid:[], position:null, journal:[], logs:[],
-  history:[], linkOk:false, exEquity:null,
+  history:[], linkOk:false, intel:null, exEquity:null,
   realizedPnl:0, feesPaid:0, fundingPaid:0, cycleHarvested:0, slipCost:0,
   priceTrail:[], emaFast:null, emaSlow:null, cvd:0, tape:[],
   biasScore:0, biasReasons:[], regime:null, confluence:null,
@@ -230,8 +274,10 @@ export function netAlivePing(ok){
     const wasDown=_netDownAt>0; _netFailStreak=0; _netDownAt=0;
     if(wasDown){
       const secs=Math.round((Date.now()-_wasDownStart)/1000);
-      pushLog('recover','عودة الاتصال بالمنصة بعد انقطاع '+secs+' ث — مزامنة كاملة للأوامر والمراكز');
-      liveSync().catch(()=>{}); scanRadar().catch(()=>{});
+      pushLog('recover','عودة الاتصال بالمنصة بعد انقطاع '+secs+' ث — بدأت مراجعة الوضع وإصلاح الأوامر');
+      liveSync().then(()=>pushLog('recover','🔧 اكتملت المراجعة بعد الانقطاع — المراكز والأوامر والجني متطابقة مع المنصة'))
+        .catch(()=>pushLog('error','تعذرت مزامنة المنصة بعد العودة — سيتكرر المحاولة كل 5 ث'));
+      scanRadar().catch(()=>{});
     }
   } else {
     // لا انقطاع إلا إذا كانت القناة اللحظية صامتة أيضًا — فشل REST العابر وحده ليس دليلًا
@@ -246,28 +292,36 @@ let _wasDownStart=0;
 
 /* ---------- التخزين ---------- */
 function saveAll(){ try{
-  localStorage.setItem('king:cfg',JSON.stringify(S.config));
-  localStorage.setItem('king:keys',S.keys?JSON.stringify(S.keys):'');
-  localStorage.setItem('king:snd',S.sound?'1':'0');
-  localStorage.setItem('king:tone',S.soundTone||'soft');
+  localStorage.setItem('abking:cfg',JSON.stringify(S.config));
+  localStorage.setItem('abking:keys',S.keys?JSON.stringify(S.keys):'');
+  localStorage.setItem('abking:snd',S.sound?'1':'0');
+  localStorage.setItem('abking:tone',S.soundTone||'soft');
   const rt={grid:S.grid,position:S.position,journal:S.journal,realizedPnl:S.realizedPnl,
     feesPaid:S.feesPaid,fundingPaid:S.fundingPaid||0,cycleHarvested:S.cycleHarvested||0,priceTrail:S.priceTrail,cvd:S.cvd,huntCount:S.huntCount,
     lastPrice:S.lastPrice,markPrice:S.markPrice,activeCycle:S.activeCycle,status:S.status,
-    history:S.history,logs:S.logs,savedAt:Date.now()};
-  localStorage.setItem('king:rt',JSON.stringify(rt));
-  localStorage.setItem('king:mem',JSON.stringify(S.memory||{pairs:{},cycles:0,totalPnl:0}));
+    history:S.history,logs:S.logs,savedAt:Date.now(),
+    // أعلام دورة الجني (قاعدة المالك: إعادة الاختيار بعد الجني) — تُحفظ حتى لا
+    // تضيع إعادة الاختيار عند إعادة تشغيل السيرفر/الجوال بعد الجني مباشرة
+    _harvestAt:S._harvestAt||0,_reselectDone:!!S._reselectDone,
+    lastHuntAt:S.lastHuntAt||0,_dwellAt:S._dwellAt||0,startedAt:S.startedAt||0};
+  localStorage.setItem('abking:rt',JSON.stringify(rt));
+  localStorage.setItem('abking:mem',JSON.stringify(S.memory||{pairs:{},cycles:0,totalPnl:0}));
 }catch(e){ logSwallow("silent-catch", e); } }
 function loadAll(){ try{
-  const cfg=JSON.parse(localStorage.getItem('king:cfg')||'null'); if(cfg) S.config={...S.config,...cfg};
-  const ks=localStorage.getItem('king:keys'); if(ks){ try{S.keys=JSON.parse(ks);}catch(e){S.keys=null;} }
-  S.sound=localStorage.getItem('king:snd')!=='0';
-  S.soundTone=localStorage.getItem('king:tone')||'soft';
-  const rt=JSON.parse(localStorage.getItem('king:rt')||'null');
+  const cfg=JSON.parse(localStorage.getItem('abking:cfg')||'null'); if(cfg) S.config={...S.config,...cfg};
+  // أسطول TRQ: أول إقلاع بلا إعداد — الرصيد الافتراضي نصيب هذا المحرك وحده
+  if(!cfg&&FLEET_MODE()) S.config.cycleBalance=Math.max(1,Math.round(S.config.cycleBalance/5*100)/100);
+  const ks=localStorage.getItem('abking:keys'); if(ks){ try{S.keys=JSON.parse(ks);}catch(e){S.keys=null;} }
+  S.sound=localStorage.getItem('abking:snd')!=='0';
+  S.soundTone=localStorage.getItem('abking:tone')||'soft';
+  const rt=JSON.parse(localStorage.getItem('abking:rt')||'null');
   if(rt){ Object.assign(S,{grid:rt.grid||[],position:rt.position||null,journal:rt.journal||[],
     realizedPnl:rt.realizedPnl||0,feesPaid:rt.feesPaid||0,fundingPaid:rt.fundingPaid||0,cycleHarvested:rt.cycleHarvested||0,priceTrail:rt.priceTrail||[],
     cvd:rt.cvd||0,huntCount:rt.huntCount||0,lastPrice:rt.lastPrice??null,
     markPrice:rt.markPrice??null,activeCycle:rt.activeCycle||null,status:rt.status||'idle',
-    history:rt.history||[],logs:rt.logs||[]});
+    history:rt.history||[],logs:rt.logs||[],
+    _harvestAt:rt._harvestAt||0,_reselectDone:!!rt._reselectDone,
+    lastHuntAt:rt.lastHuntAt||0,_dwellAt:rt._dwellAt||0,startedAt:rt.startedAt||0});
     S._savedAt=rt.savedAt||0; }
   // قتل أندرويد للتطبيق في الخلفية ≠ خروج المالك: جلسة كانت تعمل وقُتلت حديثًا
   // (أقل من 30 دقيقة) تُستأنف تلقائيًا من حيث توقفت — وإلا بقيت القاعدة:
@@ -275,16 +329,16 @@ function loadAll(){ try{
   if(S.status==='running'){
     if(S._savedAt&&Date.now()-S._savedAt<30*60*1000){
       pushLog('server','⚡ أوقف النظام التطبيق لحظيًا — استُؤنف الصيد تلقائيًا من حيث توقف');
-      nativeNotify('KING عاد للعمل ✓','أوقف النظام التطبيق في الخلفية — استُؤنف الصيد تلقائيًا',true);
+      nativeNotify('AB-KING عاد للعمل ✓','أوقف النظام التطبيق في الخلفية — استُؤنف الصيد تلقائيًا',true);
     } else { S.status='paused';
       pushLog('info','استُعيدت الجلسة متوقفة مؤقتًا — اضغط «تشغيل» للبدء'); } }
   // بصمات العملات (دراسة 60 ثانية) تُحفظ — أما سجل التعلم فأُلغي نهائيًا بطلب المالك
-  const mem=JSON.parse(localStorage.getItem('king:mem')||'null');
+  const mem=JSON.parse(localStorage.getItem('abking:mem')||'null');
   S.memory={v:3,pairs:{},cycles:0,totalPnl:0,profiles:(mem&&mem.profiles)||{}};
 }catch(e){ logSwallow("silent-catch", e); } }
 
 /* ---------- السجل ---------- */
-function pushLog(kind:any,text:any){ S.logs=[{id:uid('l'),at:Date.now(),kind,text},...S.logs].slice(0,80); }
+export function pushLog(kind:any,text:any){ S.logs=[{id:uid('l'),at:Date.now(),kind,text},...S.logs].slice(0,80); }
 const _swallowAt={};
 function logSwallow(where:any,err:any){
   try{
@@ -301,7 +355,8 @@ function logSwallow(where:any,err:any){
     pushLog('warn', where + ': ' + msg);
   }catch(e2){ /* rate-limit logger must never throw */ }
 }
-function pushJr(row:any){ S.journal=[row,...S.journal].slice(0,120); }
+function pushJr(row:any){ row.symbol=row.symbol||S.config.displaySymbol; // عملة الصفقة تُسجل معها — السجل لا يفقد سياقه عند الانتقال
+  S.journal=[row,...S.journal].slice(0,120); }
 
 /* ================================================================
    عميل KuCoin — REST عبر البروكسي المحلي /kucoin
@@ -309,13 +364,13 @@ function pushJr(row:any){ S.journal=[row,...S.journal].slice(0,120); }
    ================================================================ */
 const DIRECT_BASE = 'https://api-futures.kucoin.com';
 // سيرفر Termux (Node) وتطبيق الجوال (Capacitor): لا بروكسي إطلاقًا — اتصال مباشر من أول طلب
-const IS_SERVER = typeof process!=='undefined' && !!(process && process.env && process.env.KING_SERVER);
+const IS_SERVER = typeof process!=='undefined' && !!(process && process.env && process.env.ABKING_SERVER);
 const IS_NATIVE = IS_SERVER || (typeof window !== 'undefined' && (window.Capacitor || location.protocol === 'capacitor:'));
 let API_BASE = IS_NATIVE ? DIRECT_BASE : '/kucoin';
 // AbortSignal.timeout غير مدعوم في WebViews القديمة — بديل متوافق
 function sig(ms){ const c=new AbortController(); setTimeout(()=>c.abort(),ms); return c.signal; }
 async function kcFetch(path,opts){
-  const _t0=Date.now();
+  
   try{ const _r=await kcFetchInner(path,opts); netAlivePing(true); return _r; }
   catch(e){ if((e as any)?.name!=='AbortError') netAlivePing(false); throw e; } }
 async function kcFetchInner(path,opts){
@@ -378,7 +433,7 @@ async function kcPrivate(method:any,path:any,body?:any){
   if(j.code!=='200000') throw new Error(j.msg||('KuCoin '+res.status));
   return j.data;
 }
-export async function getApiBase(){ return API_BASE; }
+
 const fetchTicker  = s => kcPublic('/api/v1/ticker?symbol='+encodeURIComponent(s),2500);
 const fetchContract= s => kcPublic('/api/v1/contracts/'+encodeURIComponent(s),3500);
 let _bookFailsAt:any=0, _tapeFailsAt:any=0;
@@ -447,6 +502,53 @@ function radarScore(x:any){ // x: {vol,spread,chg,trendPct,turnover,price}
   if(Math.abs(x.chg)>12){ sc-=6; why.push('حركة يوم متطرفة'); }
   return {score:clamp(Math.round(sc),0,100),why}; }
 
+// ===================================================================
+// background pipeline: the NEXT trade is prepared while the current one works.
+// every 30s the full universe is ranked and the next candidate is kept warm;
+// the moment the position closes (harvest), the bot opens it instantly.
+// ===================================================================
+S._nextSymbol=null; S._nextReady=false; let _bgPipeAt=0;
+export async function backgroundPipeline(){
+  if(S.status!=='running') return;
+  if(Date.now()-_bgPipeAt<30000) return;
+  _bgPipeAt=Date.now();
+  try{
+    const r=S.radar&&S.radar.list&&S.radar.list.length?S.radar:(await scanRadar());
+    if(!r||!r.list||!r.list.length) return;
+    const cands=r.list.filter(l=>l.symbol!==S.config.symbol&&(l.score||0)>=55);
+    if(!cands.length) return;
+    const nxt=cands[0];
+    S._nextReady=true;
+    S._nextStudiedAt=Date.now();
+    if(S._nextSymbol!==nxt.symbol){
+      S._nextSymbol=nxt.symbol;
+      if(Date.now()-(S._bgLogAt||0)>600000){ S._bgLogAt=Date.now();
+        pushLog('server','\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A '+nxt.disp+' (\u062F\u0631\u062C\u0629 '+nxt.score+') \u0645\u0631\u0634\u0651\u062D \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A \u2014 \u064A\u064F\u062E\u062A\u0627\u0631 \u0625\u0646 \u0643\u0627\u0646\u062A \u0645\u0646\u0637\u0642\u062A\u0647 \u0623\u0642\u0648\u0649'); } }
+  }catch(e){ logSwallow('silent-catch', e); }
+}
+export function openNextReady(){
+  if(!S._nextSymbol||!S._nextReady) return false;
+  if(S.position) return false;
+  // ─── إصلاح الدوران المتسارع (المسار الثاني): القفز الفوري للمرشح المدروس
+  // مسموح فقط خلال 10 دقائق بعد جني مكتمل — لا كل 30 ثانية بلا مركز كما كان ───
+  if(!S._harvestAt||Date.now()-S._harvestAt>10*60*1000){ S._nextReady=false; S._nextSymbol=null; return false; }
+  // المرشح يجب أن يبقى مدروسًا حديثًا (خلال 15 دقيقة) — لا فتح ببيانات باردة
+  if(Date.now()-(S._nextStudiedAt||0)>15*60*1000){ S._nextReady=false; S._nextSymbol=null; return false; }
+  if(S._nextSymbol===S.config.symbol){ S._nextReady=false; return false; }
+  const sym=S._nextSymbol;
+  S._nextReady=false; S._nextSymbol=null; S._reselectDone=true; // قفز ما بعد الجني — إعادة الاختيار تمت
+  pushLog('server','\u26A1 \u0641\u062A\u062D \u0641\u0648\u0631\u064A \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u0645\u062F\u0631\u0648\u0633\u0629 \u062E\u0644\u0641\u064A\u064B\u0627 '+sym.replace(/USDTM$/i,'')+' \u062A\u062F\u062E\u0644 \u0627\u0644\u0622\u0646');
+  saveCfg({symbol:sym,leverage:S.config.leverage,levels:S.config.levels,
+    gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+    cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
+    mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
+  return true;
+}
+/* ─── أسطول TRQ-trading: كل محرك يتجنب عملات محركات الأسطول الأخرى ───
+   التنويع مضمون مركزياً: قائمة المحركات الأخرى تُجلب من المنسق كل 30 ث،
+   والرادار يحذفها من القائمة (عملة المحرك نفسه تبقى — يديرها هو) */
+export const FLEET_MODE=()=>!!(typeof process!=='undefined'&&process.env&&process.env.ABKING_SLOT);
+
 export async function scanRadar(){
   if(S._radarBusy) return S.radar; S._radarBusy=true;
   try{
@@ -455,14 +557,33 @@ export async function scanRadar(){
       .map(c=>({symbol:c.symbol,
         turnover:+(c.turnoverOf24h??c.turnover24h??c.volumeOf24h??c.volume24h??0)||0,
         price:+(c.lastTradePrice??c.markPrice??0)||0,
-        chg:+(c.priceChgPct??0)*100||0}))
+        chg:+(c.priceChgPct??0)*100||0,
+        funding:+(c.fundingFeeRate??0)||0,
+        fundHrs:+(c.fundingRateGranularity??28800000)/3600000||8,
+        nextFundMs:+(c.nextFundingRateTime??0)||0,
+        oi:+(c.openInterest??0)||0,
+        maxLev:+(c.maxLeverage??0)||0,
+        markP:+(c.markPrice??0)||0,
+        idxP:+(c.indexPrice??0)||0,
+        lowP:+(c.lowPrice??0)||0,
+        highP:+(c.highPrice??0)||0}))
       .filter(r=>r.turnover>0&&r.price>0);
     // قاعدة المرشحين: الصفرية أولًا — رأس مال صغير يحتاج عملات رخيصة بسيولة،
     // مع إبقاء بضع عملات كبيرة للمقارنة فقط
-    const cheap=rows0.filter(r=>r.price<1).sort((a,b)=>b.turnover-a.turnover).slice(0,16);
-    const big=rows0.filter(r=>r.price>=1).sort((a,b)=>b.turnover-a.turnover).slice(0,4);
-    const rows=[...cheap,...big];
-    const det=await Promise.all(rows.map(async r=>{
+    const rows=rows0; // full universe - every contract is ranked and watched
+    // instant pre-ranking of ALL contracts from the single aggregate response
+    const preScored=rows.map(r=>{
+      let sc=50;
+      if(r.turnover>=5e7) sc+=10; else if(r.turnover>=1e7) sc+=6; else if(r.turnover<3e5) sc-=25; else if(r.turnover<1e6) sc-=12;
+      const a=Math.abs(r.chg); if(a<1.2) sc+=8; else if(a<3.5) sc+=4; else if(a>8) sc-=8; else sc-=3;
+      const range=r.lowP>0?((r.highP-r.lowP)/r.lowP*100):0; if(range>=4) sc+=10; else if(range>=2) sc+=6; else if(range>0&&range<0.6) sc-=6;
+      const basis=(r.markP>0&&r.idxP>0)?((r.markP-r.idxP)/r.idxP*100):0; if(Math.abs(basis)>0.2) sc+=6;
+      if(r.price>0&&r.price<0.01) sc+=6; else if(r.price>100) sc-=10;
+      const oiUsd=r.oi*r.price; if(r.oi>0&&r.turnover>0){ const rto=oiUsd/r.turnover; if(rto<0.5) sc+=4; else if(rto>5) sc-=4; }
+      return {...r, preScore: Math.max(0, Math.min(100, Math.round(sc))) };
+    }).sort((a,b)=>b.preScore-a.preScore);
+    // only the top 30 candidates get the deep check (candles + ticker) - fast AND precise
+    const det=await Promise.all(preScored.slice(0,30).map(async r=>{
       const out={...r,vol:0,spread:0,trendPct:0,price:0};
       try{ const ks=await fetchKlines(r.symbol,15);
         if(ks.length>=20){ const last=ks.slice(-24);
@@ -475,18 +596,56 @@ export async function scanRadar(){
         if(bb>0&&ba>0) out.spread=(ba-bb)/((ba+bb)/2)*100;
         if(!out.price) out.price=+t.price||0; }catch(e){ logSwallow("silent-catch", e); }
       return out; }));
-    const list=det.filter((d:any)=>d.price>0).map((d:any)=>{ const s=radarScore(d);
+    const deepList=det.filter((d:any)=>d.price>0).map((d:any)=>{ const s=radarScore(d);
+      const fundAnn=(d.funding||0)*(24/(d.fundHrs||8))*100;
+      const oiUsd=(d.oi||0)*(d.price||0);
+      const skew=d.chg<0&&d.funding<0?'شورت متكدس — مرشح انعكاس صاعد':d.chg>0&&d.funding>0?'لونغ متكدس — حذر من انعكاس هابط':(d.funding||0)!==0?'محايد':'—';
+      const basis=(d.markP>0&&d.idxP>0)?((d.markP-d.idxP)/d.idxP)*100:0;
+      const range=(d.lowP>0)?((d.highP-d.lowP)/d.lowP)*100:0;
+      const oiToVol=(d.turnover>0)?oiUsd/d.turnover:0;
       return {symbol:d.symbol,disp:d.symbol.replace(/USDTM$/i,'').replace(/^XBT/i,'BTC'),
         price:d.price,score:s.score,why:s.why,state:d.state||'—',
         vol:+d.vol.toFixed(2),chg:Math.round(d.chg*10)/10,turnover:d.turnover,
+        funding:+(d.funding||0).toFixed(6),fundHrs:d.fundHrs||8,fundAnnPct:+fundAnn.toFixed(3),
+        nextFundMs:d.nextFundMs||0,oi:+d.oi||0,oiUsd,oiLev:d.maxLev||0,skew,
+        basisPct:+basis.toFixed(3),rangePct:+range.toFixed(1),oiToVolPct:+(oiToVol*100).toFixed(0),
         grade:s.score>=65?'🟢':s.score>=45?'🟡':'🔴'}; })
       // الأفضل أولًا بلا تعادل مربك: الدرجة، ثم العرضي المتذبذب يتقدم، ثم الأعلى سيولة
       .sort((a:any,b:any)=>b.score-a.score||
         ((b.state==='عرضي متذبذب')?1:0)-((a.state==='عرضي متذبذب')?1:0)||b.turnover-a.turnover);
-    S.radar={at:Date.now(),list};
+    // the rest of the universe (no deep fetch) - watched every 45s with live pre-scores
+    const deepSyms=new Set(deepList.map((x:any)=>x.symbol));
+    const rest=preScored.filter((r:any)=>!deepSyms.has(r.symbol)).map((r:any)=>({
+      symbol:r.symbol,disp:r.symbol.replace(/USDTM$/i,'').replace(/^XBT/i,'BTC'),
+      price:r.price,score:r.preScore,why:['full-universe watch'],state:'watch',
+      vol:0,chg:Math.round(r.chg*10)/10,turnover:r.turnover,
+      funding:+(r.funding||0).toFixed(6),fundHrs:r.fundHrs||8,
+      fundAnnPct:+((r.funding||0)*(24/(r.fundHrs||8))*100).toFixed(3),
+      nextFundMs:r.nextFundMs||0,oi:+r.oi||0,oiUsd:(r.oi||0)*(r.price||0),oiLev:r.maxLev||0,
+      skew:'-',basisPct:0,rangePct:0,oiToVolPct:0,
+      grade:r.preScore>=65?'\ud83d\udfe2':r.preScore>=45?'\ud83d\udfe1':'\ud83d\udd34'}));
+    const list=[...deepList,...rest];
+    const fundRanked=[...list].sort((a:any,b:any)=>b.fundAnnPct-a.fundAnnPct);
+    const oiRanked=[...list].sort((a:any,b:any)=>b.oiUsd-a.oiUsd).slice(0,5);
+    const gridRanked=[...list].filter((x:any)=>x.turnover>2e6).sort((a:any,b:any)=>b.rangePct-a.rangePct).slice(0,5);
+    const basisRanked=[...list].filter((x:any)=>x.turnover>2e6&&Math.abs(x.basisPct)>0.1)
+      .sort((a:any,b:any)=>Math.abs(b.basisPct)-Math.abs(a.basisPct)).slice(0,5);
+    S.intel={at:Date.now(),
+      hottest:fundRanked.slice(0,5),
+      coldest:fundRanked.slice(-3).reverse(),
+      biggestOi:oiRanked,
+      bestGrid:gridRanked,
+      extremeBasis:basisRanked,
+      squeeze:fundRanked.filter((f:any)=>f.fundAnnPct>=0.05&&f.chg>3).slice(0,3),
+      rebound:fundRanked.filter((f:any)=>f.fundAnnPct<=-0.03&&f.chg<-3).slice(0,3)};
+    // أسطول TRQ: حذف عملات المحركات الأخرى — كل عملة لمحرك واحد فقط
+    let flist=list;
+    if(FLEET_MODE()){ const taken=S._fleetTaken||[];
+      if(taken.length) flist=list.filter(l=>l.symbol===S.config.symbol||!taken.includes(l.symbol)); }
+    S.radar={at:Date.now(),list:flist};
     // توصية التبديل: عملتي الحالية ضعيفة وأخرى أقوى منها بفارق واضح
-    const cur=list.find(l=>l.symbol===S.config.symbol);
-    const top=list[0];
+    const cur=flist.find(l=>l.symbol===S.config.symbol);
+    const top=flist[0];
     if(top&&cur&&top.symbol!==cur.symbol&&top.score-cur.score>=18&&cur.score<50){
       if(!S._radarTipAt||Date.now()-S._radarTipAt>1800000){ S._radarTipAt=Date.now();
         pushLog('server','📡 رادار: '+cur.disp+' ضعيفة ('+cur.score+') بينما '+top.disp+
@@ -503,6 +662,45 @@ export async function scanRadar(){
 }
 
 /* ================================================================ */
+/* ─── إعادة الاختيار الإجباري بعد كل جني (قاعدة المالك) ───
+   بعد كل صفقة مكتملة: البحث عن أفضل عملة أخرى بمنطقة أقوى؛ إن وُجدت
+   انتقل إليها مباشرة (تُدرس ثم تدخل)، وإن لم توجد فالعودة للعملة الحالية
+   إن كانت جيدة. القرار داخل نافذة 15 دقيقة ثم يستمر التداول عاديًا. */
+export async function postHarvestReselect(){
+  if(S.status!=='running'||S.position) return;
+  if(!S._harvestAt||S._reselectDone) return;
+  if(Date.now()-S._harvestAt>15*60*1000){ S._reselectDone=true; return; } // فاتت النافذة — استمر عاديًا
+  // تعذّر إتمام المسح أكثر من 5 دقائق (شبكة متقطعة)؟ استئناف فوري بدل تجميد الدخول
+  if(Date.now()-S._harvestAt>5*60*1000&&!S._reselectBusy){
+    S._reselectDone=true;
+    pushLog('server','⏱ بعد الجني: تعذر اكتمال مسح الرادار — استئناف الصيد على العملة الحالية');
+    return; }
+  try{
+    const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
+    const cur=r.list.find(l=>l.symbol===S.config.symbol);
+    const bestOther=r.list.filter(l=>l.symbol!==S.config.symbol).find(l=>(l.score||0)>=55);
+    S._reselectDone=true; S._nextReady=false; S._nextSymbol=null; // القرار اتخذ — لا قفز مزدوج
+    if(!bestOther){
+      pushLog('server','🔎 بعد الجني: لا عملة أقوى من '+
+        (cur?cur.disp:S.config.displaySymbol)+' في الرادار — استئناف الصيد على العملة الحالية');
+      return; }
+    const curSc=cur?(cur.score||0):0;
+    // قاعدة المالك النهائية: بعد الجني يوجد بديل مؤهل (55+)؟ انتقال مباشر إليه.
+    // البقاء على العملة الحالية فقط إذا لم يوجد أي بديل مؤهل في الرادار.
+    // عملة أخرى أفضل أو منافسة → انتقال مباشر ثم دراسة ثم دخول
+    _lastSwitchAt=Date.now();
+    const curDisp=cur?cur.disp:S.config.displaySymbol;
+    pushLog('server','🔄 بعد الجني: انتقال مباشر من '+curDisp+' ('+curSc+') إلى '+
+      bestOther.disp+' ('+bestOther.score+') — منطقة أقوى — تُدرس ثم تُفتح الصفقة');
+    toast('🔄 بعد الجني: '+bestOther.disp+' — '+bestOther.score);
+    nativeNotify('AB-KING — انتقال بعد الجني',bestOther.disp+' درجة '+bestOther.score);
+    saveCfg({symbol:bestOther.symbol,leverage:S.config.leverage,levels:S.config.levels,
+      gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+      cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
+      mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
+  }catch(e){ logSwallow('silent-catch',e); }
+}
+
 /* BG RADAR: permanent study every 5 min while bot runs (never miss a chance) */
 let _bgScanAt=0;
 export function bgRadarTick(){ if(!R()){
@@ -513,48 +711,248 @@ export function bgRadarTick(){ if(!R()){
 /* SMART SWITCH: called only after a completed harvest (position closed).
    Switch to a stronger symbol when clearly better: gap >=15 and current <55. */
 let _lastSwitchAt=0;
-export async function maybeSwitchSymbol(){ if(S.position) return;
+/* ================================================================
+   صائد الفجوات (GAP HUNTER) — اختراع مبني على بيانات المنصة العميقة
+   المبدأ: سعر KuCoin المحلي ينحرف عن الإنديكس (.K* من 5 منصات)
+   إحصائيًا (z<-2σ) + استقرار السعر → ضجيج محلي يعود للإنديكس — ندخل مع العودة
+   القياس المختبري: 63% نجاح، +66%/8 أيام على 10 عملات
+   ================================================================ */
+const GAP_MODE_ON=()=>!!S.config.gapMode;
+let _gapScanAt=0, _gapStats:any=null;
+
+/* فحص فجوات كل العملات السائلة: يسحب السعر+الإنديكس لكل عقد من /contracts/active وحديث
+   قائمة الفجوات الحالية مع z-score متدرج (24 شمعة تاريخية 5m) */
+export async function gapScan(){
+  if(!GAP_MODE_ON()) return null;
+  if(Date.now()-_gapScanAt<60*1000) return _gapStats; // مسح كل دقيقة
+  _gapScanAt=Date.now();
+  try{
+    const all=await kcPublic('/api/v1/contracts/active',6000);
+    const liq=(all||[]).filter((c:any)=>/USDTM$/.test(c.symbol)&&c.status==='Open'
+      &&+(c.turnoverOf24h||0)>3e6&&+(c.lastTradePrice||0)>0&&+(c.indexPrice||0)>0);
+    const out:any[]=[];
+    for(const c of liq.slice(0,60)){ // سقف الفحص للسيولة الكافية
+      const dev=((+c.lastTradePrice-+c.indexPrice)/+c.indexPrice)*100;
+      if(dev<-0.15){ // فجوة سالبة ملحظة فقط
+        out.push({symbol:c.symbol,dev,oi:+c.openInterest||0,turn:+c.turnoverOf24h,
+          fund:+c.fundingFeeRate||0,last:+c.lastTradePrice,idx:+c.indexPrice});
+      }
+    }
+    out.sort((a,b)=>a.dev-b.dev);
+    _gapStats={at:Date.now(),list:out};
+    return _gapStats;
+  }catch(e){ logSwallow('silent-catch',e); return _gapStats; }
+}
+
+/* الإشارة المدروسة: فجوة عميقة (z<-2σ) + استقرار السعر محليًا
+   يسحب 24 شمعة 5m منطقية للإنديكس والعقد → z والاستقرار */
+export async function gapSignal(symbol:string){
+  try{
+    const [ixr,pkr]=await Promise.all([
+      kcPublic('/api/v1/kline/query?symbol=.K'+symbol.replace('USDTM','USDT')+'&granularity=5',6000),
+      kcPublic('/api/v1/kline/query?symbol='+symbol+'&granularity=5',6000),
+    ]);
+    const idx:any={},perp:any={};
+    (ixr||[]).forEach((k:any)=>idx[k[0]]=+k[4]);
+    (pkr||[]).forEach((k:any)=>perp[k[0]]=+k[4]);
+    const devs:any[]=[];
+    for(const t in perp){ if(idx[t]>0&&perp[t]>0) devs.push({t:+t,d:(perp[t]-idx[t])/idx[t]*100,p:perp[t],idx:idx[t]}); }
+    if(devs.length<27) return null;
+    devs.sort((a:any,b:any)=>a.t-b.t);
+    const win=devs.slice(-25,-1);
+    const mean=win.reduce((a:number,b:any)=>a+b.d,0)/win.length;
+    const sd=Math.sqrt(win.reduce((a:number,b:any)=>a+(b.d-mean)**2,0)/win.length);
+    if(!(sd>0.001)) return null;
+    const cur=devs[devs.length-1];
+    const z=(cur.d-mean)/sd;
+    const stable=devs.length>3&&cur.p>=devs[devs.length-4].p*0.9985; // استقرار تقريبي (15 دقيقة)
+    const deep=cur.d<-0.15&&z<-2;
+    const idxNow=cur.idx||cur.p;
+    const idx6h=devs.length>6?(devs[devs.length-7].idx||idxNow):idxNow;
+    const idxFlat=Math.abs((idxNow-idx6h)/idx6h*100)<1.5;
+    const ready=deep&&stable&&idxFlat;
+    return {z,dev:cur.d,ready,price:cur.p,exitDev:mean};
+  }catch(e){ return null; }
+}
+
+/* حارس الخروج: الفجوة عادت للمتوسط أو حد الصبر بلغ — جني كامل */
+function gapExitCheck(p:number):boolean{
+  const ctx=S._gapCtx;
+  if(!ctx) return false;
+  const dev=((p-ctx.idx)/ctx.idx)*100;
+  if(dev>=ctx.exitDev) return true;  // عادة الإنديكس ✓
+  return false;
+}
+
+/* \u0646\u0628\u0636\u0629 \u0635\u0627\u0626\u062f \u0627\u0644\u0641\u062c\u0648\u0627\u062a: \u062a\u0645\u0633\u062d \u0643\u0644 \u062f\u0642\u064a\u0642\u0629\u060c \u0648\u0625\u0646 \u0648\u062c\u062f\u062a \u0641\u062c\u0648\u0629 \u0645\u062c\u0647\u0632\u0629 (z<-2\u03c3 + \u0627\u0633\u062a\u0642\u0631\u0627\u0631) \u062a\u062d\u0648\u0644 \u0644\u0644\u0639\u0645\u0644\u0629 \u0648\u062a\u062f\u062e\u0644 \u0637\u0648\u064a\u0644 */
+/* التوافق السبعي: الحيتان + الفجوة + الدفتر (0-4) */
+async function confluenceScore(symbol:string,dev:number){
+  let score=0;
+  try{
+    // 1) جريان الحيتان: آخر 100 صفقات
+    const tr=await kcPublic('/api/v1/trade/history?symbol='+encodeURIComponent(symbol),4000);
+    const trades=(Array.isArray(tr)?tr:[]).slice(0,100);
+    let whaleNet=0;
+    if(trades.length>=20){
+      const sizes=trades.map((t:any)=>+t.size).sort((a:number,b:number)=>a-b);
+      const med=sizes[Math.floor(sizes.length/2)]||1;
+      let lastPx=0;
+      for(const t of trades){ if(+t.price>0) lastPx=+t.price; }
+      if(lastPx>0){
+        for(const t of trades){
+          if(+t.size>med*8) whaleNet+=(t.side==='buy'?1:-1)*+t.size*lastPx;
+        }
+      }
+    }
+    if(whaleNet>0) score++;
+    // 2) الدفتر (أعمق 20)
+    const bk=await kcPublic('/api/v1/level2/depth20?symbol='+encodeURIComponent(symbol),3000);
+    let imb=0;
+    if(bk&&bk.bids&&bk.asks){
+      const bd=(bk.bids||[]).reduce((a:number,x:any)=>a+ +x[1],0);
+      const ad=(bk.asks||[]).reduce((a:number,x:any)=>a+ +x[1],0);
+      if(bd+ad>0) imb=(bd-ad)/(bd+ad);
+    }
+    if(imb>0.05) score++;
+  }catch(e){ logSwallow('silent-catch',e); }
+  if(dev<-0.15) score+=2;
+  return score;
+}
+
+/* PEAK-HOUR WINDOW: gaps spawn/revert around US open (13-19 UTC, measured 15:00 peak) */
+function inPeakWindow():boolean{
+  const h=new Date().getUTCHours();
+  return h>=13&&h<=19;
+}
+
+/* BTC LEAD: BTC moves 1min ahead of alts (correlation 0.117 measured) */
+let _btcLead:{t:number,ret:number}|null=null;
+async function btcLead():Promise<number>{
+  try{
+    const now=Date.now();
+    if(_btcLead&&now-_btcLead.t<60000) return _btcLead.ret;
+    const k=await kcPublic('/api/v1/kline/query?symbol=XBTUSDTM&granularity=1',3000);
+    const rows=(Array.isArray(k)?k:[]).slice(-3);
+    if(rows.length<2) return 0;
+    const last=+rows[rows.length-1][4], prev=+rows[0][4];
+    const ret=prev>0?(last-prev)/prev*100:0;
+    _btcLead={t:now,ret};
+    return ret;
+  }catch(e){ return 0; }
+}
+
+/* WALL PERSISTENCE: real support wall survives two snapshots 15s apart */
+async function wallReal(symbol:string):Promise<boolean>{
+  try{
+    const snap=async()=>{
+      const b=await kcPublic('/api/v1/level2/depth20?symbol='+encodeURIComponent(symbol),3000);
+      if(!b||!b.bids||!b.bids.length) return null;
+      let mx=0,mxP=0;
+      for(const x of b.bids.slice(0,15)){
+        if(+x[1]>mx){mx=+x[1];mxP=+x[0];}
+      }
+      return {wallP:mxP,wallS:mx};
+    };
+    const s1=await snap();
+    if(!s1||!(s1.wallS>0)) return true;
+    await new Promise(r=>setTimeout(r,15000));
+    const s2=await snap();
+    if(!s2) return true;
+    const sameZone=Math.abs(s2.wallP-s1.wallP)/Math.max(1e-12,s1.wallP)<0.004;
+    const stillSized=s2.wallS>=s1.wallS*0.5;
+    return sameZone&&stillSized;
+  }catch(e){ return true; }
+}
+
+export async function gapHunterTick(){
+  if(S._gapHuntBusy) return; S._gapHuntBusy=true;
+  try{
+    const st=await gapScan();
+    if(!st||!st.list||!st.list.length) return;
+    // أ\u0641\u0636\u0644 3 \u0645\u0631\u0634\u062d\u064a\u0646 \u0641\u0642\u0637 (أ\u0639\u0645\u0642 ف\u062c\u0648\u0629) — ت\u0641\u0627\u062d\u064a ا\u0644\u0625\u0634\u0627\u0631\u0629 ا\u0644\u0645\u062f\u0631\u0648\u0633\u0629
+    for(const cand of st.list.slice(0,3)){
+      const sig=await gapSignal(cand.symbol);
+      if(sig&&sig.ready){
+        const cs=await confluenceScore(cand.symbol,sig.dev);
+        if(cs<3){ continue; }
+        if(!inPeakWindow()){ continue; }
+        const lead=await btcLead();
+        if(lead<-0.08){ continue; }
+        if(!(await wallReal(cand.symbol))){ continue; } // التوافق أقل من 3/4 — انتظر فرصة أفضل
+        // ت\u062d\u0648\u064a\u0644 ا\u0644\u0631\u0645\u0632 إ\u0646 ل\u0632\u0645 + د\u062e\u0648\u0644 ط\u0648\u064a\u0644 ب\u0627\u0644\u0633\u0639\u0631 ا\u0644\u062d\u0627\u0644\u064a
+        if(cand.symbol!==S.config.symbol){
+          pushLog('server','\ud83d\udd0d \u0635\u0627\u0626\u062f \u0627\u0644\u0641\u062c\u0648\u0627\u062a: \u062a\u062d\u0648\u064a\u0644 \u0625\u0644\u0649 '+cand.symbol.replace(/USDTM$/,'')+' \u2014 \u0641\u062c\u0648\u0629 '+sig.dev.toFixed(2)+'% (z='+sig.z.toFixed(1)+')');
+          S.config.symbol=cand.symbol;
+          S.config.displaySymbol=cand.symbol.replace(/USDTM$/i,'').replace(/^XBT$/i,'BTC');
+          S.multiplier=1; S.tickSize=0.1; S._metaSym=null; S._metaAt=0;
+          setStreamSymbol(cand.symbol);
+          S.grid=[]; S.tape=[]; S.priceTrail=[]; S.emaFast=S.emaSlow=null; // السجل يبقى — الانتقال لا يمسح التاريخ
+        }
+        S._gapCtx={idx:cand.idx,exitDev:sig.exitDev,entryAt:Date.now()};
+        // الحجم = نف معايير تطبيق KING النهائي (contractsForLevel):
+        // 80% من رصيد الدورة ÷ المستويات × الرافعة — ليس كمية مخترعة صغيرة
+        S.lastPrice=sig.price;
+        S._metaSym=null; S._metaAt=0; // يجب قراءة مواصفات العقد الجديد قبل الحجم
+        try{ const ct=await kcPublic('/api/v1/contracts/'+encodeURIComponent(cand.symbol),4000);
+          if(ct&&ct.multiplier){ S.multiplier=+ct.multiplier; S.tickSize=+ct.tickSize||S.tickSize; S._metaSym=cand.symbol; S._metaAt=Date.now(); }
+        }catch(e){ logSwallow('silent-catch',e); }
+        maybeHunt(sig.price);
+        pushLog('server','\u2696\ufe0f \u0641\u062c\u0648\u0629 \u0645\u062c\u0647\u0632\u0629: \u062f\u062e\u0648\u0644 \u0637\u0648\u064a\u0644 @ '+fmtPx(sig.price)+' \u2014 \u062e\u0631\u0648\u062c \u0639\u0646\u062f \u0639\u0648\u062f\u0629 \u0627\u0644\u0641\u062c\u0648\u0629');
+        break;
+      }
+    }
+  }catch(e){ logSwallow('silent-catch',e); }
+  finally{ S._gapHuntBusy=false; }
+}
+export async function maybeSwitchSymbol(){
   if(S.status!=='running') return;
-  if(Date.now()-_lastSwitchAt<60000) return;
-  // دوران زمني: لا صفقة خلال 45 دقيقة = العملة بايرة للبوت — انتقل لأقوى عملة أخرى
-  const idleMs=Date.now()-(S.lastHuntAt||S.startedAt||Date.now());
-  const rotate=idleMs>5*60*1000; // دوران سريع: 5 دقائق بلا فرصة = العملة بايرة
-  try{ const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
+  // مع مركز مفتوح: الصفقة تُدار حتى الجني — لا تبديل في منتصف صفقة أبدًا
+  if(S.position){
+    try{ await scanRadar(); }catch(e){ logSwallow('silent-catch', e); }
+    return; }
+  // ─── دورة المالك: أفضل عملة بكل الشروط قبل كل صفقة، وبعد الجني تُختار الأفضل من جديد ───
+  // مهلة تبريد 45 ثانية + لا تبديل وسط دراسة — يكتمل تقييم العملة الحالية أولًا
+  if(Date.now()-_lastSwitchAt<45000) return;
+  if(studying()) return;
+  try{
+    const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
     const cur=r.list.find(l=>l.symbol===S.config.symbol);
-    let top=r.list[0];
-    if(rotate){
-      // اختر أقوى عملة مختلفة عن الحالية (أول القائمة خارج الأخيرة محاولات تدوير متتالية)
-      const skipN=1+(S._rotCount||0);
-      const cands=r.list.filter(l=>l.symbol!==S.config.symbol);
-      if(cands.length){ top=cands[Math.min(skipN-1,cands.length-1)];
-        // إن كان المرشح هو الحالي تمامًا بعد التدوير → خذ التالي
-        if(top.symbol===S.config.symbol) top=cands[0]||top; }
-      const topScore=top.score||0;
-      if(topScore<45) return; // لا تدوير لعملة ضعيفة
-      S._rotCount=((S._rotCount||0)+1)%5;
-      _lastSwitchAt=Date.now();
+    // أفضل عملة تستوفي كل الشروط (درجة قوية ≥ 55 من رادار الفرص)
+    const best=r.list.filter(l=>l.symbol!==S.config.symbol).find(l=>(l.score||0)>=55);
+    if(!best) return; // لا فرصة أقوى — البقاء على الحالية والدخول حين تكتمل شروطها
+    // نحن الأفضل بالفعل؟ اكتملت الدراسة هنا وادخل الصفقة
+    // بعد جني مكتمل (خلال 10 دقائق): إعادة اختيار حاسمة — الأفضل مطلقاً بلا هامش
+    const afterHarvest=!!(S._harvestAt&&Date.now()-S._harvestAt<10*60*1000);
+    // ─── دوران البورة (قاعدة المالك: 15 دقيقة بلا تنفيذ) ───
+    // 15 دقيقة بلا تنفيذ صفقة رغم الدراسة الكاملة = العملة بارة الآن:
+    // انتقال لأفضل بديل مؤهل حتى لو كانت الحالية متصدرة — لا جلوس أبدي أوامر مسلحة لا تُنفذ
+    // ─── إصلاح تجويع الصيد: عدّاد البورة يقيس «مدة الجلوس على العملة الحالية» ───
+    // من _dwellAt (لحظة الوصول للعملة) — لا من lastHuntAt (آخر صفقة في التاريخ).
+    // القياس من lastHuntAt كان يجعل كل عملة تُدار بعد دقيقة (الصفقة السابقة قديمة
+    // دائماً) فلا يكمل أي صيد أبداً — صفر صفقات لساعات
+    const idleMs=Date.now()-(S._dwellAt||S.startedAt||S._savedAt||Date.now());
+    const barren=idleMs>15*60*1000;
+    if(barren&&best){ _lastSwitchAt=Date.now();
       const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
-      pushLog('server','\ud83d\udd04 \u062fوران زمني ('+Math.round(idleMs/60000)+' د بلا فرصة): '+curDisp+' → '+top.disp+' ('+topScore+') — '+
-        (top.state||'')+' — البحث مستمر عن فرصة أفضل');
-      toast('\ud83d\udd04 دوران: '+top.disp+' — بحث عن فرصة');
-      nativeNotify('KING — دوران إلى عملة أخرى',top.disp+' درجة '+topScore);
-      saveCfg({symbol:top.symbol,leverage:S.config.leverage,levels:S.config.levels,
+      pushLog('server','🔄 دوران البورة ('+Math.round(idleMs/60000)+' د بلا تنفيذ): '+curDisp+' ('+curSc+') → '+best.disp+' ('+best.score+') — لا جلوس على عملة خامدة');
+      toast('🔄 دوران: '+best.disp+' — '+best.score);
+      nativeNotify('AB-KING — دوران البورة',best.disp+' درجة '+best.score+' بدل '+curDisp+' الخامدة');
+      saveCfg({symbol:best.symbol,leverage:S.config.leverage,levels:S.config.levels,
         gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
         cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
         mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
-      startBot(); return; }
-    const topScore=top.score||0;
-    if(cur&&cur.symbol===top.symbol) return;
-    if(!cur){ if(topScore<55) return; }
-    else { const curScore=cur.score||0;
-      if(topScore-curScore<12||curScore>=55) return; }
+      return; }
+    // نحن الأفضل بالفعل وننتج؟ اكتملت الدراسة هنا وادخل الصفقة
+    if(cur&&(cur.score||0)>=(best.score||0)) return;
+    // هامش وضوح 12 درجة يمنع التأرجح بين عملتين متقاربتين (خارج نافذة ما بعد الجني)
+    if(!afterHarvest&&cur&&best.score-cur.score<12) return;
     _lastSwitchAt=Date.now();
     const curDisp=cur?cur.disp:S.config.displaySymbol, curSc=cur?cur.score:0;
-    pushLog('server','\ud83d\udce1 \u062a\u0628\u062f\u064a\u0644 \u0630\u0643\u064a: '+curDisp+' ('+curSc+') \u2192 '+top.disp+' ('+topScore+') \u2014 '+
-      (top.state||'')+' \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 \u0627\u0644\u0631\u0627\u062f\u0627\u0631');
-    toast('\ud83d\udce1 \u0627\u0646\u062a\u0642\u0627\u0644 \u0625\u0644\u0649 '+top.disp+' \u2014 \u0641\u0631\u0635\u0629 \u0623\u0642\u0648\u0649 ('+topScore+')');
-    nativeNotify('KING \u2014 \u062a\u0628\u062f\u064a\u0644 \u0639\u0645\u0644\u0629',top.disp+' \u062f\u0631\u062c\u0629 '+topScore+' \u0645\u0642\u0627\u0628\u0644 '+curSc);
-    saveCfg({symbol:top.symbol,leverage:S.config.leverage,levels:S.config.levels,
+    pushLog('server','🎯 انتقال للأفضل قبل الصفقة: '+curDisp+' ('+curSc+') → '+best.disp+' ('+best.score+') — كل الشروط متوفرة — تُدرس 60 ثانية ثم تُفتح الصفقة');
+    toast('🎯 الأفضل الآن: '+best.disp+' — '+best.score);
+    nativeNotify('AB-KING — انتقال للأفضل',best.disp+' درجة '+best.score+' قبل الصفقة');
+    // الجني التالي: يُعاد الاختيار من جديد عبر openNextReady وهذه الدالة
+    saveCfg({symbol:best.symbol,leverage:S.config.leverage,levels:S.config.levels,
       gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
       cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
       mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
@@ -735,9 +1133,10 @@ function lastRealFillPx(){ const f=S.grid.filter(g=>g.status==='filled'&&g.fille
   return 0; }
 function spacingGate(p){ if(!(p>0)) return true;
   const last=lastRealFillPx(); if(!last) return true;
-  const minGap=Math.max(S.config.gridStepPct/100*0.75,0.0012); // حد أدنى مطلق 0.12%
+  const hfMin=S.config.hfMode?0.0004:0.0012;
+  const minGap=Math.max(S.config.gridStepPct/100*(S.config.hfMode?0.25:0.75),hfMin);
   return Math.abs(p-last)/last>=minGap; }
-function filledAdds(){ const o=S.journal.filter(j=>j.status==='open');
+function filledAdds(){ const o=S.journal.filter(j=>j.status==='open'&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
   const n=o.reduce((a,j)=>a+Math.max(1,j.mergedOrders||1),0); return n>0?n:(S.position?1:0); }
 function addsBlocked(){ if(S.status!=='running') return false;
   if(filledAdds()>=effLevels()) return true;
@@ -769,6 +1168,45 @@ function bookQuality(){ const b=S.orderBook,p=S.lastPrice||0;
 // وسيط أحجام مستويات الدفتر — مرجع لكشف الجدران الضخمة وتطبيع تدفق الأوامر
 function medLevelSz(ob){ const s=[...ob.bids.slice(0,10),...ob.asks.slice(0,10)].map(x=>x.size).sort((a,b)=>a-b);
   return s.length?s[Math.floor(s.length/2)]:0; }
+/* ─── قياس الاندفاع (قاعدة المالك): تحرك السعر خلال آخر ~45 نبضة ───
+   صعود قوي جارٍ؟ لا دخول شورت ضده حتى يستقر — وعكسه صحيح */
+export function priceKick(){ const t=S.priceTrail||[]; if(t.length<12) return {up:0,down:0};
+  const n=Math.min(45,t.length), p0=t[t.length-n], p1=t[t.length-1];
+  if(!(p0>0)) return {up:0,down:0};
+  const chg=(p1-p0)/p0*100;
+  return {up:chg>0?chg:0, down:chg<0?-chg:0}; }
+/* ─── فرملة التقلب (قاعدة المالك): انزلاق/موجة قوية = تجميد تسليح الدخول الجديد
+   حتى يستقر السوق ثم تعود الأوامر — لا 13 أمراً في ربع ساعة بعد الآن ─── */
+/* ─── سقف التعرّض (بديل وقف الخسارة — قرار المالك: لا إقفال بخسارة أبداً) ───
+   الكارثة: التعرض بلغ ~12× رصيد الدورة فكانت التصفية عند ~-7% فقط.
+   الحماية الرياضية: التعرض الكلي ≤ 4× رصيد الدورة → التصفية تحتاج حركة
+   -25%+ بلا ارتداد — وبهامش كهذا تكفي الشبكة والصمود والجني المدروس */
+/* ─── القاطع المرحلي (تصميم المالك): دفعات من 4 أوامر بدراسة بينها ───
+   نشطه: بعد 4 تعبئات دخول. إطلاقه: هدوء التقلب (لا فرملة) + مرور دقيقتين
+   + اكتمال دراسة جديدة بدأت بعد التوقف. عند الإطلاق: دفعة جديدة 4 أوامر */
+export function batchHoldActive(){
+  if((S._batchFills||0)<4) return false;
+  if(S._batchHoldAt&&S._batchStudiedAt&&S.studyUntil===0&&
+     Date.now()-S._batchHoldAt>120000&&!volBrakeActive()){
+    S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false;
+    pushLog('server','✅ القاطع أُطلق: السوق استقر واكتملت الدراسة — دفعة جديدة حتى 4 أوامر بتباعد معقول');
+    return false; }
+  if(S._batchHoldAt&&!S._batchStudiedAt){ S._batchStudiedAt=true;
+    startStudy(false); // دراسة جيدة جديدة قبل أي عودة — بصمة محدثة للوضع الحالي
+    pushLog('server','🔍 بدأت دراسة ما بعد القاطع — لا فتح أوامر حتى يكتمل تقييم الوضع'); }
+  return true; }
+
+export function exposureCapped(){ const pos=S.position; if(!pos) return false;
+  const notional=pos.size*(S.multiplier||1)*(pos.entry||0);
+  return notional>Math.max(20,(S.config.cycleBalance||0)*4); }
+
+export function volBrakeActive(){
+  if(!S.position) return false;
+  const vol=retStdev()||0;
+  const shocked=!!(S.regime&&S.regime.shock);
+  const oppWave=(S._waveN||0)>=3;
+  return !!(shocked||vol>0.40||oppWave); } // الانهيار الحقيقي فقط — لا فرملة على تقلب عادي
+
 function retStdev(){ const t=S.priceTrail; if(t.length<4) return 0;
   const r:any[]=[]; for(let i=1;i<t.length;i++) if(t[i-1]>0) r.push((t[i]-t[i-1])/t[i-1]*100);
   if(r.length<3) return 0; const m=r.reduce((a,b)=>a+b,0)/r.length;
@@ -854,7 +1292,7 @@ function resolveDirection(now){ const mode=S.config.directionMode;
   return S.config.direction;
 }
 // حجم صفقة الصيد = الدرجة الأولى من سلّم التدرج الحسابي (أصغر أمر)
-function contractsForLevel(p){ const q=levelQtys(p,effLevels()); return q.length?q[0]:1; }
+export function contractsForLevel(p){ const q=levelQtys(p,effLevels()); return q.length?q[0]:1; }
 // المستويات الفعّالة: رأس المال الصغير يُركَّز لا يُفتَّت —
 // عدد يضمن أن يغطي جني كل مستوى هدف الصافي $0.12 بخطوة شبكة واحدة بعد الرسوم
 export function effLevels(){ const c=S.config;
@@ -883,13 +1321,13 @@ function tooClose(a,b,st){ return a>0&&b>0&&Math.abs(a-b)/Math.max(a,b)*100<st*0
 // 20% من رصيد الدورة احتياطي هامش لا يُتداول أبدًا، والباقي (80%) يُقسم على
 // مجموع النسب، فيخرج أول أمر = وحدة واحدة وكل لاحق يزيد نصف وحدة بالنسبة.
 // رصيد 100 → وحدة صغيرة · رصيد 186 → وحدة أكبر · ويتدرج تلقائيًا مع أي مبلغ
-function levelQtys(center,n){ const c=S.config;
+export function levelQtys(center,n){ const c=S.config;
   const cv=Math.max(1e-12,(S.multiplier||1)*center); // قيمة العقد الواحد بالدولار
   // الرافعة ثابتة = ما ضبطه المالك حرفيًا (بأمره: لا تكيّف ولا مرونة) —
   // وتُفرض القيمة نفسها على المنصة عبر changeCrossUserLeverage في liveSync
   const lev=Math.max(1,c.leverage);
   const total=Math.max(0,c.cycleBalance)*0.80; // 20% احتياطي هامش — قاعدة المالك
-  const used=S.journal.filter(j=>j.status==='open')
+  const used=S.journal.filter(j=>j.status==='open'&&(j.symbol===undefined||j.symbol===S.config.displaySymbol))
     .reduce((a,j)=>a+j.qty*(S.multiplier||1)*j.entry,0)/lev;
   let budget=Math.max(0,total-used) // هامش حرّ بالدولار
     *(S.regime?S.regime.sizeMult:1)*memSizeMult();
@@ -902,7 +1340,7 @@ function levelQtys(center,n){ const c=S.config;
   if(c.mode==='live'&&S.exAvail>0) budget=Math.min(budget,Math.max(0,S.exAvail*0.95));
   else if(c.mode==='live'&&S.exEquity>0) budget=Math.min(budget,Math.max(0,S.exEquity*0.95-used));
   // مجموع نسب السلم = m + 0.25·m(m−1) — الوحدة = الميزانية ÷ المجموع
-  const denom=mm=>mm+0.25*mm*(mm-1);
+  const denom=mm=>mm+0.08*mm*(mm-1); // تسطيح التدرج (طلب المالك): أوائل المستويات أكبر بكثير — لا فتات
   let m=Math.max(1,n);
   // قلّص العدد فقط إن عجز أصغر مستوى عن شراء عقد واحد — لا أرضية $1 تُفسد النسبة
   while(m>1&&Math.floor((budget/denom(m))*lev/cv)<1) m--;
@@ -955,7 +1393,7 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
     // تباعد ذكي: لا يقرب أي مستوى من سابقه أقل من 0.8×خطوة الشبكة المضبوطة
     // — الصيغة التدريجية كانت تكتظ أول 4 مستويات داخل 0.6% فيلتقطها انزلاق واحد
     let dist=wide?Math.min(step*i,0.05):span*Math.pow(i/n,1.5);
-    if(!wide){ const minGap=Math.max(step,stepPct/100);
+    if(!wide){ const minGap=Math.max(step*(S.config.hfMode?0.3:1),(stepPct/100)*(S.config.hfMode?0.3:1));
       if(i===1) dist=Math.max(dist,minGap);
       else dist=Math.max(dist,prevDist+minGap); }
     prevDist=dist;
@@ -979,6 +1417,22 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
   return grid.sort((a,b)=>b.price-a.price); }
 /* PROGRESSIVE GRID: open with 4 orders; when only 1 armed remains, arm 2 more */
 function armProgressive(){ if(S.status!=='running') return;
+  // القاطع المرحلي: لا تسليح جديد أثناءه — الدفعة القادمة بعد الدراسة
+  if(batchHoldActive()) return;
+  // سقف التعرّض: لا مزيد من المستويات عند بلوغه — حماية من التصفية بلا وقف خسارة
+  if(exposureCapped()){
+    if(!S._expCapAt||Date.now()-S._expCapAt>300000){ S._expCapAt=Date.now();
+      pushLog('server','🧮 سقف التعرّض (4× رصيد الدورة): السلم مكتمل — لا مزيد من المستويات — الصمود والجني المدروس يتكفلان'); }
+    return; }
+  // بعد الجني: لا تسليح دخول جديد حتى تكتمل إعادة اختيار العملة — لا تعبئة مبكرة تكسر الدورة
+  if(!S.position&&S._harvestAt&&!S._reselectDone&&Date.now()-S._harvestAt<15*60*1000) return;
+  // ─── فرملة التقلب (قاعدة المالك): انزلاق/صدمة/موجة معاكسة = تجميد التسليح حتى الاستقرار ───
+  if(volBrakeActive()){
+    if(!S._volBrakeAt||Date.now()-S._volBrakeAt>120000){ S._volBrakeAt=Date.now();
+      const vol=retStdev()||0;
+      pushLog('server','🌊 فرملة التقلب: '+(S.regime&&S.regime.shock?'صدمة نظامية':'تقلب '+(vol*100).toFixed(0)+'%')+
+        ' — تجميد تسليح دخول جديد حتى يستقر السوق ثم تعود الأوامر'); }
+    return; }
   const armed=S.grid.filter(g=>g.status==='armed'||g.status==='open');
   const staged=S.grid.filter(g=>g.status==='staged');
   if(!staged.length) return;
@@ -1030,10 +1484,12 @@ function accrueFunding(){ const pos=S.position;
   const hours=Math.min(8,(now-last)/3600000);
   if(hours<0.25) return 0;
   const notional=pos.size*(S.multiplier||1)*(pos.entry||S.lastPrice||0);
-  const cost=notional*Math.abs(S.funding)*(hours/8);
+  const rate=S.funding; // موجب: اللونغ يدفع للشورت؛ سالب: الشورت يدفع للونغ
+  const payDir=(pos.side==='long'?1:-1)*(rate>=0?1:-1);
+  const signed=notional*Math.abs(rate)*(hours/8)*payDir; // موجب = ندفع، سالب = نتلقى
   S._fundAt=now;
-  S.fundingPaid=Math.round(((S.fundingPaid||0)+cost)*10000)/10000;
-  return cost; }
+  S.fundingPaid=Math.round(((S.fundingPaid||0)+signed)*10000)/10000;
+  return signed; }
 function applyDelta(side,qty,price){ const dir=side==='sell'?'short':'long';
   if(!S.position){ S.position={side:dir,size:qty,entry:price,leverage:S.config.leverage,
     unrealized:0,openedAt:Date.now(),liquidation:null};
@@ -1060,7 +1516,7 @@ function noteEntry(qty:any,price:any,fee:any,source?:any,noCount?:any){ const si
   S._entryCtx={rg:S.regime?(S.regime.shock?'صدمة':S.regime.trend==='up'?'صاعد':S.regime.trend==='down'?'هابط':'عرضي'):'عرضي',
     ses:sessionOf(Date.now()),origin:source==='hunt'?'صيد':'شبكة',at:Date.now()};
   const label=source==='hunt'?'صفقة':'شبكة';
-  const ex=S.journal.find(j=>j.status==='open'&&j.side===side);
+  const ex=S.journal.find(j=>j.status==='open'&&j.side===side&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
   if(ex){ const t=ex.qty+qty; ex.entry=(ex.entry*ex.qty+price*qty)/t; ex.qty=t;
     // الاعتمادات الجزئية المتتالية لنفس المستوى لا ترفع عدد الأوامر —
     // تضخم العدّاد كان يوهم addsBlocked بامتلاء الشبكة فيلغي تسليحها كاملة
@@ -1077,8 +1533,9 @@ function noteEntry(qty:any,price:any,fee:any,source?:any,noCount?:any){ const si
   return id; }
 function noteClose(qty:any,exit:any,fee:any,source?:any,pnl?:any,lotId?:any){ const lotId_=lotId;
   const row=(lotId_?S.journal.find(j=>j.id===lotId_&&j.status==='open'):null)
-    ||S.journal.find(j=>j.status==='open'&&(source==='إيقاف'||j.source===source))
-    ||S.journal.find(j=>j.status==='open');
+    ||S.journal.find(j=>j.status==='open'&&(source==='إيقاف'||j.source===source)
+      &&(j.symbol===undefined||j.symbol===S.config.displaySymbol))
+    ||S.journal.find(j=>j.status==='open'&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
   if(row){ const share=row.qty>0?row.fees*(qty/row.qty):row.fees;
     const net=lotNet(row.side,row.entry,exit,qty,share+fee);
     row.status='closed'; row.exit=exit; row.fees+=fee; row.closedAt=Date.now();
@@ -1095,14 +1552,20 @@ function noteClose(qty:any,exit:any,fee:any,source?:any,pnl?:any,lotId?:any){ co
     S.cycleHarvested=Math.round(((S.cycleHarvested||0)+pnl)*10000)/10000;
     S.config.cycleBalance=Math.max(1,Math.round((S.config.cycleBalance+pnl)*100)/100); }
   // تعلّم من نتيجة الصفقة — يُخزَّن في الذاكرة القوية التي لا تُمسح مع الدورات
-  learnTrade(row?row.side:(S.position?S.position.side:S.config.direction), pnl);
+  { const mem=S.memory; if(mem&&mem.pairs){ const pk=S.config.symbol;
+      const pr=mem.pairs[pk]||(mem.pairs[pk]={n:0,w:0,l:0,pnl:0,grossWin:0,grossLoss:0,maxLoseStreak:0,loseStreak:0});
+      pr.n++; pr.pnl=Math.round(((pr.pnl||0)+pnl)*10000)/10000;
+      if(pnl>=0){ pr.w++; pr.grossWin=Math.round(((pr.grossWin||0)+pnl)*10000)/10000; pr.loseStreak=0; }
+      else { pr.grossLoss=Math.round(((pr.grossLoss||0)-pnl)*10000)/10000;
+        pr.loseStreak=(pr.loseStreak||0)+1; pr.maxLoseStreak=Math.max(pr.maxLoseStreak||0,pr.loseStreak); }
+      saveAll(); } }
   return pnl; }
 // إقفال جزئي لكمية من صفقة مفتوحة (جني مجزّأ على المنصة) —
 // يُبقي سجل الصفقة مفتوحًا بالكمية المتبقية ويراكم صافي الجزء في partPnl،
 // ويضيف الربح فورًا لرصيد الدورة كأي جني — لا ينتظر الإقفال الكامل
 function notePartialClose(qty,exit,fee,lotId){
   const row=(lotId?S.journal.find(j=>j.id===lotId&&j.status==='open'):null)
-    ||S.journal.find(j=>j.status==='open');
+    ||S.journal.find(j=>j.status==='open'&&(j.symbol===undefined||j.symbol===S.config.displaySymbol));
   if(!row||!(qty>0)) return 0;
   const share=row.qty>0?row.fees*Math.min(1,qty/row.qty):0;
   const net=lotNet(row.side,row.entry,exit,qty,share+fee);
@@ -1135,9 +1598,9 @@ function armCompEntry(qty){ const pos=S.position; if(!pos||!(qty>0)) return;
 // فترة اليوم (UTC): آسيا 0-8 · أوروبا 8-16 · أمريكا 16-24
 function sessionOf(ts:any):any { const h=new Date(ts).getUTCHours(); return h<8?'آسيا':h<16?'أوروبا':'أمريكا'; }
 // التعلّم من نتائج الصفقات معطّل نهائيًا بطلب المالك — لا كتابة ولا قيود
-function learnTrade(_side:any,_pnl:any){ return; }
+
 // قياس الانزلاق معطّل مع التعلم — لا كتابة في الذاكرة
-function learnSlippage(_side:any,_slipPct:any){ return; }
+
 // إحصاءات مجمعة من الذاكرة القوية — للوحة الأداء والتقارير
 export function memStats(){ const mem=S.memory; const o={n:0,w:0,l:0,pnl:0,grossWin:0,grossLoss:0,maxLoseStreak:0,pf:0,winRate:0,avgWin:0,avgLoss:0};
   if(!mem||!mem.pairs) return o;
@@ -1180,7 +1643,7 @@ function maybeReport(){ const now=Date.now();
   const st=memStats(); if(!st.n) return;
   S._lastReportAt=now;
   const msg='صفقات متعلَّمة: '+st.n+' · نجاح '+(st.winRate*100).toFixed(0)+'% · عامل الربح '+st.pf+' · صافي الذاكرة '+fmtUsd(st.pnl);
-  pushLog('info','تقرير دوري — '+msg); nativeNotify('KING — تقرير الأداء',msg); }
+  pushLog('info','تقرير دوري — '+msg); nativeNotify('AB-KING — تقرير الأداء',msg); }
 // ——— أمر الجني الموحّد الوحيد (نظام جديد كليًا — حُذفت tpTargetPrice/placeTpOpposite) ———
 // يُوضع فور فتح الصفقة ويُعاد حسابه مع كل إضافة: متوسط الدخول الفعلي + رسوم
 // الدخول المدفوعة فعلًا من السجل + رسوم الخروج taker المقدّرة + صافي TP_BASE_NET
@@ -1213,8 +1676,26 @@ function syncPositionTp(){ if(S.status!=='running'||!S.position) return;
   if(need<0){ /* الهدف مجني بالك\u0627\u0645\u0644 */ }
   const needPos=Math.max(0,need);
   const cov=(entryFees+exitFee+needPos)/notional; // النسبة فوق المتوسط التي تضمن الصافي
-  const want=roundTick(pos.side==='long'?pos.entry*(1+cov):pos.entry*(1-cov),S.tickSize);
+  let want=roundTick(pos.side==='long'?pos.entry*(1+cov):pos.entry*(1-cov),S.tickSize);
   if(!(want>0)) return;
+  /* ─── مراجعة شاملة (قاعدة المالك): الجني يهدف صافياً مدروساً واسعاً ───
+     الهدف = نسبة من حجم الصفقة تتوسع مع التقلب المقاس (لا تافه ولا ضيقة).
+     جدار الارتداد القريب يرفع الجني نحوه فقط (قبيل انكساره — ربح أوسع)
+     ولا ينزله تحت الهدف أبداً — البيع القريب قبل الارتداد شأن «الجني
+     المبكر» بشهادة حيتان/زخم، لا شأن أمر الجني الموقف. تحديث مستمر كل 4 ثوان
+     للأمر فقط عند تحرك ملموس — لا قصف أوامر */
+  const nowT=Date.now();
+  if(!S._zoneAt||nowT-S._zoneAt>4000){
+    S._zoneAt=nowT;
+    const z=studiedTpZone(pos,S.lastPrice||0);
+    if(z&&z.zone>0){
+      const cap=want+(pos.side==='long'?1:-1)*Math.abs(want-pos.entry)*0.25; // سقف: ربع المسافة — جني أسرع
+      S._zone=pos.side==='long'?Math.min(z.zone,cap):Math.max(z.zone,cap); }
+    else S._zone=0; }
+  if(S._zone>0){ const z=roundTick(S._zone,S.tickSize);
+    // رفع فقط — الجني لا يُنزل تحت هدفه الصافي المدروس أبداً
+    if(pos.side==='long'?z>want:z<want){
+      if(Math.abs(z-want)>Math.max(S.tickSize*2,want*0.0004)) want=z; } }
   const tickTol=S.tickSize>0?S.tickSize*0.5:Math.abs(want)*1e-9;
   const liveTp=S.grid.filter(g=>g.reduceOnly&&(g.status==='armed'||g.status==='open'));
   // كمية الأمر الحيّة = أصله ناقص ما نُفّذ منه جزئيًا على المنصة
@@ -1241,6 +1722,10 @@ function coveringLoser(l,p){ const pos=S.position; if(!pos||l.reduceOnly) return
 function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
     exCancelAll(S.config.symbol).catch(()=>{});
     exCancelStops(S.config.symbol).catch(()=>{}); }
+  S._harvestAt=Date.now(); // لحظة اكتمال الدورة — القفز للعملة التالية مسموح بعدها فقط
+  S._reselectDone=false; // إعادة الاختيار الإجباري بعد كل جني (قاعدة المالك)
+  S._posPeakNet=null; // ذروة جديدة لكل دورة — قفل الذروة لا يتسرب بين الصفقات
+  S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false; // القاطع المرحلي: دفعة جديدة لكل دورة
   S._guardId=null; S._tpBanked=0; S._trailFloor=0;
   for(const g of S.grid){ if(g.status==='armed'||g.status==='open'||g.status==='staged'){
     g.status='cancelled'; g.exchangeOrderId=null; } }
@@ -1265,7 +1750,8 @@ function creditExFillReal(l,delta,fp,realFee){ if(!(delta>0)||!(fp>0)) return fa
     S.lastAddAt=Date.now();
     if(l.qty-(l.exFilled||0)>1e-9) pushLog('server','تنفيذ جزئي: دُخل '+delta+' من '+l.qty+
       ' @ '+fmtPx(fp)+' — الباقي معلّق يُكمل أو يُلغى عند الجني');
-    if(S.position&&S.status==='running') syncPositionTp();
+    if(S.position&&S.status==='running'){ syncPositionTp();
+      backgroundPipeline().catch(()=>{}); }
     return false; }
   const estFee2=feeFor(delta*mult*fp,false);
   if(realFee!=null&&S._realFeesAt&&Math.abs(realFee-estFee2)>1e-9){
@@ -1314,7 +1800,15 @@ function fillLevel(id,fp,taker){ const l=S.grid.find(g=>g.id===id);
   const effQty=l.reduceOnly&&S.position?Math.min(l.qty,S.position.size):l.qty;
   const fee=feeFor(effQty*(S.multiplier||1)*fp,taker); S.feesPaid+=fee;
   const d=applyDelta(l.side,effQty,fp);
-  if(d.addedQty>0){ const lotId=noteEntry(d.addedQty,fp,fee,l.origin==='hunt'?'hunt':'grid');
+  if(d.addedQty>0){
+    // ─── القاطع المرحلي (درس PEPE -136$): عدّ دفعة الأوامر — كل 4 أوامر
+    // دخول متتالية يوقف الفتح كلياً حتى يستقر السوق وتُعاد الدراسة الجيدة
+    if(!l.reduceOnly){ S._batchFills=(S._batchFills||0)+1;
+      if(S._batchFills>=4&&!S._batchHoldAt){
+        S._batchHoldAt=Date.now(); S._batchStudiedAt=false;
+        cancelPendingAdds();
+        pushLog('server','🧷 القاطع المرحلي: اكتملت 4 أوامر دخول — توقف الفتح حتى الاستقرار + دراسة جديدة ثم 4 أخرى'); } }
+    const lotId=noteEntry(d.addedQty,fp,fee,l.origin==='hunt'?'hunt':'grid');
     l.lotId=l.lotId||lotId;
     // قياس انزلاق التنفيذ: فرق سعر التنفيذ الفعلي عن سعر المستوى المطلوب
     if(l.price>0){ const slipUsd=Math.abs(fp-l.price)*(S.multiplier||1)*effQty;
@@ -1393,6 +1887,12 @@ function inAddZone(p){ if(S.status!=='running'||!p) return false;
 // الرسوم للمجموع كاملًا — أمر واحد أو 25 أمرًا بنفس الربح الواحد. هذه الدالة
 // تنفّذ أمر الجني عند بلوغ السعر خطّه فقط.
 function harvestRipe(p){ if(!p||S.status==='idle') return;
+  if(S._gapCtx&&S.position&&gapExitCheck(p)){
+    pushLog('server','\ud83c\udfaf \u0635\u0627\u0626\u062f \u0627\u0644\u0641\u062c\u0648\u0627\u062a: \u0639\u0627\u062f\u0629 \u0627\u0644\u0625\u0646\u062f\u064a\u0643\u0633 \u062a\u0645\u062a \u2014 \u062c\u0646\u064a \u0627\u0644\u0645\u0631\u0643\u0632 \u0643\u0627\u0645\u0644\u0627');
+    flattenAt(p,'\u0639\u0648\u062f\u0629 \u0625\u0646\u062f\u064a\u0643\u0633').catch(()=>{});
+    S._gapCtx=null;
+    return;
+  }
   for(const tp of S.grid.filter(g=>g.reduceOnly&&(g.status==='open'||g.status==='armed'))){
     const tol=Math.min(S.tickSize>0?S.tickSize*0.5:1e-12, Math.abs(tp.price)*0.0005);
     const crossed=tp.side==='sell'?p>=tp.price-tol:p<=tp.price+tol;
@@ -1542,8 +2042,9 @@ function huntSignals(p:any){ const short=S.config.direction==='short'; const sig
   // 8) قائد BTC يساند الاتجاه
   if(S._btcImp!=null&&Math.abs(S._btcImp)>=0.10&&((short&&S._btcImp<0)||(!short&&S._btcImp>0))) sig.push('قائد BTC');
   return sig; }
-function effectiveHuntPct(){ const base=Math.max(0.14,S.config.huntPct,
-    (profOf()&&profOf().spread?profOf().spread*2.5:0)); // أرضية سبريد: لا صيد بعائد يأكله الفرق السعري
+function effectiveHuntPct(){ const hf=S.config.hfMode;
+  const base=Math.max(hf?0.05:0.14,S.config.huntPct*(hf?0.4:1),
+    (profOf()&&profOf().spread?profOf().spread*(hf?1.5:2.5):0)); // أرضية سبريد: لا صيد بعائد يأكله الفرق السعري
   const mag=Math.abs(S.biasScore);
   const stalled=S.lastWorkAt&&Date.now()-S.lastWorkAt>60000;
   // سقف 1.8 لحاصل المضاعفات — لا تراكب صدمة×ذاكرة×تقلب يرفع العتبة فوق المتناول
@@ -1607,7 +2108,7 @@ function toxicBlocked(dir){ const lv=sanctionLevel(dir);
    ================================================================ */
 function profOf(){ const mem=S.memory; return mem&&mem.profiles?mem.profiles[S.config.symbol]:null; }
 function profFresh(){ const p=profOf(); return p&&Date.now()-p.at<24*3600*1000?p:null; }
-function startStudy(short){ S.studyUntil=Date.now()+(short?15000:60000);
+function startStudy(short){ S.studyUntil=Date.now()+(short?12000:28000);
   S.studyAcc={vols:[],sps:[],act:0,whales:0}; }
 function studying(){ return !!(S.studyUntil&&Date.now()<S.studyUntil); }
 function studyTick(){ if(!S.studyUntil) return;
@@ -1656,6 +2157,16 @@ function packHunt(p:any){
   return {side:S.config.direction==='short'?'sell':'buy',qty:contractsForLevel(p)}; }
 function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(!warmedUp()) return null;
+  // ─── فيتو الاندفاع (قاعدة المالك): حركة قوية جارية ضد الاتجاه = لا دخول حتى تستقر ───
+  const kick=priceKick();
+  const againstPump=(S.config.direction==='short'&&kick.up>0.8)||(S.config.direction==='long'&&kick.down>0.8);
+  if(againstPump){
+    if(!S._kickVetoAt||Date.now()-S._kickVetoAt>120000){ S._kickVetoAt=Date.now();
+      pushLog('server','⛔ فيتو اندفاع: تحرك '+(S.config.direction==='short'?'صاعد':'هابط')+' قوي '+
+        (S.config.direction==='short'?kick.up:kick.down).toFixed(2)+'% خلال دقيقة — لا دخول ضده حتى يستقر'); }
+    return null; }
+  // بعد الجني: إعادة اختيار إلزامية قبل أي دخول — لا إعادة دخول فورية على نفس العملة
+  if(!S.position&&S._harvestAt&&!S._reselectDone&&Date.now()-S._harvestAt<15*60*1000) return null;
   if(studying()) return null; // العملة قيد الدراسة — لا دخول قبل اكتمال بصمتها
   // هدنة الخسارة المخففة: خسارتان متتاليتان بنفس الاتجاه خلال دقيقتين فقط — لا شلل 5 دقائق لخسارة واحدة
   if(!S.position&&S._lossStreak&&S._lossStreak.side===S.config.direction&&
@@ -1669,11 +2180,20 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
     if(toxicBlocked(S.config.direction)) return null;
     return packHunt(p); }
   if(toxicBlocked(S.config.direction)) return null;
+  // القاطع المرحلي: لا إضافات صيد أثناءه
+  if(S.position&&batchHoldActive()) return null;
+  // سقف التعرّض: لا إضافات جديدة عنده — الحجم الكلي محكوم رياضياً
+  if(S.position&&exposureCapped()) return null;
+  // ─── إصلاح الكارثة: لا إضافات صيد مادامت فرملة التقلب نشطة — لا تغذية للانهيار ───
+  if(S.position&&volBrakeActive()){
+    if(!S._brkVetoAt||Date.now()-S._brkVetoAt>180000){ S._brkVetoAt=Date.now();
+      pushLog('server','🔒 لا إضافات أثناء فرملة التقلب — السلم قائم بلا تغذية حتى يستقر'); }
+    return null; }
   if(S.position){ if(!inAddZone(p)) return null; }
   if(S.startedAt&&Date.now()-S.startedAt<SCOUT_MS&&filledAdds()>=1) return null;
   if(S.lastAddAt&&Date.now()-S.lastAddAt<ADD_COOLDOWN) return null;
   trailHuntAnchor(p);
-  if(S.lastHuntAt&&Date.now()-S.lastHuntAt<HUNT_COOLDOWN) return null;
+  if(S.lastHuntAt&&Date.now()-S.lastHuntAt<(S.config.hfMode?3000:HUNT_COOLDOWN)) return null;
   // سقف صفقات الصيد يتكيف: سوق هادئ متذبذب = 4، عادي = 3، تذبذب عالي/صدمة = 2 فقط
   const volNow=retStdev()||0.05;
   const capHunt=S.regime&&S.regime.shock?2:(volNow>1.2?2:(volNow<0.35?4:MAX_HUNT_OPEN));
@@ -1689,18 +2209,18 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(veto){ if(!S._vetoAt||Date.now()-S._vetoAt>120000){ S._vetoAt=Date.now();
       pushLog('info','فيتو خطر منع صفقة: '+veto); } return null; }
   const sig=huntSignals(p); if(!sig.length) return null;
-  // جودة المنطقة: إشارة واحدة لا تكفي — الدخول المدروس يتطلب إشارتين
-  // متوافقتين على الأقل (مرساة + دعم) — يمنع الدخول بقمم الحركة
+  // فلسفة المالك الأصلية (عودة): الباب القوي وحده كافٍ — والفيتوهات تحمي
   if(sig.length<2){
-    // إشارة واحدة تكفي إن كانت قوية: مرساة كبيرة (≥1.5×عتبة الصيد) أو فجوة مارك واضحة
+    // فلسفة المالك الأصلية: الإشارات أبواب مستقلة — أي باب يفتح = صفقة.
+    // الحماية في الفيتوهات (خطر/اندفاع/سموم) لا في خنق الباب
     const need=effectiveHuntPct();
-    const bigRetrace=sig.some(x=>x.indexOf('مرساة')===0&&parseFloat(x.replace(/[^٠-٩.]/g,''))>=need*1.5);
     const markGap=sig.some(x=>x.indexOf('فجوة مارك')===0);
-    if(!bigRetrace&&!markGap){
-      const hasRetrace=sig.some(x=>x.indexOf('مرساة')===0);
-      if(!hasRetrace) return null;
-      const support=sig.some(x=>x.indexOf('مرساة')!==0);
-      if(!support) return null; } }
+    const decentRetrace=sig.some(x=>x.indexOf('مرساة')===0&&parseFloat(x.replace(/[^0-9.]/g,''))>=need*0.8);
+    const strongSingle=markGap||decentRetrace||(sig.length===1&&(
+      sig[0].indexOf('زخم')===0||sig[0].indexOf('اتجاه')===0||
+      sig[0].indexOf('حيتان')===0||sig[0].indexOf('انحراف')===0||
+      sig[0].indexOf('فخ اختراق')===0||sig[0].indexOf('ضغط أوامر')===0));
+    if(!strongSingle) return null; }
   S._lastSig=sig.slice(0,3).join(' · ');
   return packHunt(p); }
 function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
@@ -1799,6 +2319,33 @@ function cancelPendingAdds(){ const live=S.config.mode==='live'&&S.keys;
     // يترك الأمر حيًا يُكنس في الموجة نفسها التي سحبناه من أجلها
     if(live&&g.exchangeOrderId){ const id=g.exchangeOrderId; g.exchangeOrderId=null; exCancelOne(id); }
     else g.exchangeOrderId=null; } } }
+/* حد الصبر: إغلاق المركز العالق بعد مدة أو انحدار محددين — يمنع العلوق الطويل
+   الذي يأكل أرباح الأسابيع الفاشل (مطلوب المالك بعد قياس المختبر) */
+async function patienceLimit(p:any){
+  if(!p||S.status!=='running'||!S.position) return;
+  const hrs=Number(S.config.patienceHrs);
+  const usd=Number(S.config.patienceUsd);
+  if(!(hrs>0)&&!(usd>0)) return; // معطّل
+  const ageMs=Date.now()-(S.position.openedAt||Date.now());
+  const adv=adversePct(p);
+  const floatUsd=-(S.position.unrealized||0);
+  const aged=hrs>0&&ageMs>hrs*3600*1000;
+  const sunk=usd>0&&floatUsd>=usd;
+  if(!aged&&!sunk) return;
+  // صبر ذكي: لا إغلاق إن كان الاتجاه معنا — السوق العرضي يعود أغلب الوقت
+  // إنما الإغلاق عند اتجاه قوي مضاد للمركز (قياس المختبر: يقلب الأسبوع الفاشل إلى ربح ويحفظ الرابح)
+  if(S.regime&&!S.regime.shock){
+    const against=(S.position.side==='short'&&S.regime.trend==='down'&&adv>0.6)
+      ||(S.position.side==='long'&&S.regime.trend==='up'&&adv>0.6);
+    if(!against){
+      // اتجاه معنا أو عرضي — الصمود للجني أفضل
+      return; } }
+  const why=aged?('\u0639\u0644\u0642 '+Math.round(ageMs/3600000)+' \u0633'):( '\u0627\u0646\u062d\u062f\u0627\u0631 '+fmtUsd(floatUsd));
+  pushLog('server','\u23f0 \u062d\u062f \u0627\u0644\u0635\u0628\u0631: \u0625\u063a\u0644\u0627\u0642 \u0627\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u0639\u0627\u0644\u0642 ('+why+') \u2014 \u062a\u0639\u0648\u062f \u0627\u0644\u062f\u0648\u0631\u0629 \u0645\u0646 \u062c\u062f\u064a\u062f \u0645\u0639 \u062f\u0631\u0627\u0633\u0629');
+  await flattenAt(p,'\u062d\u062f \u0627\u0644\u0635\u0628\u0631');
+  S._postDisaster=Date.now();
+  startStudy(false);
+}
 async function circuitBreak(p:any){ if(!p||S.status!=='running') return;
   // حد الكارثة على مستوى الدورة كلها — قاعدة المالك نفسها: لا كابح قبل $16 (أو 8% من الرصيد)
   const limit=Math.max(LOSS_STOP_USD,(S.config.cycleBalance||0)*0.08);
@@ -1811,7 +2358,8 @@ async function circuitBreak(p:any){ if(!p||S.status!=='running') return;
     return; } }
 async function escapeAdverse(p:any){ if(S.status!=='running'||!S.position||!p) return;
   const pos=S.position;
-  let danger=liqDanger(p); const flip=reversalAgainst(p);
+  
+  let danger=liqDanger(p); reversalAgainst(p);
   // تأكيد المنصة قبل الإقفال الطارئ: سعر تصفية معلن من KuCoin سليم الجهة
   // وبعيد عن السعر = الإنذار المحلي كاذب (قراءة وهمية أقفلت صفقات بخسارة) — لا إقفال
   if(danger){ const exl=S.exLiqPrice||0, e0=pos.entry||0;
@@ -1866,7 +2414,10 @@ function ensureGrid(){ if(S.status!=='running') return;
   // تجميد إعادة التسليح أثناء موجة معاكسة: بلا هذا القفل كان السلم يُعاد بناؤه
   // في النبضة التالية لسحب الدرع فيُلغى مفعول السحب وتُكنس المستويات من جديد.
   // أمر الجني (reduceOnly) لا يُمس أبدًا — يبقى حيًا على المنصة طوال التجميد
-  if(S.position&&S._waveHoldUntil&&Date.now()<S._waveHoldUntil){
+  // ─── إصلاح الكارثة: الفرملة تسود على ثغرة الـ 60 ثانية — مادام الخطر قائماً
+  // (تقلب قوي/صدمة/موجة معاكسة) لا إعادة تسليح إطلاقاً. كانت الثغرة تُعيد
+  // السلم في كل هدنة قصيرة فتُلتهم المستويات خلال انهيار من دقائق ───
+  if(S.position&&((S._waveHoldUntil&&Date.now()<S._waveHoldUntil)||volBrakeActive())){
     syncPositionTp(); return; }
   const dual=S.grid.some(g=>g.lane==='hold'&&(g.status==='armed'||g.status==='open'))&&
     S.grid.some(g=>g.lane==='trend'&&(g.status==='armed'||g.status==='open'));
@@ -1897,7 +2448,101 @@ function ensureGrid(){ if(S.status!=='running') return;
   S.grid=[...keep,...buildGrid(center,false,4)].filter(g=>
     keep.includes(g)||g.reduceOnly||g.status!=='armed'||!shouldFill(g,center));
   S.gridAnchor=center; S.grid.sort((a,b)=>b.price-a.price); }
-async function flattenAt(p:any,source:any){ const pos=S.position;
+/* ─── الجني المبكر المدروس (قاعدة المالك) ───
+   لا تعصّب بنقطة جني رقمية: الدراسة الحية (دفتر الأوامر + حيتان الشريط +
+   زخم السوق) تحدد منطقة الارتداد — فإذا اجتمعت شهادة ارتداد مع ربح صافٍ
+   موجب: بيع فوري قبل ذوبان الأرباح. أحياناً ربح بسيط وأحياناً كبير —
+   ولا إقفال بخسارة أبداً (الصافي بعد كل الرسوم موجب حتماً). */
+/* ─── منطقة الجني المدروسة (قاعدة المالك): تُقرأ من دفتر المنصة —
+   أقرب جدار سيولة بارز في اتجاه الربح = نقطة الارتداد المحتملة — الجني
+   قبيلها مباشرة. تتحدث كل 4 ثوان، وتظل فوق أرضية اللاخسارة دائماً ─── */
+export function studiedTpZone(pos:any,p:any){
+  try{
+    const dir=pos.side==='long'?1:-1; // اتجاه الربح
+    const ob=S.orderBook||{};
+    const lv=pos.side==='long'?(ob.asks||[]):(ob.bids||[]);
+    if(lv.length>=8){
+      const sizes=lv.map(l=>+l.size||0).sort((a,b)=>a-b);
+      const med=sizes[Math.floor(sizes.length/2)]||1;
+      for(const l of lv){ const lp=+l.price||0, lsz=+l.size||0;
+        const dist=(lp-p)/p*dir;
+        if(dist<=0) continue; if(dist>0.003) break; // مدى دراسة 0.30%
+        if(lsz>med*3) return {zone:lp*(dir>0?0.9995:1.0005),dist:dist*100,
+          why:'جدار سيولة بارز على بعد '+((dist*100).toFixed(2))+'% — الارتداد منه مرجح'}; } }
+  }catch(e){ logSwallow('silent-catch',e); }
+  return null; }
+
+export function studiedEarlyExit(p:any){
+  const pos=S.position;
+  if(!pos||!p||S.status!=='running') return null;
+  if(Date.now()-(S._earlyExitAt||0)<90000) return null; // تهدئة: قرار كل 90 ثانية كحد أقصى
+  const mult=S.multiplier||1, qty=pos.size||0;
+  const openFees=S.journal.filter(j=>j.status==='open').reduce((a,j)=>a+(j.fees||0),0)
+    ||qty*mult*pos.entry*(S.makerFee||0.0002);
+  const exitFee=qty*mult*p*(S.takerFee||0.0006);
+  // الصافي يُحسب من سعر التنفيذ نفسه (p) — لا من قيمة عائمة مخزنة قابلة
+  // للانزلاق بين القرار والتنفيذ: شريحة واحدة كانت تقلب +0.02 إلى -0.02
+  const grossNow=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*qty;
+  const netNow=grossNow-openFees-exitFee;
+  // ─── تتبع ذروة الربح من أول سنت رابح (درس PENGU: ذروة 0.84\$ لم تُقفل
+  // لأن عتبة التتبع كانت أعلى منها) — لا تعيد الربح المكتشف للسوق ───
+  if(netNow>0) S._posPeakNet=Math.max(S._posPeakNet||0,netNow);
+  if(!(netNow>=Math.max(0.08,dynamicTpNet()*0.2))) return null; // بوابة أدنى: الجني المبكر ببربح يستحق
+  const dir=pos.side==='long'?1:-1; // اتجاه الربح
+  let hit:any=null; // القرار يُجمع أولاً — التهدئة لا تُستهلك إلا بقرار فعلي
+  // ─── الشهادة 1: جدار سيولة في اتجاه الربح قريب — الارتداد منه مرجح ───
+  const ob=S.orderBook||{};
+  const lv=pos.side==='long'?(ob.asks||[]):(ob.bids||[]);
+  if(lv.length>=8){
+    const sizes=lv.map(l=>+l.size||0).sort((a,b)=>a-b);
+    const med=sizes[Math.floor(sizes.length/2)]||1;
+    for(const l of lv){ const lp=+l.price||0, lsz=+l.size||0;
+      const dist=(lp-p)/p*dir; if(dist<=0) continue; if(dist>0.0018) break;
+      if(dist>0&&dist<=0.0015&&lsz>med*3)
+        { hit={netNow,why:'جدار سيولة بارز قبله بـ'+(dist*100).toFixed(2)+'% — ارتداد مرجح',tag:'wall'}; break; } } }
+  // ─── الشهادة 2: حيتان تعصر عكس الاتجاه والربح معقول — بيع قبل الضغط ───
+  if(!hit){ const f=tapeFlow();
+    const whaleAgainst=pos.side==='long'?(f.whale<-0.45):(f.whale>0.45);
+    if(f.whaleVol>0.25&&whaleAgainst&&netNow>=Math.max(0.05,dynamicTpNet()*0.35))
+      hit={netNow,why:'حيتان '+((pos.side==='long')?'شراء':'بيع')+' مضادة ('+(f.whale>0?'+':'')+f.whale.toFixed(2)+') تضغط عكس الصفقة',tag:'whales'}; }
+  // ─── الشهادة 3: زخم انقلب ضد الصفقة بعد بلوغ نصف الهدف المدروس — اقطف ───
+  if(!hit){ const mom=S.confluence?S.confluence.momentum:0;
+    const momAgainst=(pos.side==='long'&&mom<-0.05)||(pos.side==='short'&&mom>0.05);
+    if(momAgainst&&netNow>=dynamicTpNet()*0.5)
+      hit={netNow,why:'زخم انقلب ضد الصفقة ('+(mom>0?'+':'')+mom.toFixed(2)+') بعد ربح نصف الهدف',tag:'momentum'}; }
+  /* ─── الشهادة 4: قفل ذروة الربح ───
+     بلغ الربح العائم 40%+ من الهدف ثم تراجع عن 60% من ذروته؟ السوق رفض
+     الذروة وارتد — البيع فوراً بمنطقة مرتدة مدروسة بدل مشاهدته يذوب
+     كاملاً ثم الانتظار الطويل. (مثال المالك: ذروة 0.60$ والهدف 1.03$ —
+     كان يجب البيع عند ~0.36$ بدل ذوبانها وعودة المركز للخسارة) */
+  if(!hit){ const peak=S._posPeakNet||0, tgt=dynamicTpNet();
+    const engaged=peak>=Math.max(0.12,tgt*0.3);         // ذروة 30%+ من الهدف تُقفل (كانت 40% تُقصّر الذروات)
+    const retraced=netNow<=peak*0.6;                     // تراجع 40% من الذروة
+    const worthwhile=netNow>=Math.max(0.08,tgt*0.08);    // والمتبقي يستحق (8%+ من الهدف)
+    if(engaged&&retraced&&worthwhile)
+      hit={netNow,why:'ذروة الربح كانت '+peak.toFixed(2)+'$ وتراجعت إلى '+netNow.toFixed(2)+
+        '$ — قفل الربح قبل ذوبانه الكامل',tag:'peaklock'}; }
+  if(hit){ S._earlyExitAt=Date.now(); return hit; } // تهدئة تُستهلك بالقرار الفعلي فقط
+  return null; }
+
+export async function flattenAt(p:any,source:any){ const pos=S.position;
+  /* ─── الحاجز المطلق (قاعدة المالك): لا إغلاق بخسارة أبداً ───
+     مهما كان المصدر (جني مبكر، حد صبر، عودة إندكس...) — الإغلاق ينفّذ
+     فقط بصافٍ موجب. الاستثناءان الوحيدان: خطر التصفية الداهم (وإلا ضاع
+     كل شيء) وإيقاف المالك بيده. رفض الإغلاق = صمود حتى الجني */
+  if(pos&&p>0){
+    const mult=S.multiplier||1, q=pos.size||0;
+    const openFees=S.journal.filter(j=>j.status==='open').reduce((a,j)=>a+(j.fees||0),0)
+      ||q*mult*pos.entry*(S.makerFee||0.0002);
+    const exitFee=q*mult*p*(S.takerFee||0.0006);
+    const gross=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*q;
+    const net=gross-openFees-exitFee;
+    const sanctioned=source==='إيقاف'||source==='مركز'||source==='كابح الكارثة';
+    if(net<0.01&&!sanctioned){
+      if(!S._refuseAt||Date.now()-S._refuseAt>120000){ S._refuseAt=Date.now();
+        pushLog('server','🛡️ رفض إغلاق بخسارة ('+source+'): الصافي الآن '+fmtUsd(net)+
+          ' — الصمود حتى الجني — لا إقفال بخسارة أبداً'); }
+      return; } }
   // إغلاق حقيقي على المنصة أولًا — لا إغلاق محلي صوري في الوضع الحقيقي
   if(pos&&S.config.mode==='live'&&S.keys){
     exCancelAll(S.config.symbol).catch(()=>{});
@@ -1949,7 +2594,7 @@ function applyMeta(m:any){ S.lastPrice=m.price; S.markPrice=m.markPrice||m.price
   S.confluence=readConfluence(); S.regime=readRegime(); }
 
 // رسائل القناة اللحظية — تصل دفعًا فور وقوعها (أجزاء من الثانية)
-function onStreamTick(d){
+export function onStreamTick(d){
   netAlivePing(true); // رسالة لحظية من القناة = الإنترنت يعمل
   if(d.symbol&&d.symbol!==S.config.symbol) return;
   const now=Date.now();
@@ -2044,7 +2689,7 @@ async function loadMarket(full){
 // كبح أخطاء المزامنة على السيرفر — لا window في Node: متغيرات وحدات عادية
 let _ordErrAt=0, _syncErrAt=0, _syncErrMsg='';
 let _huntErrAt=0; // خنق فشل الصيد — كل ثانية كان يغرق السجل بلا فائدة
-async function liveSync(){ if(R()) return; // وضع المرآة: الحالة ملك السيرفر — لا مزامنة منصّة محلية تزاحمه
+export async function liveSync(){ if(R()) return; // وضع المرآة: الحالة ملك السيرفر — لا مزامنة منصّة محلية تزاحمه
   if(S.config.mode!=='live'||!S.keys) return;
   const sym=S.config.symbol;
   try{
@@ -2220,7 +2865,7 @@ function heartbeatBeat(p){ if(S.status!=='running'||!p) return;
 // الربح الموحّد (صافي $0.12 للمجموع) أو كارثة $16 بانعكاس مؤكد أو خطر تصفية
 // داهم أو إيقاف يدوي — الإغلاق عند التعادل كان يقتل صفقات كان الجني سيقطفها
 
-async function botTick(){
+export async function botTick(){
   const running=S.status==='running', paused=S.status==='paused';
   if(!running&&!paused&&S.status!=='idle') return;
   try{
@@ -2234,8 +2879,26 @@ async function botTick(){
     applyMeta(m);
     studyTick(); // جمع عينات بصمة العملة أثناء الدراسة (ويُنهيها عند اكتمالها)
     armProgressive(); bgRadarTick();
-    if(S.position&&S.status==='running') syncPositionTp(); // تبع سريع: يتحدّث كل ثانية مع الربح العائم
-    if(!S.position&&S.status==='running') maybeSwitchSymbol().catch(()=>{});
+    if(S.config.gapMode&&!S.position&&S.status==='running'){
+      gapHunterTick().catch(()=>{}); }
+    if(S.position&&S.status==='running'){ syncPositionTp();
+      backgroundPipeline().catch(()=>{}); // تبع سريع: يتحدّث كل ثانية مع الربح العائم
+      // ─── الجني المبكر المدروس: شهادة ارتداد مع ربح صافٍ = بيع قبل ذوبانه ───
+      const ex=studiedEarlyExit(S.lastPrice||0);
+      if(ex){ S._earlyExitAt=Date.now();
+        pushLog('server','🎯 جني مبكر مدروس ('+ex.tag+'): '+ex.why+' — البيع الآن بصافي '+fmtUsd(ex.netNow)+' قبل الارتداد');
+        toast('🎯 جني مبكر: +'+ex.netNow.toFixed(2)+'$ قبل الارتداد');
+        nativeNotify('AB-KING — جني مبكر مدروس','بيع قبل الارتداد بصافي +'+ex.netNow.toFixed(2)+'$');
+        await flattenAt(S.lastPrice||0,'جني مبكر مدروس');
+        _harvestCleanup(S.lastPrice||0); // دورة مكتملة — إعادة اختيار الأفضل تبدأ
+        return; } }
+    if(!S.position&&S.status==='running'){
+      // إعادة الاختيار الإجباري بعد الجني — قبل أي دخول جديد (قاعدة المالك)
+      postHarvestReselect().catch(()=>{});
+      if(openNextReady()) return;
+      backgroundPipeline().catch(()=>{});
+      // مهلة 45 ثانية + حاجز الدراسة يكملان حماية العملة الحالية من التبديل المتسارع
+      maybeSwitchSymbol().catch(()=>{}); }
     // انضباط الاتجاه: أي انقلاب يلغي فورًا سلم الجهة القديمة المسلّح —
     // بقاؤه بعد الانقلاب كان يملأ مستويات معاكسة فوق مركز جديد فيغلقه
     // بخسارة عابرة ويزرع شورتًا ولونغًا في الوقت نفسه
@@ -2246,6 +2909,7 @@ async function botTick(){
         const gs=g.side==='sell'?'short':'long';
         if(gs!==S.config.direction){ g.status='cancelled'; g.exchangeOrderId=null; } } }
     if(running&&price>0){
+      await patienceLimit(price);
       await circuitBreak(price);
       await escapeAdverse(price);
       harvestRipe(price);
@@ -2300,7 +2964,7 @@ export function startBot(){ if(R()){ remoteCmd('start').then(()=>remoteSync()); 
   pushLog('server','دورة جديدة '+(S.config.direction==='short'?'شورت':'لونغ')+
     (S.regime?' · '+S.regime.label:'')+' — شبكة فعّالة '+effLevels()+' من '+S.config.levels+
     ' (تركيز يناسب رأس المال) والصيد يعمل');
-  nativeNotify('KING يعمل ✓','البوت متصل بـ KuCoin ويتداول '+(S.config.displaySymbol||S.config.symbol)+' — يستمر حتى في الخلفية',true);
+  nativeNotify('AB-KING يعمل ✓','البوت متصل بـ KuCoin ويتداول '+(S.config.displaySymbol||S.config.symbol)+' — يستمر حتى في الخلفية',true);
   toast('البوت يعمل الآن'); emit(); saveAll(); }
 export function pauseBot(){ if(R()){ remoteCmd('pause').then(()=>remoteSync()); return; }
   if(S.status!=='running') return;
@@ -2398,7 +3062,7 @@ export function saveCfg(v){
       if(S.position) exCloseQty(old,S.position.side,S.position.size)
         .catch(e=>pushLog('error','إغلاق مركز الزوج السابق فشل: '+(e.message||e)));
       pushLog('server','أُلغيت أوامر ووقف '+old+' وأُغلق مركزه قبل الانتقال'); }
-    S.grid=[]; S.position=null; S.journal=[]; S._tpBanked=0; S._trailFloor=0;
+    S.grid=[]; S.position=null; S._tpBanked=0; S._trailFloor=0; // سجل الصفقات يبقى — التاريخ لا يُمسح عند الانتقال
     S.realizedPnl=0; S.feesPaid=0; S.fundingPaid=0; S.slipCost=0; S._fundAt=0; S.ignoreExchangeUntil=Date.now()+12000;
     S.tape=[]; S.priceTrail=[]; S.emaFast=S.emaSlow=null; S._metaAt=0;
     // مضاعف العملة السابقة سمّ زاعف للجديدة (عقد PEPE = 520 ألف وحدة!) —
@@ -2413,6 +3077,7 @@ export function saveCfg(v){
     S._btcImp=null; S._btcPrev=null; S._actHist=[]; S._actMed=0; S._actAt=0; S._tradeTs=[];
     S._lossStreak=null; S._lastSig=null; S._vetoAt=0; S._guardPx=0; S._guardLogged=false; S._guardId=null;
     setStreamSymbol(sym);
+    S._dwellAt=Date.now(); // بداية إقامة جديدة: لا تبديل جديد قبل 10 دقائق عمل فعلي
     // بصمة العملة الجديدة: معروفة وحديثة = إحماء قصير · جديدة = دراسة كاملة قبل التداول
     const pf=S.memory&&S.memory.profiles&&S.memory.profiles[sym];
     startStudy(!!(pf&&Date.now()-pf.at<24*3600*1000));
@@ -2473,7 +3138,7 @@ export function initEngine(){
   loadAll();
   if(S.config.symbol==='BTCUSDTM') S.config.symbol='XBTUSDTM'; // الرمز الصحيح في عقود KuCoin
   S.config.displaySymbol=S.config.symbol.replace(/USDTM$/i,'').replace(/^XBT$/i,'BTC');
-  pushLog('info','KING Trading جاهز — '+(S.config.mode==='live'?'وضع LIVE':'وضع ورقي'));
+  pushLog('info','AB-KING جاهز — '+(S.config.mode==='live'?'وضع LIVE':'وضع ورقي'));
   // قناة الدفع المستمرة — تتصل فورًا وتعيد الاتصال تلقائيًا عند أي انقطاع
   startStream(S.config.symbol,{ onMessage:onStreamTick, onStatus:()=>emitThrottled() });
   setInterval(botTick,TICK_MS);
@@ -2485,8 +3150,9 @@ export function initEngine(){
       .catch(()=>{ S.linkOk=false; }); };
   refreshBal(); setInterval(refreshBal,20000);
   // رادار الفرص: مسح شامل كل 3 دقائق — أول قراءة بعد استقرار القناة
-  setTimeout(()=>{ scanRadar().catch(()=>{}); },22000);
-  setInterval(()=>{ scanRadar().catch(()=>{}); },180000);
+  setTimeout(()=>{ scanRadar().catch(()=>{}); },15000);
+  // continuous full-universe scan every 45s - every contract on the platform is watched nonstop
+  setInterval(()=>{ scanRadar().catch(()=>{}); },45000);
   // البقاء الصوتي الصامت: يعمل دائمًا على الجوال حتى لا يُخنق المحرك بإطفاء الشاشة
   startSilentKeepAlive();
   // خدمة أمامية + استثناء البطارية — بقاء حقيقي في الخلفية لا يعتمد على الحيل الصوتية وحدها

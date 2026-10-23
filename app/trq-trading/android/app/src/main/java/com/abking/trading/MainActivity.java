@@ -1,4 +1,4 @@
-package com.king.trading;
+package com.abking.trading;
 
 import com.getcapacitor.BridgeActivity;
 

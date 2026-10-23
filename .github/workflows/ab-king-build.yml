@@ -1,41 +1,31 @@
-name: Build AB-KING APK (from King repo)
+name: Build AB-KING + TRQ APKs (from King repo)
 on:
   push:
     branches: ["main", "vibe/**"]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-abking:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    permissions: { contents: write }
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-
+        with: { ref: "${{ github.ref }}" }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
-
       - name: Build web + server
         working-directory: AB-KING/app/ab-king
         run: |
           npm ci
           npm run build
           npm run build:server
-
       - name: Sync Capacitor Android
         working-directory: AB-KING/app/ab-king
         run: npx cap sync android
-
-      # ── أيقونة التطبيق من صورة المستخدم (assets/app-icon.png) ──
-      # تحويل الصورة إلى كل المقاسات المطلوبة بأندرويد مع الحفاظ على الجودة (LANCZOS)
       - name: Install ImageMagick
         run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick >/dev/null 2>&1 || true
-
       - name: Generate launcher icons from assets/app-icon.png
         working-directory: AB-KING/app/ab-king/android/app/src/main/res
         run: |
@@ -53,8 +43,6 @@ jobs:
           convert /tmp/icon-master.png -resize 96x96   mipmap-xhdpi/ic_launcher_round.png
           convert /tmp/icon-master.png -resize 144x144 mipmap-xxhdpi/ic_launcher_round.png
           convert /tmp/icon-master.png -resize 192x192 mipmap-xxxhdpi/ic_launcher_round.png
-          # الطبقة الأمامية: الصورة كاملة داخل منطقة الأمان 66% على خلفية شفافة —
-          # لا قصّ على أي شكل أيقونة (دائري/مربع مستدير) — الشعار والنص والإطار كلها ظاهرة
           fg() { N=$1; S=$((N*66/100)); DEST=$2
             convert -size ${N}x${N} xc:none \
               \( /tmp/icon-master.png -resize ${S}x${S} \) \
@@ -64,29 +52,16 @@ jobs:
           fg 216 mipmap-xhdpi/ic_launcher_foreground.png
           fg 324 mipmap-xxhdpi/ic_launcher_foreground.png
           fg 432 mipmap-xxxhdpi/ic_launcher_foreground.png
-          echo "icons generated at all densities"
-
-      # ── توقيع ثابت للأبد ──
-      # المشكلة السابقة: assembleRelease بدون مخزن مفاتيح يوقع بمفتاح debug
-      # عشوائي جديد في كل بناء → أندرويد يرفض التحديث فوق النسخة (توقيع مختلف).
-      # الحل: مولّد مرة واحدة (أول بناء فقط) ويُحفظ داخل المستودع،
-      # ثم كل بناء لاحق يستخدم نفس المفتاح → التحديث يعمل فوق المثبت دائمًا.
-      - name: Ensure stable release keystore (generate once, commit forever)
+          echo "AB-KING icons generated"
+      - name: Ensure stable release keystore
         working-directory: AB-KING/app/ab-king/android
         run: |
           if [ ! -f king-release.keystore ]; then
-            echo "• generating PERMANENT release keystore (first and only time)..."
-            keytool -genkeypair -v \
-              -keystore king-release.keystore \
-              -alias king-release \
+            keytool -genkeypair -v -keystore king-release.keystore -alias king-release \
               -keyalg RSA -keysize 2048 -validity 10950 \
               -storepass KINGtrading2024 -keypass KINGtrading2024 \
               -dname "CN=KING-trading, OU=Mobile, O=KING, L=Riyadh, C=SA"
-            echo "✓ keystore created — will be committed to the repo"
-          else
-            echo "✓ stable keystore found — reusing (same signature as all previous builds)"
           fi
-
       - name: Sign with stable keystore
         working-directory: AB-KING/app/ab-king/android
         run: |
@@ -101,33 +76,130 @@ jobs:
           }
           android.buildTypes.release.signingConfig = android.signingConfigs.kingRelease
           EOF
-
-      - name: Build APK (stable-signed release)
+      - name: Build APK
         working-directory: AB-KING/app/ab-king/android
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
-
-      - name: Rename APK
-        working-directory: AB-KING/app/ab-king/android
-        run: cp app/build/outputs/apk/release/app-release.apk KING-trading-signed.apk
-
-      - name: Upload artifact
+          cp app/build/outputs/apk/release/app-release.apk /tmp/AB-KING-latest.apk
+          cp ${GITHUB_WORKSPACE}/AB-KING/app/ab-king/server-dist/ab-king-server.mjs /tmp/king-server.mjs
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: KING-trading-signed-apk
-          path: AB-KING/app/ab-king/android/KING-trading-signed.apk
+          name: abking-artifacts
+          path: |
+            /tmp/AB-KING-latest.apk
+            /tmp/king-server.mjs
 
-      - name: Commit APK + keystore to repo (direct download link)
+  build-trq:
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.ref }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - name: Build web + server
+        working-directory: AB-KING/app/trq-trading
+        run: |
+          npm ci
+          npm run build
+          npm run build:server
+      - name: Sync Capacitor Android
+        working-directory: AB-KING/app/trq-trading
+        run: npx cap sync android
+      - name: Install ImageMagick
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick >/dev/null 2>&1 || true
+      - name: Generate launcher icons from assets/trq-app-icon.png
+        working-directory: AB-KING/app/trq-trading/android/app/src/main/res
+        run: |
+          set -e
+          ICON="${GITHUB_WORKSPACE}/assets/trq-app-icon.png"
+          if [ ! -f "$ICON" ]; then echo "no TRQ icon found"; exit 0; fi
+          convert "$ICON" -resize 1024x1024^ -gravity center -extent 1024x1024 /tmp/icon-master.png
+          convert /tmp/icon-master.png -resize 48x48   mipmap-mdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 72x72   mipmap-hdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 96x96   mipmap-xhdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 144x144 mipmap-xxhdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 192x192 mipmap-xxxhdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 48x48   mipmap-mdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 72x72   mipmap-hdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 96x96   mipmap-xhdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 144x144 mipmap-xxhdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 192x192 mipmap-xxxhdpi/ic_launcher_round.png
+          fg() { N=$1; S=$((N*66/100)); DEST=$2
+            convert -size ${N}x${N} xc:none \
+              \( /tmp/icon-master.png -resize ${S}x${S} \) \
+              -gravity center -composite "$DEST"; }
+          fg 108 mipmap-mdpi/ic_launcher_foreground.png
+          fg 162 mipmap-hdpi/ic_launcher_foreground.png
+          fg 216 mipmap-xhdpi/ic_launcher_foreground.png
+          fg 324 mipmap-xxhdpi/ic_launcher_foreground.png
+          fg 432 mipmap-xxxhdpi/ic_launcher_foreground.png
+          echo "TRQ icons generated"
+      - name: Ensure stable release keystore
+        working-directory: AB-KING/app/trq-trading/android
+        run: |
+          if [ ! -f king-release.keystore ]; then
+            keytool -genkeypair -v -keystore king-release.keystore -alias king-release \
+              -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass KINGtrading2024 -keypass KINGtrading2024 \
+              -dname "CN=TRQ-trading, OU=Mobile, O=TRQ, L=Riyadh, C=SA"
+          fi
+      - name: Sign with stable keystore
+        working-directory: AB-KING/app/trq-trading/android
+        run: |
+          cat >> app/build.gradle <<'EOF'
+          android.signingConfigs {
+              kingRelease {
+                  storeFile rootProject.file('king-release.keystore')
+                  storePassword 'KINGtrading2024'
+                  keyAlias 'king-release'
+                  keyPassword 'KINGtrading2024'
+              }
+          }
+          android.buildTypes.release.signingConfig = android.signingConfigs.kingRelease
+          EOF
+      - name: Build APK
+        working-directory: AB-KING/app/trq-trading/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk /tmp/TRQ-latest.apk
+          cp ${GITHUB_WORKSPACE}/AB-KING/app/trq-trading/server-dist/ab-king-server.mjs /tmp/trq-server.mjs
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trq-artifacts
+          path: |
+            /tmp/TRQ-latest.apk
+            /tmp/trq-server.mjs
+
+  publish:
+    needs: [build-abking, build-trq]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.ref }}" }
+      - uses: actions/download-artifact@v4
+        with:
+          name: abking-artifacts
+          path: /tmp/abk
+      - uses: actions/download-artifact@v4
+        with:
+          name: trq-artifacts
+          path: /tmp/trq
+      - name: Commit releases
         run: |
           git config user.name "ci-bot"
           git config user.email "ci@users.noreply.github.com"
-          cp AB-KING/app/ab-king/android/KING-trading-signed.apk releases/AB-KING-latest.apk
-          # سيرفر Termux (محرك البوت الحقيقي) — يُنشر مع كل بناء لتحديث جوال المالك:
-          # curl -L -o ~/king-server.mjs https://raw.githubusercontent.com/abab92100-cloud/KING-210/main/releases/king-server.mjs
-          cp AB-KING/app/ab-king/server-dist/ab-king-server.mjs releases/king-server.mjs
-          git add releases/AB-KING-latest.apk
-          git add releases/king-server.mjs
-          git add AB-KING/app/ab-king/android/king-release.keystore
-          git commit -m "ci: update AB-KING-latest.apk (stable signature) [skip ci]" || echo "no change"
+          cp /tmp/abk/AB-KING-latest.apk releases/AB-KING-latest.apk
+          cp /tmp/abk/king-server.mjs releases/king-server.mjs
+          cp /tmp/trq/TRQ-latest.apk releases/TRQ-latest.apk
+          cp /tmp/trq/trq-server.mjs releases/trq-server.mjs
+          git add releases/AB-KING-latest.apk releases/king-server.mjs releases/TRQ-latest.apk releases/trq-server.mjs
+          git commit -m "ci: update AB-KING + TRQ APKs and servers [skip ci]" || echo "no change"
           git push

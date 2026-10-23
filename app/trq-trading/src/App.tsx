@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
-  S, subscribe, initEngine, startBot, pauseBot, stopBot, newCycle,
+  S, subscribe, initEngine, remoteSync, detectRemoteServer, startBot, pauseBot, stopBot, newCycle,
   saveKeys, clearKeys, saveCfg, equity, desk, pulseAge, fmtPx, fmtUsd, fmtTime,
-  listContracts, effLevels, scanRadar, detectRemoteServer, netIsDown, netDownSince,
+  listContracts, effLevels, scanRadar, netIsDown, netDownSince,
 } from './engine';
 import { streamState } from './ws';
 import Chart from './Chart';
@@ -11,7 +11,7 @@ declare global {
     Capacitor?: any;
     webkitAudioContext?: any;
     __kingHb?: any;
-    __KING_REMOTE?: string | null;
+    __ABKING_REMOTE?: string | null;
     __chartDbg?: any;
     __S?: any;
   }
@@ -208,6 +208,7 @@ function HomeScreen() {
 /* ---------- رادار الفرص ---------- */
 function RadarScreen() {
   const r = S.radar, list = r ? r.list : [];
+  const intel = S.intel;
   const cur = list.find(l => l.symbol === S.config.symbol);
   const [busy, setBusy] = useState(false);
   const scan = async () => { setBusy(true); try { await scanRadar(); } finally { setBusy(false); } };
@@ -230,6 +231,70 @@ function RadarScreen() {
           </div>
         ) : null}
       </div>
+      {intel ? (
+        <div className="card">
+          <div className="row"><b>🧠 استخبارات التمويل والمركزات المفتوحة</b>
+            <span className="subtle">{fmtTime(intel.at)}</span></div>
+          {intel.squeeze && intel.squeeze.length ? (
+            <div style={{ marginTop: 8, padding: '6px 8px', border: '1px solid #f87171', borderRadius: 8 }}>
+              <b style={{ color: '#f87171' }}>🔥 انضغاط لونغ (تمويل مرتفع + صعود قوي)</b>
+              {intel.squeeze.map((f: any) => (
+                <div className="subtle" key={'sq' + f.symbol}>
+                  {f.disp + ' — تمويل +' + f.fundAnnPct + '%/س · 24س +' + f.chg + '% — ارتداد هابط مرجّح'}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {intel.rebound && intel.rebound.length ? (
+            <div style={{ marginTop: 8, padding: '6px 8px', border: '1px solid #4ade80', borderRadius: 8 }}>
+              <b style={{ color: '#4ade80' }}>💫 مرشح انعكاس صاعد (شورتات متكدسة)</b>
+              {intel.rebound.map((f: any) => (
+                <div className="subtle" key={'rb' + f.symbol}>
+                  {f.disp + ' — تمويل ' + f.fundAnnPct + '%/س · 24س ' + f.chg + '% — تصفية شورتات محتملة'}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="subtle" style={{ marginTop: 8 }}>أعلى تمويل سنوي الآن:</div>
+          {intel.hottest.map((f: any) => (
+            <div className="row" key={'hot' + f.symbol} style={{ marginTop: 2 }}>
+              <span style={{ fontSize: 13 }}>{f.disp}</span>
+              <span className={'badge ' + (f.fundAnnPct >= 0 ? 'b' : 'g')} style={{ fontSize: 11 }}>
+                {(f.fundAnnPct >= 0 ? '+' : '') + f.fundAnnPct + '%/س'}
+              </span>
+            </div>
+          ))}
+          <div className="subtle" style={{ marginTop: 8 }}>أكبر مراكز مفتوحة (OI):</div>
+          {intel.biggestOi.map((f: any) => (
+            <div className="row" key={'oi' + f.symbol} style={{ marginTop: 2 }}>
+              <span style={{ fontSize: 13 }}>{f.disp}</span>
+              <span className="subtle" style={{ fontSize: 12 }}>
+                {'$' + (f.oiUsd >= 1e6 ? (f.oiUsd / 1e6).toFixed(1) + 'م' : Math.round(f.oiUsd / 1000) + 'أ')}
+              </span>
+            </div>
+          ))}
+          <div className="subtle" style={{ marginTop: 8 }}>🎯 أوسع مدى يومي (الأفضل لشبكة الجنريل):</div>
+          {intel.bestGrid && intel.bestGrid.map((f: any) => (
+            <div className="row" key={'gr' + f.symbol} style={{ marginTop: 2 }}>
+              <span style={{ fontSize: 13 }}>{f.disp}</span>
+              <span className="badge b" style={{ fontSize: 11 }}>{f.rangePct + '% مدى'}</span>
+            </div>
+          ))}
+          {intel.extremeBasis && intel.extremeBasis.length ? (
+            <>
+              <div className="subtle" style={{ marginTop: 8 }}>⚖️ أقصى انحراف مارك/إنديكس (basis):</div>
+              {intel.extremeBasis.map((f: any) => (
+                <div className="row" key={'ba' + f.symbol} style={{ marginTop: 2 }}>
+                  <span style={{ fontSize: 13 }}>{f.disp}</span>
+                  <span className={'badge ' + (f.basisPct < 0 ? 'g' : 'b')} style={{ fontSize: 11 }}>
+                    {(f.basisPct >= 0 ? '+' : '') + f.basisPct + '%'}
+                  </span>
+                </div>
+              ))}
+            </>
+          ) : null}
+        </div>
+      ) : null}
       {list.slice(0, 10).map((l, i) => (
         <div className="card" key={l.symbol} style={{ padding: '10px 12px' }}>
           <div className="row">
@@ -237,8 +302,16 @@ function RadarScreen() {
             <span className={'badge ' + (l.grade === '🟢' ? 'g' : l.grade === '🟡' ? 'b' : '')}>{l.grade + ' ' + l.score}</span>
           </div>
           <div className="subtle" style={{ marginTop: 4 }}>
-            {l.state + ' · تذبذب ' + l.vol + '% · 24س ' + (l.chg >= 0 ? '+' : '') + l.chg + '%' + (l.why.length ? ' · ' + l.why.join('، ') : '')}
+            {l.state + ' · تذبذب ' + l.vol + '% · 24س ' + (l.chg >= 0 ? '+' : '') + l.chg + '%' +
+              ' · تمويل ' + (l.fundAnnPct >= 0 ? '+' : '') + l.fundAnnPct + '%/س' +
+              ' · OI $' + (l.oiUsd >= 1e6 ? (l.oiUsd / 1e6).toFixed(1) + 'م' : Math.round(l.oiUsd / 1000) + 'أ') +
+              (l.why.length ? ' · ' + l.why.join('، ') : '')}
           </div>
+          {l.skew && l.skew !== '—' ? (
+            <div className="subtle" style={{ marginTop: 2, color: l.skew.includes('صاعد') ? '#4ade80' : l.skew.includes('هابط') ? '#f87171' : undefined }}>
+              {'📡 ' + l.skew}
+            </div>
+          ) : null}
           {l.symbol !== S.config.symbol && l.score >= 65 ? (
             <button className="btn acc" style={{ marginTop: 8, width: '100%', padding: '6px' }}
               onClick={() => {
@@ -318,7 +391,7 @@ function exportCsv() {
   const rows = [...S.journal, ...(S.history || [])];
   const head = 'time,symbol,side,source,entry,exit,qty,pnl,fees,status\n';
   const body = rows.map(j => [
-    new Date(j.closedAt || j.openedAt).toISOString(), S.config.symbol, j.side, j.source,
+    new Date(j.closedAt || j.openedAt).toISOString(), (j.symbol || S.config.displaySymbol), j.side, j.source,
     j.entry, j.exit || '', j.qty, j.pnl != null ? j.pnl : '', j.fees, j.status,
   ].join(',')).join('\n');
   const blob = new Blob(['﻿' + head + body], { type: 'text/csv;charset=utf-8' });
@@ -352,7 +425,7 @@ function JournalScreen() {
               <div className="log" key={j.id}>
                 <span className={(pnl > 0 ? 'up' : pnl < 0 ? 'dn' : 'muted') + ' mono'}>{fmtUsd(pnl)}</span>
                 <span>
-                  {j.source + ' · ' + (j.side === 'short' ? 'شورت' : 'لونغ') + ' · ' +
+                  {(j.symbol || S.config.displaySymbol) + ' · ' + j.source + ' · ' + (j.side === 'short' ? 'شورت' : 'لونغ') + ' · ' +
                     (j.status === 'open' ? 'مفتوحة' : 'مغلقة') + (j.mergedOrders > 1 ? ' · متوسط ×' + j.mergedOrders : '') + ' '}
                   <span className="subtle">{fmtTime(j.closedAt || j.openedAt)}</span>
                 </span>
@@ -478,6 +551,19 @@ function SettingsScreen() {
 
 /* ---------- الجذر ---------- */
 export default function App() {
+  useEffect(() => {
+    // إعادة اتصال فورية عند عودة التطبيق للمقدمة — لا نافذة «منقطع» بعد الآن
+    const resync = () => {
+      remoteSync().catch(() => {});
+      detectRemoteServer().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') resync();
+    });
+    window.addEventListener('focus', resync);
+    return () => window.removeEventListener('focus', resync);
+  }, []);
+
   useEngine();
   const [tab, setTab] = useState('home');
   const [now,setToastTick]=useState(()=>Date.now());
@@ -486,12 +572,12 @@ export default function App() {
   return (
     <div>
       <header>
-        <div className="logo">KING</div>
-        <div className="t"><b>KING TRADING</b><span>FUTURES BOT</span></div>
+        <div className="logo">AB</div>
+        <div className="t"><b>TRQ</b><span>TRADING BOT</span></div>
         <span className={'pill ' + (streamState.connected ? 'on' : 'dn-pill')} title="صحة قناة السعر اللحظية">
           <i></i>{streamState.connected ? 'متصل' : 'مقطوع'} · {pulseAge()}
         </span>
-        {window.__KING_REMOTE && (
+        {window.__ABKING_REMOTE && (
           <span className="pill on" title="المحرك يعمل في سيرفر Termux على هذا الجوال — بلا نوم ولا قتل خلفية">سيرفر</span>
         )}
         <span className={'pill ' + (S.config.mode === 'live' ? 'live' : '')}>{S.config.mode === 'live' ? 'LIVE' : 'ورقي'}</span>

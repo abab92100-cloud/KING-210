@@ -1,7 +1,7 @@
 apply plugin: 'com.android.library'
 
 android {
-    namespace 'com.king.nativeplugin'
+    namespace 'com.abking.nativeplugin'
     compileSdk 36
 
     defaultConfig {

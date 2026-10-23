@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">KING Trading</string>
-    <string name="title_activity_main">KING Trading</string>
-    <string name="package_name">com.king.trading</string>
-    <string name="custom_url_scheme">com.king.trading</string>
+    <string name="app_name">TRQ Trading</string>
+    <string name="title_activity_main">TRQ Trading</string>
+    <string name="package_name">com.abking.trading</string>
+    <string name="custom_url_scheme">com.abking.trading</string>
 </resources>
