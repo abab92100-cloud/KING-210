@@ -971,6 +971,17 @@ function loadAll() {
         startedAt: rt.startedAt || 0
       });
       S._savedAt = rt.savedAt || 0;
+      {
+        const __bound = Math.max(50, (S.config.cycleBalance || 0) * 3);
+        let __n = 0;
+        (S.journal || []).forEach((j) => {
+          if (j.status === "closed" && typeof j.pnl === "number" && Math.abs(j.pnl) > __bound) {
+            j.pnl = 0;
+            __n++;
+          }
+        });
+        if (__n > 0) pushLog("server", "\u{1F9FC} \u062A\u0635\u062D\u064A\u062D " + __n + " \u0635\u0641\u0642\u0629 \u0628\u0642\u064A\u0645 \u0634\u0627\u0630\u0629 \u0645\u0646 \u0625\u0635\u062F\u0627\u0631 \u0633\u0627\u0628\u0642 \u2014 \u0635\u064F\u0641\u0651\u0631\u062A \u0642\u064A\u0645\u0647\u0627 \u0627\u0644\u0648\u0647\u0645\u064A\u0629");
+      }
     }
     if (S.status === "running") {
       if (S._savedAt && Date.now() - S._savedAt < 30 * 60 * 1e3) {
@@ -2603,7 +2614,7 @@ function noteEntry(qty, price, fee, source, noCount) {
     at: Date.now()
   };
   const label = source === "hunt" ? "\u0635\u0641\u0642\u0629" : "\u0634\u0628\u0643\u0629";
-  const ex = S.journal.find((j) => j.status === "open" && j.side === side && (j.symbol === void 0 || j.symbol === S.config.displaySymbol));
+  const ex = S.journal.find((j) => j.status === "open" && j.side === side && j.symbol === S.config.displaySymbol);
   if (ex) {
     const t = ex.qty + qty;
     ex.entry = (ex.entry * ex.qty + price * qty) / t;
@@ -2643,10 +2654,15 @@ function noteEntry(qty, price, fee, source, noCount) {
 }
 function noteClose(qty, exit, fee, source, pnl, lotId) {
   const lotId_ = lotId;
-  const row = (lotId_ ? S.journal.find((j) => j.id === lotId_ && j.status === "open") : null) || S.journal.find((j) => j.status === "open" && (source === "\u0625\u064A\u0642\u0627\u0641" || j.source === source) && (j.symbol === void 0 || j.symbol === S.config.displaySymbol)) || S.journal.find((j) => j.status === "open" && (j.symbol === void 0 || j.symbol === S.config.displaySymbol));
+  const row = (lotId_ ? S.journal.find((j) => j.id === lotId_ && j.status === "open") : null) || S.journal.find((j) => j.status === "open" && (source === "\u0625\u064A\u0642\u0627\u0641" || j.source === source) && j.symbol === S.config.displaySymbol) || S.journal.find((j) => j.status === "open" && j.symbol === S.config.displaySymbol);
   if (row) {
     const share = row.qty > 0 ? row.fees * (qty / row.qty) : row.fees;
-    const net = lotNet(row.side, row.entry, exit, qty, share + fee);
+    let net = lotNet(row.side, row.entry, exit, qty, share + fee);
+    const __bound = Math.max(50, (S.config.cycleBalance || 0) * 3);
+    if (Number.isFinite(net) && Math.abs(net) > __bound) {
+      pushLog("warn", "\u{1F6E1}\uFE0F \u062F\u0631\u0639 \u0627\u0644\u0625\u0642\u0641\u0627\u0644: \u0631\u0641\u0636 \u0646\u062A\u064A\u062C\u0629 \u0634\u0627\u0630\u0629 " + net.toFixed(2) + "$ (\u062E\u0627\u0631\u062C \u0627\u0644\u062D\u062F \u0627\u0644\u0645\u0627\u062F\u064A " + __bound.toFixed(0) + "$) \u2014 \u0633\u064A\u0627\u0642 \u0645\u062E\u062A\u0644\u0637 \u0645\u0646 \u0627\u0646\u062A\u0642\u0627\u0644 \u0639\u0645\u0644\u0629 \u2014 \u0627\u0644\u0635\u0641 \u064A\u064F\u0642\u0641\u0644 \u0628\u0635\u0641\u0631");
+      net = 0;
+    }
     row.status = "closed";
     row.exit = exit;
     row.fees += fee;
@@ -2654,20 +2670,27 @@ function noteClose(qty, exit, fee, source, pnl, lotId) {
     row.pnl = Math.round((net + (row.partPnl || 0)) * 1e4) / 1e4;
     if (source === "\u0625\u064A\u0642\u0627\u0641") row.source = "\u0625\u064A\u0642\u0627\u0641";
     pnl = net;
-  } else pushJr({
-    id: uid("jr"),
-    source,
-    side: S.position ? S.position.side : S.config.direction,
-    qty,
-    entry: exit,
-    exit,
-    pnl,
-    fees: fee,
-    openedAt: Date.now(),
-    closedAt: Date.now(),
-    mergedOrders: 1,
-    status: "closed"
-  });
+  } else {
+    const __bound2 = Math.max(50, (S.config.cycleBalance || 0) * 3);
+    if (Number.isFinite(pnl) && Math.abs(pnl) > __bound2) {
+      pushLog("warn", "\u{1F6E1}\uFE0F \u062F\u0631\u0639 \u0627\u0644\u0625\u0642\u0641\u0627\u0644: \u0631\u0641\u0636 \u0646\u062A\u064A\u062C\u0629 \u0634\u0627\u0630\u0629 " + pnl.toFixed(2) + "$ \u2014 \u0635\u064F\u0641\u0651\u0631\u062A");
+      pnl = 0;
+    }
+    pushJr({
+      id: uid("jr"),
+      source,
+      side: S.position ? S.position.side : S.config.direction,
+      qty,
+      entry: exit,
+      exit,
+      pnl,
+      fees: fee,
+      openedAt: Date.now(),
+      closedAt: Date.now(),
+      mergedOrders: 1,
+      status: "closed"
+    });
+  }
   if (S.activeCycle) {
     S.activeCycle.pnl += pnl;
     if (!S.position) {
@@ -2675,8 +2698,13 @@ function noteClose(qty, exit, fee, source, pnl, lotId) {
     }
   }
   if (Number.isFinite(pnl) && pnl !== 0) {
-    S.cycleHarvested = Math.round(((S.cycleHarvested || 0) + pnl) * 1e4) / 1e4;
-    S.config.cycleBalance = Math.max(1, Math.round((S.config.cycleBalance + pnl) * 100) / 100);
+    const __bound = Math.max(50, (S.config.cycleBalance || 0) * 3);
+    if (Math.abs(pnl) > __bound) {
+      pushLog("warn", "\u{1F6E1}\uFE0F \u062F\u0631\u0639 \u0627\u0644\u0631\u0635\u064A\u062F: \u062A\u062C\u0627\u0647\u0644 \u0646\u062A\u064A\u062C\u0629 \u0634\u0627\u0630\u0629 " + pnl.toFixed(2) + "$ (\u062E\u0627\u0631\u062C \u0627\u0644\u062D\u062F \u0627\u0644\u0645\u0627\u062F\u064A " + __bound.toFixed(0) + "$) \u2014 \u0644\u0645 \u062A\u0644\u0645\u0633 \u0631\u0635\u064A\u062F \u0627\u0644\u062F\u0648\u0631\u0629");
+    } else {
+      S.cycleHarvested = Math.round(((S.cycleHarvested || 0) + pnl) * 1e4) / 1e4;
+      S.config.cycleBalance = Math.max(1, Math.round((S.config.cycleBalance + pnl) * 100) / 100);
+    }
   }
   {
     const mem = S.memory;
@@ -4866,6 +4894,11 @@ function saveCfg(v) {
     S._guardLogged = false;
     S._guardId = null;
     setStreamSymbol(sym);
+    const __staleOpen = S.journal.filter((j) => j.status === "open");
+    if (__staleOpen.length) {
+      S.journal = S.journal.filter((j) => j.status !== "open");
+      pushLog("server", "\u{1F9F9} \u0623\u064F\u0644\u063A\u064A\u062A " + __staleOpen.length + " \u0635\u0641\u0642\u0627\u062A \u0627\u0644\u0632\u0648\u062C \u0627\u0644\u0633\u0627\u0628\u0642 \u0627\u0644\u0645\u0641\u062A\u0648\u062D\u0629 \u2014 \u0633\u064A\u0627\u0642 \u0642\u062F\u064A\u0645 \u0644\u0627 \u064A\u064F\u0642\u0641\u0644 \u0628\u0639\u0645\u0644\u0629 \u062C\u062F\u064A\u062F\u0629");
+    }
     S._dwellAt = Date.now();
     const pf = S.memory && S.memory.profiles && S.memory.profiles[sym];
     startStudy(!!(pf && Date.now() - pf.at < 24 * 3600 * 1e3));
