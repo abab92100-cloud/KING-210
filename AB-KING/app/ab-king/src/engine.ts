@@ -221,7 +221,8 @@ function relayServerLogs(){ // أحداث السيرفر تعيش في Termux و
       try{navigator.vibrate&&navigator.vibrate(win?[80,60,140]:120);}catch(e){ logSwallow("silent-catch", e); } }
     nativeNotify('AB-KING',l.text); } }
 export async function remoteSync(){ const base=R(); if(!base) return false;
-  try{ const r=await fetch(base+'/state'); const j=await r.json();
+  try{ const __sel=(typeof window!=='undefined'&&(window as any).__FLEET_SEL)||0;
+    const r=await fetch(base+'/state'+(__sel?('?sel='+__sel):'')); const j=await r.json();
     if(!j||!j.ok) throw new Error('bad state');
     Object.assign(S,j.state); _remoteFails=0;
     relayServerLogs();

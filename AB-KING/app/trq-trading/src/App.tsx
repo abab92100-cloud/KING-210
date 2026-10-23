@@ -569,6 +569,7 @@ export default function App() {
   const [now,setToastTick]=useState(()=>Date.now());
   useEffect(()=>{ const t=setInterval(()=>setToastTick(Date.now()),1200); return ()=>clearInterval(t); },[]);
   const toast = S.toastMsg && now - S.toastMsg.at < 2600 ? S.toastMsg.text : null;
+  const sel = ((window as any).__FLEET_SEL || 0) as number;
   return (
     <div>
       <header>
@@ -588,11 +589,20 @@ export default function App() {
         </span>
       </header>
       {Array.isArray((S as any).fleet) && (S as any).fleet.length > 0 && (
-        <div className="fleet-strip" style={{ display:'flex', gap:6, overflowX:'auto', padding:'6px 10px', fontSize:12 }}>
+        <div className="fleet-strip" style={{ display:'flex', gap:6, overflowX:'auto', padding:'6px 10px', fontSize:12, alignItems:'center' }}>
+          <span className="pill" title="عرض مدمج: أول محرك بمركز مفتوح"
+            onClick={() => { (window as any).__FLEET_SEL = 0; remoteSync().catch(() => {}); }}
+            style={{ flex:'0 0 auto', whiteSpace:'nowrap', cursor:'pointer', opacity: sel ? 0.55 : 1 }}>
+            الأسطول
+          </span>
           {(S as any).fleet.map((f: any, i: number) => (
-            <span key={f.slot || i} className={'pill' + (f.position ? ' on' : f.running ? ' warn' : '')}
-              title={'محرك ' + (f.slot || (i + 1)) + ' — رصيد ' + (f.balance || 0) + '$'}
-              style={{ flex:'0 0 auto', whiteSpace:'nowrap' }}>
+            <span key={f.slot || i}
+              className={'pill' + (f.position ? ' on' : f.running ? ' warn' : '')}
+              title={'محرك ' + (f.slot || (i + 1)) + ' — رصيد ' + (f.balance || 0) + '$ — اضغط لعرض عملته'}
+              onClick={() => { (window as any).__FLEET_SEL = (f.slot || i + 1); remoteSync().catch(() => {}); }}
+              style={{ flex:'0 0 auto', whiteSpace:'nowrap', cursor:'pointer',
+                outline: sel === (f.slot || i + 1) ? '2px solid #2ecc71' : 'none',
+                outlineOffset: 1 }}>
               <i></i>{f.disp || '?'}
               {f.position ? <b style={{ color: (f.net || 0) >= 0 ? '#2ecc71' : '#f74d5d', marginInlineStart: 4 }}>
                 {(f.net || 0) >= 0 ? '+' : ''}{(f.net || 0).toFixed(2)}</b> : null}

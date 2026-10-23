@@ -43,9 +43,26 @@ const PORT = BASE_PORT + SLOT;
 if (SLOT > 0) {
   pushLog('server', '✅ ' + SRV_VER + ' — محرك الأسطول رقم ' + SLOT + '/' + FLEET_N + ' — نصيبه من رأس المال: ÷' + FLEET_N + ' تلقائياً — تبديله وجنيه مستقلان');
   // مزامنة عملات المحركات الأخرى من المنسق كل 30 ث — التنويع المركزي
+  let bootPickDone = false;
   const fleetSync = () => jfetch('http://127.0.0.1:' + BASE_PORT + '/fleet?i=' + SLOT).then(f => {
     if (f && Array.isArray(f.taken)) {
       S._fleetTaken = f.taken.map((t: any) => t.sym); // راداري يستبعد عملات المحركات الأخرى
+      // تعيين الإقلاع الحتمي: المحرك N يختار العملة رقم N من راداره —
+      // يمنع تقارب المحركات على نفس العملة قبل اكتمال مزامنة التنويع
+      if (!bootPickDone && !S.position && S.config.symbol === 'XBTUSDTM' &&
+          S.radar && Array.isArray(S.radar.list) && S.radar.list.length) {
+        const pick = S.radar.list[Math.min(SLOT - 1, S.radar.list.length - 1)];
+        if (pick && pick.symbol && pick.symbol !== 'XBTUSDTM') {
+          bootPickDone = true;
+          pushLog('server', '🎯 تعيين الإقلاع: المحرك ' + SLOT + ' يبدأ على ' + pick.disp + ' (المرتبة ' + SLOT + ' في الرادار)');
+          try { (require('./engine') as any).saveCfg({
+            symbol: pick.symbol, leverage: S.config.leverage, levels: S.config.levels,
+            gridStepPct: S.config.gridStepPct, huntPct: S.config.huntPct,
+            cycleBalance: S.config.cycleBalance, directionMode: S.config.directionMode,
+            mode: S.config.mode }); } catch{ /* intentional: optional step */ }
+          return;
+        }
+      }
       const clash = f.taken.find((t: any) => t.sym === S.config.symbol);
       // القاعدة: الأدنى رقمًا يبقى والأعلى ينتقل — تقارب مستقر بلا تراش
       if (clash && clash.holder < SLOT && !S.position) {
@@ -54,8 +71,8 @@ if (SLOT > 0) {
       }
     }
   }).catch(() => {});
-  setTimeout(fleetSync, 2000);
-  setInterval(fleetSync, 30000).unref?.();
+  setTimeout(fleetSync, 2500);
+  setInterval(fleetSync, 10000).unref?.();
 
   setTimeout(() => {
     liveSync().then(() => pushLog('server', '🔧 اكتملت مراجعة الوضع عند إقلاع المحرك ' + SLOT + ' — متطابق مع المنصة')).catch(() => {});
@@ -71,20 +88,27 @@ async function pollSlots() {
     if (j && j.ok && j.state) slotStates[i] = j.state;
   }
 }
-setInterval(pollSlots, 15000).unref?.();
+setInterval(pollSlots, 8000).unref?.();
 
-function mergedState() {
+function mergedState(selIn = 0) {
   const live: any[] = [];
   for (let i = 1; i <= FLEET_N; i++) if (slotStates[i]) live.push(slotStates[i]);
   if (!live.length) return null;
-  // الأساسي: أول محرك بمركز مفتوح، وإلا المحرك الأول
-  const primary = live.find(x => x.position) || live[0];
+  // الأساسي: المحرك المختار من الواجهة (الضغط على عملة في الشريط)، وإلا
+  // أول محرك بمركز مفتوح، وإلا المحرك الأول
+  const idx = selIn >= 1 && selIn <= FLEET_N && slotStates[selIn] ? selIn : 0;
+  const primary = idx ? slotStates[idx] : (live.find(x => x.position) || live[0]);
   const st: any = { ...primary };
-  st.journal = live.flatMap(x => x.journal || []).sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 120);
-  st.logs = live.flatMap(x => x.logs || []).sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 120);
+  // سجل الصفقات لكل الأسطول (مع رمز العملة في كل صف) — والعدادات تُحسب منه أسطولياً
+  st.journal = live.flatMap((x, li) => (x.journal || []).map((r: any) => ({ ...r, _slot: li + 1 })))
+    .sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 150);
+  // سجل السيرفر: تفاصيل المحرك المعروض فقط (العملة المختارة)
+  st.logs = (primary.logs || []).slice(-150);
   st.realizedPnl = live.reduce((a, x) => a + (x.realizedPnl || 0), 0);
   st.feesPaid = live.reduce((a, x) => a + (x.feesPaid || 0), 0);
   st.cycleHarvested = live.reduce((a, x) => a + (x.cycleHarvested || 0), 0);
+  st.slipCost = live.reduce((a, x) => a + (x.slipCost || 0), 0);
+  st.fundingPaid = live.reduce((a, x) => a + (x.fundingPaid || 0), 0);
   // الرصيد الكلي = مجموع أنصبة المحركات (لعرضه في الواجهة كرصيد واحد)
   st.config = { ...(primary.config || {}), cycleBalance: live.reduce((a, x) => a + (x.config?.cycleBalance || 0), 0) };
   st.status = live.some(x => x.status === 'running') ? 'running' : (live[0]?.status || 'idle');
@@ -153,7 +177,8 @@ const srv = createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && u.pathname === '/state') {
-      const st = mergedState();
+      const sel = parseInt(u.searchParams.get('sel') || '0', 10) || 0;
+      const st = mergedState(sel);
       if (!st) return send(res, 200, { ok: true, at: Date.now(), state: { status: 'idle', heartbeat: Date.now(), logs: [], journal: [], grid: [], config: { cycleBalance: 0 }, fleet: [] } });
       return send(res, 200, { ok: true, at: Date.now(), state: st });
     }
