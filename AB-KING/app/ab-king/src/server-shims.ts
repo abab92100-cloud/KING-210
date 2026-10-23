@@ -11,7 +11,8 @@ process.env.ABKING_SERVER = '1';
 
 const dir = join(homedir(), '.ab-king');
 try { mkdirSync(dir, { recursive: true }); } catch{ /* intentional: optional step */ }
-const file = join(dir, 'ab-king-server-store.json');
+const __slot = (process.env as any).ABKING_SLOT || '';
+const file = join(dir, __slot ? `trq-slot-${__slot}-store.json` : 'ab-king-server-store.json');
 
 let data = {};
 try { if (existsSync(file)) data = JSON.parse(readFileSync(file, 'utf8') || '{}'); } catch (e) { data = {}; }

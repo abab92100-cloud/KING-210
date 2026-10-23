@@ -309,6 +309,8 @@ function saveAll(){ try{
 }catch(e){ logSwallow("silent-catch", e); } }
 function loadAll(){ try{
   const cfg=JSON.parse(localStorage.getItem('abking:cfg')||'null'); if(cfg) S.config={...S.config,...cfg};
+  // أسطول TRQ: أول إقلاع بلا إعداد — الرصيد الافتراضي نصيب هذا المحرك وحده
+  if(!cfg&&FLEET_MODE()) S.config.cycleBalance=Math.max(1,Math.round(S.config.cycleBalance/5*100)/100);
   const ks=localStorage.getItem('abking:keys'); if(ks){ try{S.keys=JSON.parse(ks);}catch(e){S.keys=null;} }
   S.sound=localStorage.getItem('abking:snd')!=='0';
   S.soundTone=localStorage.getItem('abking:tone')||'soft';
@@ -542,6 +544,11 @@ export function openNextReady(){
     mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
   return true;
 }
+/* ─── أسطول TRQ-trading: كل محرك يتجنب عملات محركات الأسطول الأخرى ───
+   التنويع مضمون مركزياً: قائمة المحركات الأخرى تُجلب من المنسق كل 30 ث،
+   والرادار يحذفها من القائمة (عملة المحرك نفسه تبقى — يديرها هو) */
+export const FLEET_MODE=()=>!!(typeof process!=='undefined'&&process.env&&process.env.ABKING_SLOT);
+
 export async function scanRadar(){
   if(S._radarBusy) return S.radar; S._radarBusy=true;
   try{
@@ -631,10 +638,14 @@ export async function scanRadar(){
       extremeBasis:basisRanked,
       squeeze:fundRanked.filter((f:any)=>f.fundAnnPct>=0.05&&f.chg>3).slice(0,3),
       rebound:fundRanked.filter((f:any)=>f.fundAnnPct<=-0.03&&f.chg<-3).slice(0,3)};
-    S.radar={at:Date.now(),list};
+    // أسطول TRQ: حذف عملات المحركات الأخرى — كل عملة لمحرك واحد فقط
+    let flist=list;
+    if(FLEET_MODE()){ const taken=S._fleetTaken||[];
+      if(taken.length) flist=list.filter(l=>l.symbol===S.config.symbol||!taken.includes(l.symbol)); }
+    S.radar={at:Date.now(),list:flist};
     // توصية التبديل: عملتي الحالية ضعيفة وأخرى أقوى منها بفارق واضح
-    const cur=list.find(l=>l.symbol===S.config.symbol);
-    const top=list[0];
+    const cur=flist.find(l=>l.symbol===S.config.symbol);
+    const top=flist[0];
     if(top&&cur&&top.symbol!==cur.symbol&&top.score-cur.score>=18&&cur.score<50){
       if(!S._radarTipAt||Date.now()-S._radarTipAt>1800000){ S._radarTipAt=Date.now();
         pushLog('server','📡 رادار: '+cur.disp+' ضعيفة ('+cur.score+') بينما '+top.disp+

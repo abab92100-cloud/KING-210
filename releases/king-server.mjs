@@ -8,7 +8,8 @@ try {
   mkdirSync(dir, { recursive: true });
 } catch {
 }
-var file = join(dir, "ab-king-server-store.json");
+var __slot = process.env.ABKING_SLOT || "";
+var file = join(dir, __slot ? `trq-slot-${__slot}-store.json` : "ab-king-server-store.json");
 var data = {};
 try {
   if (existsSync(file)) data = JSON.parse(readFileSync(file, "utf8") || "{}");
@@ -932,6 +933,7 @@ function loadAll() {
   try {
     const cfg = JSON.parse(localStorage.getItem("abking:cfg") || "null");
     if (cfg) S.config = { ...S.config, ...cfg };
+    if (!cfg && FLEET_MODE()) S.config.cycleBalance = Math.max(1, Math.round(S.config.cycleBalance / 5 * 100) / 100);
     const ks = localStorage.getItem("abking:keys");
     if (ks) {
       try {
@@ -1264,6 +1266,7 @@ function openNextReady() {
   });
   return true;
 }
+var FLEET_MODE = () => !!(typeof process !== "undefined" && process.env && process.env.ABKING_SLOT);
 async function scanRadar() {
   if (S._radarBusy) return S.radar;
   S._radarBusy = true;
@@ -1408,9 +1411,14 @@ async function scanRadar() {
       squeeze: fundRanked.filter((f) => f.fundAnnPct >= 0.05 && f.chg > 3).slice(0, 3),
       rebound: fundRanked.filter((f) => f.fundAnnPct <= -0.03 && f.chg < -3).slice(0, 3)
     };
-    S.radar = { at: Date.now(), list };
-    const cur = list.find((l) => l.symbol === S.config.symbol);
-    const top = list[0];
+    let flist = list;
+    if (FLEET_MODE()) {
+      const taken = S._fleetTaken || [];
+      if (taken.length) flist = list.filter((l) => l.symbol === S.config.symbol || !taken.includes(l.symbol));
+    }
+    S.radar = { at: Date.now(), list: flist };
+    const cur = flist.find((l) => l.symbol === S.config.symbol);
+    const top = flist[0];
     if (top && cur && top.symbol !== cur.symbol && top.score - cur.score >= 18 && cur.score < 50) {
       if (!S._radarTipAt || Date.now() - S._radarTipAt > 18e5) {
         S._radarTipAt = Date.now();
@@ -4975,8 +4983,11 @@ function initEngine() {
 
 // src/server-entry.ts
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.6.0";
-var PORT = 8787;
+import { spawn } from "node:child_process";
+var SRV_VER = "TRQ-TRADING-1.7.0";
+var FLEET_N = 5;
+var BASE_PORT = 8787;
+var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
 function send(res, code, obj) {
   res.writeHead(code, {
     "Content-Type": "application/json; charset=utf-8",
@@ -4987,20 +4998,74 @@ function send(res, code, obj) {
   });
   res.end(JSON.stringify(obj));
 }
-pushLog("server", "\u2705 " + SRV_VER + " \u064A\u0639\u0645\u0644 \u0627\u0644\u0622\u0646 \u2014 \u0627\u0644\u062A\u0628\u062F\u064A\u0644 \u0627\u0644\u062A\u0644\u0642\u0627\u0626\u064A \u0645\u0641\u0639\u0651\u0644: \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A \u0641\u0648\u0631\u064B\u0627 + \u062F\u0648\u0631\u0627\u0646 \u0627\u0644\u0628\u0648\u0631\u0629 \u0639\u0646\u062F 15 \u062F\u0642\u064A\u0642\u0629 \u0628\u0644\u0627 \u062A\u0646\u0641\u064A\u0630");
-setTimeout(() => {
-  liveSync().then(() => pushLog("server", "\u{1F527} \u0627\u0643\u062A\u0645\u0644\u062A \u0645\u0631\u0627\u062C\u0639\u0629 \u0627\u0644\u0648\u0636\u0639 \u0639\u0646\u062F \u0627\u0644\u0625\u0642\u0644\u0627\u0639 \u2014 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0648\u0627\u0644\u0645\u0631\u0627\u0643\u0632 \u0645\u062A\u0637\u0627\u0628\u0642\u0629 \u0645\u0639 \u0627\u0644\u0645\u0646\u0635\u0629")).catch(() => pushLog("server", "\u23F3 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u062A\u064F\u0639\u0627\u062F \u0627\u0644\u0645\u0631\u0627\u062C\u0639\u0629 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0641\u0648\u0631 \u062A\u0648\u0641\u0631 \u0627\u0644\u0634\u0628\u0643\u0629"));
-  scanRadar().catch(() => {
-  });
-}, 1500);
-setInterval(() => {
+async function jfetch(url, ms = 2500, payload) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
   try {
-    const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || S._savedAt || Date.now());
-    const idleMin = Math.max(0, Math.round(idleMs / 6e4));
-    pushLog("server", "\u{1F4A1} \u0646\u0628\u0636\u0629 " + SRV_VER + " \u2014 \u0627\u0644\u0639\u0645\u0644\u0629: " + (S.config.displaySymbol || "?") + " \u2014 \u0628\u0644\u0627 \u062A\u0646\u0641\u064A\u0630 \u0645\u0646\u0630 " + idleMin + " \u062F" + (S.position ? " \u2014 \u0645\u0631\u0643\u0632 \u0645\u0641\u062A\u0648\u062D \u064A\u064F\u062F\u0627\u0631 \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A" : " \u2014 \u0627\u0644\u062F\u0648\u0631\u0627\u0646 \u0627\u0644\u062A\u0644\u0642\u0627\u0626\u064A \u0639\u0646\u062F 15 \u062F") + " \u2014 \u0627\u0644\u062D\u0627\u0644\u0629: " + (S.status || "\u061F"));
+    const r = await fetch(url, payload ? { method: "POST", signal: c.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) } : { signal: c.signal });
+    clearTimeout(t);
+    return await r.json();
   } catch {
+    clearTimeout(t);
+    return null;
   }
-}, 30 * 60 * 1e3).unref?.();
+}
+var PORT = BASE_PORT + SLOT;
+if (SLOT > 0) {
+  pushLog("server", "\u2705 " + SRV_VER + " \u2014 \u0645\u062D\u0631\u0643 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 \u0631\u0642\u0645 " + SLOT + "/" + FLEET_N + " \u2014 \u0646\u0635\u064A\u0628\u0647 \u0645\u0646 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644: \xF7" + FLEET_N + " \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B \u2014 \u062A\u0628\u062F\u064A\u0644\u0647 \u0648\u062C\u0646\u064A\u0647 \u0645\u0633\u062A\u0642\u0644\u0627\u0646");
+  const fleetSync = () => jfetch("http://127.0.0.1:" + BASE_PORT + "/fleet?i=" + SLOT).then((f) => {
+    if (f && Array.isArray(f.taken)) {
+      S._fleetTaken = f.taken.map((t) => t.sym);
+      const clash = f.taken.find((t) => t.sym === S.config.symbol);
+      if (clash && clash.holder < SLOT && !S.position) {
+        S._harvestAt = Date.now();
+        S._reselectDone = false;
+        pushLog("server", "\u{1F6A6} \u062A\u0646\u0648\u064A\u0639 \u0627\u0644\u0623\u0633\u0637\u0648\u0644: \u0639\u0645\u0644\u062A\u064A \u064A\u0633\u0643\u0646\u0647\u0627 \u0627\u0644\u0645\u062D\u0631\u0643 " + clash.holder + " \u2014 \u0627\u0646\u062A\u0642\u0627\u0644\u064A \u0644\u0623\u0641\u0636\u0644 \u0628\u062F\u064A\u0644 \u0645\u062A\u0627\u062D");
+      }
+    }
+  }).catch(() => {
+  });
+  setTimeout(fleetSync, 2e3);
+  setInterval(fleetSync, 3e4).unref?.();
+  setTimeout(() => {
+    liveSync().then(() => pushLog("server", "\u{1F527} \u0627\u0643\u062A\u0645\u0644\u062A \u0645\u0631\u0627\u062C\u0639\u0629 \u0627\u0644\u0648\u0636\u0639 \u0639\u0646\u062F \u0625\u0642\u0644\u0627\u0639 \u0627\u0644\u0645\u062D\u0631\u0643 " + SLOT + " \u2014 \u0645\u062A\u0637\u0627\u0628\u0642 \u0645\u0639 \u0627\u0644\u0645\u0646\u0635\u0629")).catch(() => {
+    });
+    scanRadar().catch(() => {
+    });
+  }, 1500 + SLOT * 300);
+}
+var slotStates = [];
+async function pollSlots() {
+  for (let i = 1; i <= FLEET_N; i++) {
+    const j = await jfetch("http://127.0.0.1:" + (BASE_PORT + i) + "/state", 2e3);
+    if (j && j.ok && j.state) slotStates[i] = j.state;
+  }
+}
+setInterval(pollSlots, 15e3).unref?.();
+function mergedState() {
+  const live = [];
+  for (let i = 1; i <= FLEET_N; i++) if (slotStates[i]) live.push(slotStates[i]);
+  if (!live.length) return null;
+  const primary = live.find((x) => x.position) || live[0];
+  const st = { ...primary };
+  st.journal = live.flatMap((x) => x.journal || []).sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 120);
+  st.logs = live.flatMap((x) => x.logs || []).sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 120);
+  st.realizedPnl = live.reduce((a, x) => a + (x.realizedPnl || 0), 0);
+  st.feesPaid = live.reduce((a, x) => a + (x.feesPaid || 0), 0);
+  st.cycleHarvested = live.reduce((a, x) => a + (x.cycleHarvested || 0), 0);
+  st.config = { ...primary.config || {}, cycleBalance: live.reduce((a, x) => a + (x.config?.cycleBalance || 0), 0) };
+  st.status = live.some((x) => x.status === "running") ? "running" : live[0]?.status || "idle";
+  st.fleet = live.map((x, idx) => ({
+    slot: idx + 1,
+    symbol: x.config?.symbol,
+    disp: x.config?.displaySymbol,
+    position: !!x.position,
+    net: x.position ? x.position.unrealized : 0,
+    balance: x.config?.cycleBalance,
+    running: x.status === "running"
+  }));
+  return st;
+}
 var srv = createServer(async (req, res) => {
   try {
     if (req.method === "OPTIONS") {
@@ -5013,9 +5078,67 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: SRV_VER, at: Date.now() });
-    if (req.method === "GET" && u.pathname === "/state")
-      return send(res, 200, { ok: true, at: Date.now(), state: S });
+      return send(res, 200, { ok: true, name: "TRQ-TRADING Fleet Server", version: SRV_VER, fleet: FLEET_N, at: Date.now() });
+    if (SLOT > 0) {
+      if (req.method === "GET" && u.pathname === "/state")
+        return send(res, 200, { ok: true, at: Date.now(), state: S });
+      if (req.method === "POST" && u.pathname === "/cmd") {
+        let body = "";
+        for await (const chunk of req) body += chunk;
+        let j = {};
+        try {
+          j = JSON.parse(body || "{}");
+        } catch {
+        }
+        const a = String(j.action || "");
+        switch (a) {
+          case "start":
+            startBot();
+            return send(res, 200, { ok: true });
+          case "pause":
+            pauseBot();
+            return send(res, 200, { ok: true });
+          case "stop":
+            await stopBot();
+            return send(res, 200, { ok: true });
+          case "newCycle":
+            newCycle();
+            return send(res, 200, { ok: true });
+          case "saveCfg":
+            saveCfg(j.cfg || {});
+            return send(res, 200, { ok: true });
+          case "saveKeys": {
+            const ok = await saveKeys(j.keys || {});
+            return send(res, 200, { ok: !!ok, error: ok ? null : "\u0641\u0634\u0644 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0645\u0641\u0627\u062A\u064A\u062D" });
+          }
+          case "clearKeys":
+            clearKeys();
+            return send(res, 200, { ok: true });
+          case "scanRadar":
+            await scanRadar();
+            return send(res, 200, { ok: true, radar: S.radar || null });
+          default:
+            return send(res, 400, { ok: false, error: "\u0625\u062C\u0631\u0627\u0621 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641: " + a });
+        }
+      }
+      send(res, 404, { ok: false, error: "not found" });
+      return;
+    }
+    if (req.method === "GET" && u.pathname === "/fleet") {
+      const i = parseInt(u.searchParams.get("i") || "0", 10) || 0;
+      const taken = [];
+      for (let k = 1; k <= FLEET_N; k++) {
+        if (k === i) continue;
+        const st = slotStates[k];
+        if (st && st.config && st.config.symbol) taken.push({ sym: st.config.symbol, holder: k });
+      }
+      return send(res, 200, { ok: true, taken });
+    }
+    if (req.method === "GET" && u.pathname === "/state") {
+      const st = mergedState();
+      if (!st) return send(res, 200, { ok: true, at: Date.now(), state: { status: "idle", heartbeat: Date.now(), logs: [], journal: [], grid: [], config: { cycleBalance: 0 }, fleet: [] } });
+      return send(res, 200, { ok: true, at: Date.now(), state: st });
+    }
     if (req.method === "POST" && u.pathname === "/cmd") {
       let body = "";
       for await (const chunk of req) body += chunk;
@@ -5025,35 +5148,21 @@ var srv = createServer(async (req, res) => {
       } catch {
       }
       const a = String(j.action || "");
-      switch (a) {
-        case "start":
-          startBot();
-          return send(res, 200, { ok: true });
-        case "pause":
-          pauseBot();
-          return send(res, 200, { ok: true });
-        case "stop":
-          await stopBot();
-          return send(res, 200, { ok: true });
-        case "newCycle":
-          newCycle();
-          return send(res, 200, { ok: true });
-        case "saveCfg":
-          saveCfg(j.cfg || {});
-          return send(res, 200, { ok: true });
-        case "saveKeys": {
-          const ok = await saveKeys(j.keys || {});
-          return send(res, 200, { ok: !!ok, error: ok ? null : "\u0641\u0634\u0644 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0645\u0641\u0627\u062A\u064A\u062D" });
-        }
-        case "clearKeys":
-          clearKeys();
-          return send(res, 200, { ok: true });
-        case "scanRadar":
-          await scanRadar();
-          return send(res, 200, { ok: true, radar: S.radar || null });
-        default:
-          return send(res, 400, { ok: false, error: "\u0625\u062C\u0631\u0627\u0621 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641: " + a });
+      let payload = j;
+      if (a === "saveCfg" && j.cfg) {
+        const { symbol: symbol2, displaySymbol, ...rest } = j.cfg;
+        if (rest.cycleBalance != null) rest.cycleBalance = Math.max(1, Math.round(+rest.cycleBalance / FLEET_N * 100) / 100);
+        payload = { ...j, cfg: rest };
       }
+      const results = await Promise.all(
+        Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 5e3, payload))
+      );
+      const ok = results.some((r) => r && r.ok);
+      if (a === "scanRadar") {
+        const st = mergedState();
+        return send(res, 200, { ok: true, radar: st ? st.radar || null : null });
+      }
+      return send(res, 200, { ok, fleet: results.map((r) => !!(r && r.ok)) });
     }
     send(res, 404, { ok: false, error: "not found" });
   } catch (e) {
@@ -5061,8 +5170,38 @@ var srv = createServer(async (req, res) => {
   }
 });
 srv.listen(PORT, "127.0.0.1", () => {
-  console.log("[AB-KING] \u0633\u064A\u0631\u0641\u0631 \u0627\u0644\u062C\u0648\u0627\u0644 \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT);
-  console.log("[AB-KING] \u0627\u0641\u062A\u062D \u062A\u0637\u0628\u064A\u0642 AB-KING \u2014 \u0633\u064A\u0643\u062A\u0634\u0641 \u0627\u0644\u0633\u064A\u0631\u0641\u0631 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0648\u064A\u062A\u062D\u0648\u0644 \u0644\u0648\u0636\u0639 \u0627\u0644\u0648\u0627\u062C\u0647\u0629");
+  if (SLOT > 0) {
+    console.log("[TRQ] \u0645\u062D\u0631\u0643 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + SLOT + " \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT);
+  } else {
+    console.log("[TRQ] \u0645\u0646\u0633\u0642 \u0623\u0633\u0637\u0648\u0644 TRQ-TRADING \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT + " \u2014 \u064A\u064F\u0637\u0644\u0642 " + FLEET_N + " \u0645\u062D\u0631\u0643\u0627\u062A");
+    pushLog("server", "\u{1F680} \u0623\u0633\u0637\u0648\u0644 TRQ-TRADING \u0627\u0646\u0637\u0644\u0642 \u2014 " + FLEET_N + " \u0645\u062D\u0631\u0643\u0627\u062A \u0645\u0633\u062A\u0642\u0644\u0629\u060C \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644 \xF7 " + FLEET_N + " \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B\u060C \u0643\u0644 \u0639\u0645\u0644\u0629 \u0628\u0645\u062D\u0631\u0643 \u0648\u062C\u0646\u064A \u0645\u0633\u062A\u0642\u0644\u064A\u0646");
+    const self = process.argv[1];
+    for (let i = 1; i <= FLEET_N; i++) {
+      const child = spawn(process.execPath, [self], {
+        env: { ...process.env, ABKING_SLOT: String(i) },
+        stdio: ["ignore", "inherit", "inherit"],
+        detached: false
+      });
+      child.on("exit", (code) => {
+        console.log("[TRQ] \u0645\u062D\u0631\u0643 " + i + " \u062E\u0631\u062C (" + code + ") \u2014 \u0625\u0639\u0627\u062F\u0629 \u062A\u0634\u063A\u064A\u0644\u0647 \u062E\u0644\u0627\u0644 5 \u062B");
+        setTimeout(() => {
+          try {
+            spawn(process.execPath, [self], { env: { ...process.env, ABKING_SLOT: String(i) }, stdio: ["ignore", "inherit", "inherit"], detached: false });
+          } catch {
+          }
+        }, 5e3);
+      });
+    }
+    setTimeout(pollSlots, 4e3);
+    setInterval(() => {
+      try {
+        const st = mergedState();
+        const fl = st ? st.fleet || [] : [];
+        pushLog("server", "\u{1F4A1} \u0646\u0628\u0636\u0629 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + SRV_VER + " \u2014 " + fl.length + "/" + FLEET_N + " \u0645\u062D\u0631\u0643\u0627\u062A \u062D\u064A\u0629: " + (fl.map((f) => (f.disp || "?") + (f.position ? " (\u0645\u0631\u0643\u0632 " + (f.net >= 0 ? "+" : "") + f.net.toFixed(2) + ")" : "")).join(" \xB7 ") || "\u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0625\u0642\u0644\u0627\u0639"));
+      } catch {
+      }
+    }, 30 * 60 * 1e3).unref?.();
+  }
 });
 initEngine();
-console.log("[AB-KING] \u0627\u0644\u0645\u062D\u0631\u0643 \u0628\u062F\u0623 \u2014 \u0623\u0628\u0642\u0650 Termux \u062D\u064A\u064B\u0627 (termux-wake-lock \u0645\u0641\u0639\u0651\u0644)");
+if (SLOT === 0) console.log("[TRQ] \u0627\u0644\u0645\u0646\u0633\u0642 \u062C\u0627\u0647\u0632 \u2014 \u0623\u0628\u0642\u0650 Termux \u062D\u064A\u064B\u0627 (\u0627\u0644\u062D\u0627\u0631\u0633 \u0627\u0644\u0630\u0627\u062A\u064A \u064A\u062D\u0645\u064A \u0627\u0644\u0623\u0633\u0637\u0648\u0644 \u0643\u0644\u0647)");
