@@ -1,14 +1,14 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace = "com.trq.trading"
+    namespace = "com.abking.trading"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
         applicationId "com.trq.trading"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 36
-        versionName "1.0.35"
+        versionCode 37
+        versionName "1.0.36"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
