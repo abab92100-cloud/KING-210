@@ -122,7 +122,7 @@ async function connect(){
       subscribe();
       pingTimer=setInterval(()=>{
         try{ socket.send(JSON.stringify({id:String(Date.now()),type:'ping'})); }catch{ /* intentional: optional step */ }
-      },Math.max(5000,b.pingInterval-2000));
+      },Math.min(8000,Math.max(5000,b.pingInterval-2000))); // كل 8 ث — هامش أمان كبير: KuCoin يقطع عند 18ث، و16ث كانت تُقطع عند أي انشغال
       // مراقب النبض: إن صمت الخادم أكثر من المهلة نُغلق لإجبار إعادة الاتصال
       watchTimer=setInterval(()=>{
         if(Date.now()-streamState.lastMsgAt>b.pingInterval+b.pingTimeout+4000){

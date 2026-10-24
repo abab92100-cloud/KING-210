@@ -1,3 +1,4 @@
+(window as any).__FLEET_POLL_SLOW = true; // أسطول: مزامنة أنعم كل 2.5ث تخفف حمل الجوال وتحمي نبض القناة
 import { useEffect, useState } from 'react';
 import {
   S, subscribe, initEngine, remoteSync, detectRemoteServer, startBot, pauseBot, stopBot, newCycle,

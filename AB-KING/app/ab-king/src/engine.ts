@@ -1191,11 +1191,24 @@ export function priceKick(){ const t=S.priceTrail||[]; if(t.length<12) return {u
    نشطه: بعد 4 تعبئات دخول. إطلاقه: هدوء التقلب (لا فرملة) + مرور دقيقتين
    + اكتمال دراسة جديدة بدأت بعد التوقف. عند الإطلاق: دفعة جديدة 4 أوامر */
 export function batchHoldActive(){
+  // ─── تتبع أقصى انزلاق أثناء التوقف (درس PEPE 18 أمراً): الإطلاق لا يكون
+  // بالوقت وحده — بل بعد توقف السقوط فعلياً: لا قاع/قمة جديدة ضد المركز
+  // منذ 8 دقائق كاملة. انزلاق مستمر = توقف مطلق حتى يستقر ───
+  if(S.position&&S._batchHoldAt&&S.lastPrice>0){
+    const p=S.lastPrice, long=S.position.side==='long';
+    const worst=(S._batchWorst==null)?p:(long?Math.min(S._batchWorst,p):Math.max(S._batchWorst,p));
+    if(worst!==S._batchWorst){ S._batchWorst=worst; S._batchWorseAt=Date.now(); } }
   if((S._batchFills||0)<4) return false;
+  // نبضة اطمئنان كل 10 د أثناء التوقف الطويل — المالك يرى أن القاطع يعمل
+  if(S._batchHoldAt&&(!S._batchHoldLogAt||Date.now()-S._batchHoldLogAt>600000)){
+    S._batchHoldLogAt=Date.now();
+    pushLog('server','🧷 القاطع ماضٍ: '+S._batchFills+' أوامر دخول — توقف حتى يتوقف الانزلاق الفعلي + دراسة جديدة'); }
   if(S._batchHoldAt&&S._batchStudiedAt&&S.studyUntil===0&&
-     Date.now()-S._batchHoldAt>120000&&!volBrakeActive()){
-    S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false;
-    pushLog('server','✅ القاطع أُطلق: السوق استقر واكتملت الدراسة — دفعة جديدة حتى 4 أوامر بتباعد معقول');
+     Date.now()-S._batchHoldAt>600000&&                              // حد أدنى: 10 دقائق
+     (S._batchWorseAt?Date.now()-S._batchWorseAt>480000:true)&&     // لا انزلاق جديد منذ 8 د
+     !volBrakeActive()){
+    S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false; S._batchWorst=null; S._batchWorseAt=0; S._batchHoldLogAt=0;
+    pushLog('server','✅ القاطع أُطلق: توقف الانزلاق منذ 8+ دقائق واكتملت الدراسة — دفعة جديدة حتى 4 أوامر');
     return false; }
   if(S._batchHoldAt&&!S._batchStudiedAt){ S._batchStudiedAt=true;
     startStudy(false); // دراسة جيدة جديدة قبل أي عودة — بصمة محدثة للوضع الحالي
@@ -1751,6 +1764,7 @@ function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
   S._reselectDone=false; // إعادة الاختيار الإجباري بعد كل جني (قاعدة المالك)
   S._posPeakNet=null; // ذروة جديدة لكل دورة — قفل الذروة لا يتسرب بين الصفقات
   S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false; // القاطع المرحلي: دفعة جديدة لكل دورة
+  S._batchWorst=null; S._batchWorseAt=0; S._batchHoldLogAt=0;
   S._guardId=null; S._tpBanked=0; S._trailFloor=0;
   for(const g of S.grid){ if(g.status==='armed'||g.status==='open'||g.status==='staged'){
     g.status='cancelled'; g.exchangeOrderId=null; } }
@@ -2256,6 +2270,12 @@ function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
   const d=applyDelta(hit.side,hit.qty,p);
   // التنفيذ الحقيقي ملك دورة المحرك وحدها (ترسل الأمر قبل الاستدعاء) —
   // إرسال ثانٍ هنا كان يضاعف حجم كل صفقة صيد على المنصة
+  if(d.addedQty>0){ // القاطع المرحلي: تعبئات الصيد تُحسب في دفعة الـ4 مثل الشبكة
+    S._batchFills=(S._batchFills||0)+1;
+    if(S._batchFills>=4&&!S._batchHoldAt){
+      S._batchHoldAt=Date.now(); S._batchStudiedAt=false; S._batchWorst=null; S._batchWorseAt=0;
+      cancelPendingAdds();
+      pushLog('server','🧷 القاطع المرحلي (صيد): اكتملت 4 أوامر دخول — توقف الفتح حتى يتوقف الانزلاق + دراسة ثم 4 أخرى'); } }
   if(d.closedQty>0){ const of=S.journal.find(j=>j.status==='open')?.fees||0;
     noteClose(d.closedQty,p,fee,'صفقة',d.realized-of-fee); S.huntOpen=Math.max(0,(S.huntOpen||0)-1); }
   if(d.addedQty>0){ S.huntCount++; S.huntOpen=(S.huntOpen||0)+1;
@@ -3164,7 +3184,7 @@ export function initEngine(){
     if(found){ clearInterval(_detect);
       pushLog('info','تم اكتشاف سيرفر الجوال — التحول لوضع المرآة، المحرك المحلي توقف');
       try{ S.status='idle'; if(S.config.mode!=='live'){ S.grid=[]; S.position=null; } saveAll(); }catch(e){ logSwallow("local-stop", e); }
-      remoteSync(); setInterval(remoteSync,1200); }
+      remoteSync(); setInterval(remoteSync,(typeof window!=='undefined'&&(window as any).__FLEET_POLL_SLOW)?2500:1200); }
   },5000);
   loadAll();
   if(S.config.symbol==='BTCUSDTM') S.config.symbol='XBTUSDTM'; // الرمز الصحيح في عقود KuCoin
