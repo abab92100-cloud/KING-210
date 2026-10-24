@@ -1341,7 +1341,11 @@ function tooClose(a,b,st){ return a>0&&b>0&&Math.abs(a-b)/Math.max(a,b)*100<st*0
 // مجموع النسب، فيخرج أول أمر = وحدة واحدة وكل لاحق يزيد نصف وحدة بالنسبة.
 // رصيد 100 → وحدة صغيرة · رصيد 186 → وحدة أكبر · ويتدرج تلقائيًا مع أي مبلغ
 export function levelQtys(center,n){ const c=S.config;
-  const cv=Math.max(1e-12,(S.multiplier||1)*center); // قيمة العقد الواحد بالدولار
+  // ─── بوابة المواصفات (درس DOGE: 81 لوت حُسبت بمضاعف PENGU القديم =
+  // تضخم 9× = 621$ على محرك رصيده 34$): لا حساب حجم أبداً قبل توثيق
+  // مضاعف عقد العملة الحالية نفسها (_metaSym) ───
+  if(S._metaSym!==c.symbol||!(S.multiplier>0)) return [];
+  const cv=Math.max(1e-12,S.multiplier*center); // قيمة العقد الواحد بالدولار
   // الرافعة ثابتة = ما ضبطه المالك حرفيًا (بأمره: لا تكيّف ولا مرونة) —
   // وتُفرض القيمة نفسها على المنصة عبر changeCrossUserLeverage في liveSync
   const lev=Math.max(1,c.leverage);
@@ -2195,6 +2199,8 @@ function packHunt(p:any){
   if(!(S.multiplier>0)){ pushLog('warn','بانتظار مواصفات العقد — لا دخول بحجم غير معروف'); return null; }
   return {side:S.config.direction==='short'?'sell':'buy',qty:contractsForLevel(p)}; }
 function huntTrigger(p){ if(S.status!=='running'||!p) return null;
+  // بوابة المواصفات: لا صيد قبل توثيق مضاعف هذه العملة — سباق الانتقال يضخم الحجم
+  if(S._metaSym!==S.config.symbol||!(S.multiplier>0)) return null;
   if(!warmedUp()) return null;
   // ─── فيتو الاندفاع (قاعدة المالك): حركة قوية جارية ضد الاتجاه = لا دخول حتى تستقر ───
   const kick=priceKick();
@@ -3122,6 +3128,12 @@ export function saveCfg(v){
     S._btcImp=null; S._btcPrev=null; S._actHist=[]; S._actMed=0; S._actAt=0; S._tradeTs=[];
     S._lossStreak=null; S._lastSig=null; S._vetoAt=0; S._guardPx=0; S._guardLogged=false; S._guardId=null;
     setStreamSymbol(sym);
+    // مواصفات العقد الجديد فوراً — لا تُترك للمزامنة البطيئة (429 يطيلها):
+    // وطالما البوابة مغلقة بلا مواصفات، النافذة بلا حجم بأي حال (صمام مزدوج)
+    fetchContract(sym).then((ct:any)=>{ if(ct&&+ct.multiplier>0&&S.config.symbol===sym){
+      S.multiplier=+ct.multiplier; S.tickSize=+ct.tickSize||S.tickSize;
+      S._metaSym=sym; S._metaAt=Date.now(); if(+ct.maxOrderQty>0) S.maxOrderQty=+ct.maxOrderQty;
+      pushLog('server','📐 مواصفات '+S.config.displaySymbol+' موثقة: مضاعف العقد '+S.multiplier+' — فُتح باب الحجم'); } }).catch(()=>{});
     // ─── درس الأرقام الخيالية: صفوف الزوج السابق المفتوحة كانت تُقفل بعملة
     // جديدة بمضاعفاتها (صف DOGE بمضاعف PEPE = ±40K وهمية تسمم الرصيد!) —
     // تبديل العملة يعني موت كل صف مفتوح: تُزال ولا تُطابق أبداً ───
