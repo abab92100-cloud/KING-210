@@ -152,7 +152,7 @@ async function connect() {
           socket.send(JSON.stringify({ id: String(Date.now()), type: "ping" }));
         } catch {
         }
-      }, Math.max(5e3, b.pingInterval - 2e3));
+      }, Math.min(8e3, Math.max(5e3, b.pingInterval - 2e3)));
       watchTimer = setInterval(() => {
         if (Date.now() - streamState.lastMsgAt > b.pingInterval + b.pingTimeout + 4e3) {
           try {
@@ -1994,12 +1994,29 @@ function priceKick() {
   return { up: chg > 0 ? chg : 0, down: chg < 0 ? -chg : 0 };
 }
 function batchHoldActive() {
+  if (S.position && S._batchHoldAt && S.lastPrice > 0) {
+    const p = S.lastPrice, long = S.position.side === "long";
+    const worst = S._batchWorst == null ? p : long ? Math.min(S._batchWorst, p) : Math.max(S._batchWorst, p);
+    if (worst !== S._batchWorst) {
+      S._batchWorst = worst;
+      S._batchWorseAt = Date.now();
+    }
+  }
   if ((S._batchFills || 0) < 4) return false;
-  if (S._batchHoldAt && S._batchStudiedAt && S.studyUntil === 0 && Date.now() - S._batchHoldAt > 12e4 && !volBrakeActive()) {
+  if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 6e5)) {
+    S._batchHoldLogAt = Date.now();
+    pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D: " + S._batchFills + " \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u062A\u0648\u0642\u0641 \u062D\u062A\u0649 \u064A\u062A\u0648\u0642\u0641 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0627\u0644\u0641\u0639\u0644\u064A + \u062F\u0631\u0627\u0633\u0629 \u062C\u062F\u064A\u062F\u0629");
+  }
+  if (S._batchHoldAt && S._batchStudiedAt && S.studyUntil === 0 && Date.now() - S._batchHoldAt > 6e5 && // حد أدنى: 10 دقائق
+  (S._batchWorseAt ? Date.now() - S._batchWorseAt > 48e4 : true) && // لا انزلاق جديد منذ 8 د
+  !volBrakeActive()) {
     S._batchFills = 0;
     S._batchHoldAt = 0;
     S._batchStudiedAt = false;
-    pushLog("server", "\u2705 \u0627\u0644\u0642\u0627\u0637\u0639 \u0623\u064F\u0637\u0644\u0642: \u0627\u0644\u0633\u0648\u0642 \u0627\u0633\u062A\u0642\u0631 \u0648\u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u062F\u0631\u0627\u0633\u0629 \u2014 \u062F\u0641\u0639\u0629 \u062C\u062F\u064A\u062F\u0629 \u062D\u062A\u0649 4 \u0623\u0648\u0627\u0645\u0631 \u0628\u062A\u0628\u0627\u0639\u062F \u0645\u0639\u0642\u0648\u0644");
+    S._batchWorst = null;
+    S._batchWorseAt = 0;
+    S._batchHoldLogAt = 0;
+    pushLog("server", "\u2705 \u0627\u0644\u0642\u0627\u0637\u0639 \u0623\u064F\u0637\u0644\u0642: \u062A\u0648\u0642\u0641 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u0646\u0630 8+ \u062F\u0642\u0627\u0626\u0642 \u0648\u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u062F\u0631\u0627\u0633\u0629 \u2014 \u062F\u0641\u0639\u0629 \u062C\u062F\u064A\u062F\u0629 \u062D\u062A\u0649 4 \u0623\u0648\u0627\u0645\u0631");
     return false;
   }
   if (S._batchHoldAt && !S._batchStudiedAt) {
@@ -2818,6 +2835,9 @@ function _harvestCleanup(fp) {
   S._batchFills = 0;
   S._batchHoldAt = 0;
   S._batchStudiedAt = false;
+  S._batchWorst = null;
+  S._batchWorseAt = 0;
+  S._batchHoldLogAt = 0;
   S._guardId = null;
   S._tpBanked = 0;
   S._trailFloor = 0;
@@ -3467,6 +3487,17 @@ function maybeHunt(p) {
   const fee = feeFor(hit.qty * (S.multiplier || 1) * p, true);
   S.feesPaid += fee;
   const d = applyDelta(hit.side, hit.qty, p);
+  if (d.addedQty > 0) {
+    S._batchFills = (S._batchFills || 0) + 1;
+    if (S._batchFills >= 4 && !S._batchHoldAt) {
+      S._batchHoldAt = Date.now();
+      S._batchStudiedAt = false;
+      S._batchWorst = null;
+      S._batchWorseAt = 0;
+      cancelPendingAdds();
+      pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0627\u0644\u0645\u0631\u062D\u0644\u064A (\u0635\u064A\u062F): \u0627\u0643\u062A\u0645\u0644\u062A 4 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u062A\u0648\u0642\u0641 \u0627\u0644\u0641\u062A\u062D \u062D\u062A\u0649 \u064A\u062A\u0648\u0642\u0641 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 + \u062F\u0631\u0627\u0633\u0629 \u062B\u0645 4 \u0623\u062E\u0631\u0649");
+    }
+  }
   if (d.closedQty > 0) {
     const of = S.journal.find((j) => j.status === "open")?.fees || 0;
     noteClose(d.closedQty, p, fee, "\u0635\u0641\u0642\u0629", d.realized - of - fee);
@@ -4843,7 +4874,7 @@ function initEngine() {
         logSwallow("local-stop", e);
       }
       remoteSync();
-      setInterval(remoteSync, 1200);
+      setInterval(remoteSync, typeof window !== "undefined" && window.__FLEET_POLL_SLOW ? 2500 : 1200);
     }
   }, 5e3);
   loadAll();
@@ -5229,7 +5260,7 @@ async function pollSlots() {
     if (j && j.ok && j.state) slotStates[i] = j.state;
   }
 }
-setInterval(pollSlots, 8e3).unref?.();
+setInterval(pollSlots, 1e4).unref?.();
 function mergedState(selIn = 0) {
   const live = [];
   for (let i = 1; i <= FLEET_N; i++) if (slotStates[i]) live.push(slotStates[i]);
@@ -5273,12 +5304,16 @@ var srv = createServer(async (req, res) => {
     if (SLOT > 0) {
       if (req.method === "GET" && u.pathname === "/state") {
         const lp = S.lastPrice || 0, mult = S.multiplier || 1, taker = S.takerFee || 6e-4;
-        const st = { ...S, journal: (S.journal || []).map((r) => {
-          if (r.status !== "open") return r;
-          const feeEst = lp ? r.qty * mult * lp * taker : 0;
-          const f = lp ? (r.side === "short" ? 1 : -1) * (r.entry - lp) * mult * r.qty - (r.fees || 0) - feeEst : 0;
-          return { ...r, floatNet: Math.round((f + Number.EPSILON) * 100) / 100 };
-        }) };
+        const st = {
+          ...S,
+          journal: (S.journal || []).slice(-30).map((r) => {
+            if (r.status !== "open") return r;
+            const feeEst = lp ? r.qty * mult * lp * taker : 0;
+            const f = lp ? (r.side === "short" ? 1 : -1) * (r.entry - lp) * mult * r.qty - (r.fees || 0) - feeEst : 0;
+            return { ...r, floatNet: Math.round((f + Number.EPSILON) * 100) / 100 };
+          }),
+          logs: (S.logs || []).slice(-80)
+        };
         return send(res, 200, { ok: true, at: Date.now(), state: st });
       }
       if (req.method === "POST" && u.pathname === "/cmd") {
