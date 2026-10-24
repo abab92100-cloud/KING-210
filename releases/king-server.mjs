@@ -2375,7 +2375,8 @@ function tooClose(a, b, st) {
 }
 function levelQtys(center, n) {
   const c = S.config;
-  const cv = Math.max(1e-12, (S.multiplier || 1) * center);
+  if (S._metaSym !== c.symbol || !(S.multiplier > 0)) return [];
+  const cv = Math.max(1e-12, S.multiplier * center);
   const lev = Math.max(1, c.leverage);
   const total = Math.max(0, c.cycleBalance) * 0.8;
   const used = S.journal.filter((j) => j.status === "open" && (j.symbol === void 0 || j.symbol === S.config.displaySymbol)).reduce((a, j) => a + j.qty * (S.multiplier || 1) * j.entry, 0) / lev;
@@ -3537,6 +3538,7 @@ function packHunt(p) {
 }
 function huntTrigger(p) {
   if (S.status !== "running" || !p) return null;
+  if (S._metaSym !== S.config.symbol || !(S.multiplier > 0)) return null;
   if (!warmedUp()) return null;
   const kick = priceKick();
   const againstPump = S.config.direction === "short" && kick.up > 0.8 || S.config.direction === "long" && kick.down > 0.8;
@@ -4925,6 +4927,17 @@ function saveCfg(v) {
     S._guardLogged = false;
     S._guardId = null;
     setStreamSymbol(sym);
+    fetchContract(sym).then((ct) => {
+      if (ct && +ct.multiplier > 0 && S.config.symbol === sym) {
+        S.multiplier = +ct.multiplier;
+        S.tickSize = +ct.tickSize || S.tickSize;
+        S._metaSym = sym;
+        S._metaAt = Date.now();
+        if (+ct.maxOrderQty > 0) S.maxOrderQty = +ct.maxOrderQty;
+        pushLog("server", "\u{1F4D0} \u0645\u0648\u0627\u0635\u0641\u0627\u062A " + S.config.displaySymbol + " \u0645\u0648\u062B\u0642\u0629: \u0645\u0636\u0627\u0639\u0641 \u0627\u0644\u0639\u0642\u062F " + S.multiplier + " \u2014 \u0641\u064F\u062A\u062D \u0628\u0627\u0628 \u0627\u0644\u062D\u062C\u0645");
+      }
+    }).catch(() => {
+    });
     const __staleOpen = S.journal.filter((j) => j.status === "open");
     if (__staleOpen.length) {
       S.journal = S.journal.filter((j) => j.status !== "open");
