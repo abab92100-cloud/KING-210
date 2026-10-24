@@ -2137,12 +2137,15 @@ function batchHoldActive() {
     }
   }
   if ((S._batchFills || 0) < 4) return false;
-  if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 6e5)) {
+  const H = 36e5;
+  if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 18e5)) {
     S._batchHoldLogAt = Date.now();
-    pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D: " + S._batchFills + " \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u062A\u0648\u0642\u0641 \u062D\u062A\u0649 \u064A\u062A\u0648\u0642\u0641 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0627\u0644\u0641\u0639\u0644\u064A + \u062F\u0631\u0627\u0633\u0629 \u062C\u062F\u064A\u062F\u0629");
+    const el = Math.floor((Date.now() - S._batchHoldAt) / H), min = Math.floor((Date.now() - S._batchHoldAt) % H / 6e4);
+    const calm = S._batchWorseAt ? Math.floor((Date.now() - S._batchWorseAt) / H) : 0;
+    pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D: " + S._batchFills + " \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u0645\u0636\u0649 " + el + "\u0633" + min + "\u062F \u0645\u0646 \u0648\u062C\u0648\u0628 \u0627\u0644\u06403 \u0633\u0627\u0639\u0627\u062A" + (S._batchWorseAt ? Date.now() - S._batchWorseAt > H ? " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u062A\u0648\u0642\u0641 \u0645\u0646\u0630 " + calm + " \u0633\u0627\u0639\u0629" : " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u0627 \u0632\u0627\u0644 \u0646\u0634\u0637\u0627\u064B" : " \u2014 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629"));
   }
-  if (S._batchHoldAt && S._batchStudiedAt && S.studyUntil === 0 && Date.now() - S._batchHoldAt > 6e5 && // حد أدنى: 10 دقائق
-  (S._batchWorseAt ? Date.now() - S._batchWorseAt > 48e4 : true) && // لا انزلاق جديد منذ 8 د
+  if (S._batchHoldAt && S._batchStudiedAt && S.studyUntil === 0 && Date.now() - S._batchHoldAt > 3 * H && // حد أدنى: 3 ساعات كاملة
+  (S._batchWorseAt ? Date.now() - S._batchWorseAt > H : true) && // لا انزلاق جديد منذ ساعة كاملة
   !volBrakeActive()) {
     S._batchFills = 0;
     S._batchHoldAt = 0;
@@ -2150,7 +2153,7 @@ function batchHoldActive() {
     S._batchWorst = null;
     S._batchWorseAt = 0;
     S._batchHoldLogAt = 0;
-    pushLog("server", "\u2705 \u0627\u0644\u0642\u0627\u0637\u0639 \u0623\u064F\u0637\u0644\u0642: \u062A\u0648\u0642\u0641 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u0646\u0630 8+ \u062F\u0642\u0627\u0626\u0642 \u0648\u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u062F\u0631\u0627\u0633\u0629 \u2014 \u062F\u0641\u0639\u0629 \u062C\u062F\u064A\u062F\u0629 \u062D\u062A\u0649 4 \u0623\u0648\u0627\u0645\u0631");
+    pushLog("server", "\u2705 \u0627\u0644\u0642\u0627\u0637\u0639 \u0623\u064F\u0637\u0644\u0642 (\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u06403+1 \u0633\u0627\u0639\u0627\u062A): \u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u062A\u0648\u0642\u0641 \u0645\u0646\u0630 \u0633\u0627\u0639\u0629+ \u0648\u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u062F\u0631\u0627\u0633\u0629 \u0648\u0627\u0644\u0625\u0634\u0627\u0631\u0629 \u062C\u064A\u062F\u0629 \u2014 \u062F\u062E\u0648\u0644 \u0645\u062A\u0628\u0627\u0639\u062F \u062D\u062A\u0649 4 \u0623\u0648\u0627\u0645\u0631");
     return false;
   }
   if (S._batchHoldAt && !S._batchStudiedAt) {
