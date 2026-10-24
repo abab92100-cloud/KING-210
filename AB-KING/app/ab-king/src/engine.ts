@@ -1199,16 +1199,23 @@ export function batchHoldActive(){
     const worst=(S._batchWorst==null)?p:(long?Math.min(S._batchWorst,p):Math.max(S._batchWorst,p));
     if(worst!==S._batchWorst){ S._batchWorst=worst; S._batchWorseAt=Date.now(); } }
   if((S._batchFills||0)<4) return false;
-  // نبضة اطمئنان كل 10 د أثناء التوقف الطويل — المالك يرى أن القاطع يعمل
-  if(S._batchHoldAt&&(!S._batchHoldLogAt||Date.now()-S._batchHoldLogAt>600000)){
+  // ─── قاعدة المالك الزمنية (أمر 2026-10-24): انزلاق بعد 4 أوامر =
+  // توقف كامل 3 ساعات، ثم دراسة: استمرار الانزلاق = +ساعة إضافية ودراسة،
+  // ولا عودة إلا باستقرار فعلي (لا انزلاق جديد منذ ساعة كاملة) + إشارة
+  // جيدة — فحينها 4 أوامر متباعدة. جني الصفقة يُصفّر الدورة كلها ───
+  const H=3600000;
+  if(S._batchHoldAt&&(!S._batchHoldLogAt||Date.now()-S._batchHoldLogAt>1800000)){
     S._batchHoldLogAt=Date.now();
-    pushLog('server','🧷 القاطع ماضٍ: '+S._batchFills+' أوامر دخول — توقف حتى يتوقف الانزلاق الفعلي + دراسة جديدة'); }
+    const el=Math.floor((Date.now()-S._batchHoldAt)/H), min=Math.floor(((Date.now()-S._batchHoldAt)%H)/60000);
+    const calm=S._batchWorseAt?Math.floor((Date.now()-S._batchWorseAt)/H):0;
+    pushLog('server','🧷 القاطع ماضٍ: '+S._batchFills+' أوامر دخول — مضى '+el+'س'+min+'د من وجوب الـ3 ساعات'+
+      (S._batchWorseAt?(Date.now()-S._batchWorseAt>H?' — الانزلاق متوقف منذ '+calm+' ساعة':' — الانزلاق ما زال نشطاً'):' — بانتظار القراءة')); }
   if(S._batchHoldAt&&S._batchStudiedAt&&S.studyUntil===0&&
-     Date.now()-S._batchHoldAt>600000&&                              // حد أدنى: 10 دقائق
-     (S._batchWorseAt?Date.now()-S._batchWorseAt>480000:true)&&     // لا انزلاق جديد منذ 8 د
+     Date.now()-S._batchHoldAt>3*H&&                                // حد أدنى: 3 ساعات كاملة
+     (S._batchWorseAt?Date.now()-S._batchWorseAt>H:true)&&          // لا انزلاق جديد منذ ساعة كاملة
      !volBrakeActive()){
     S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false; S._batchWorst=null; S._batchWorseAt=0; S._batchHoldLogAt=0;
-    pushLog('server','✅ القاطع أُطلق: توقف الانزلاق منذ 8+ دقائق واكتملت الدراسة — دفعة جديدة حتى 4 أوامر');
+    pushLog('server','✅ القاطع أُطلق (قاعدة الـ3+1 ساعات): انزلاق متوقف منذ ساعة+ واكتملت الدراسة والإشارة جيدة — دخول متباعد حتى 4 أوامر');
     return false; }
   if(S._batchHoldAt&&!S._batchStudiedAt){ S._batchStudiedAt=true;
     startStudy(false); // دراسة جيدة جديدة قبل أي عودة — بصمة محدثة للوضع الحالي
