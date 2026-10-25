@@ -2944,6 +2944,11 @@ function creditExFillReal(l, delta, fp, realFee) {
 function fillLevel(id, fp, taker) {
   const l = S.grid.find((g) => g.id === id);
   if (!l || l.status === "filled") return;
+  if (!l.reduceOnly && batchHoldActive()) {
+    l.status = "cancelled";
+    l.exchangeOrderId = null;
+    return;
+  }
   if (!l.reduceOnly && coveringLoser(l, fp)) return;
   l.status = "filled";
   l.filledAt = Date.now();
@@ -3431,7 +3436,7 @@ function huntTrigger(p) {
     return packHunt(p);
   }
   if (toxicBlocked(S.config.direction)) return null;
-  if (S.position && batchHoldActive()) return null;
+  if (batchHoldActive()) return null;
   if (S.position && exposureCapped()) return null;
   if (S.position && volBrakeActive()) {
     if (!S._brkVetoAt || Date.now() - S._brkVetoAt > 18e4) {
@@ -3480,6 +3485,49 @@ function huntTrigger(p) {
 function maybeHunt(p) {
   const hit = huntTrigger(p);
   if (!hit) return false;
+  {
+    const W = 2 * 36e5, now = Date.now();
+    if (p > 0) {
+      if (!S._slideHi || now - (S._slideHiAt || 0) > W) {
+        S._slideHi = p;
+        S._slideHiAt = now;
+      } else if (p > S._slideHi) {
+        S._slideHi = p;
+        S._slideHiAt = now;
+      }
+      if (!S._slideLo || now - (S._slideLoAt || 0) > W) {
+        S._slideLo = p;
+        S._slideLoAt = now;
+      } else if (p < S._slideLo) {
+        S._slideLo = p;
+        S._slideLoAt = now;
+      }
+    }
+  }
+  {
+    const W = 2 * 36e5, now = Date.now(), long = hit.side !== "short", px = S.lastPrice || p;
+    let veto = "", why = "";
+    if (long && S._slideHiAt && now - S._slideHiAt < W && px > 0 && px < S._slideHi * 0.98) {
+      veto = "coin";
+      why = "\u0627\u0644\u0639\u0645\u0644\u0629 \u062A\u062D\u062A \u0642\u0645\u0629 \u0627\u0644\u0633\u0627\u0639\u062A\u064A\u0646 \u0628\u06402%+ \u2014 \u0647\u0628\u0648\u0637 \u0645\u0633\u062A\u062F\u0627\u0645";
+    } else if (!long && S._slideLoAt && now - S._slideLoAt < W && px > 0 && px > S._slideLo * 1.02) {
+      veto = "coin";
+      why = "\u0627\u0644\u0639\u0645\u0644\u0629 \u0641\u0648\u0642 \u0642\u0627\u0639 \u0627\u0644\u0633\u0627\u0639\u062A\u064A\u0646 \u0628\u06402%+ \u2014 \u0635\u0639\u0648\u062F \u0645\u0633\u062A\u062F\u0627\u0645";
+    } else if (long && S._btcHiAt && now - S._btcHiAt < W && S._btcPx > 0 && S._btcPx < S._btcHi * 0.985) {
+      veto = "btc";
+      why = "BTC \u062A\u062D\u062A \u0642\u0645\u062A\u0647 \u0628\u0633\u0627\u0639\u062A\u064A\u0646 \u0628\u06401.5%+ \u2014 \u0633\u0644\u0629 \u0627\u0644\u0645\u064A\u0645\u0632 \u062A\u0646\u0632\u0644 \u0645\u0639\u0627\u064B";
+    } else if (!long && S._btcLoAt && now - S._btcLoAt < W && S._btcPx > 0 && S._btcPx > S._btcLo * 1.015) {
+      veto = "btc";
+      why = "BTC \u0641\u0648\u0642 \u0642\u0627\u0639\u0647 \u0628\u0633\u0627\u0639\u062A\u064A\u0646 \u0628\u06401.5%+ \u2014 \u0627\u0644\u0633\u0644\u0629 \u062A\u0635\u0639\u062F \u0645\u0639\u0627\u064B";
+    }
+    if (veto) {
+      if (Date.now() - (S._slideVetoAt || 0) > 3e5) {
+        S._slideVetoAt = Date.now();
+        pushLog("server", "\u26D4 \u0641\u064A\u062A\u0648 \u0645\u0646\u0637\u0642\u0629 \u0627\u0644\u062F\u062E\u0648\u0644 (" + (veto === "btc" ? "\u0627\u0644\u0633\u0648\u0642" : "\u0627\u0644\u0639\u0645\u0644\u0629") + "): " + why + " \u2014 \u0644\u0627 \u062F\u062E\u0648\u0644 \u0627\u0644\u0622\u0646");
+      }
+      return false;
+    }
+  }
   if (!spacingGate(p)) {
     if (Date.now() - (S._gateLogAt || 0) > 12e4) {
       S._gateLogAt = Date.now();
@@ -3605,7 +3653,7 @@ function reversalAgainst(p) {
 function cancelPendingAdds() {
   const live = S.config.mode === "live" && S.keys;
   for (const g of S.grid) {
-    if (g.lane === "comp") continue;
+    if (g.lane === "comp" && !batchHoldActive()) continue;
     if (!g.reduceOnly && (g.status === "armed" || g.status === "open") && !g.filledAt) {
       g.status = "cancelled";
       if (live && g.exchangeOrderId) {
@@ -4057,6 +4105,24 @@ async function loadMarket(full) {
           S._btcImp = Math.round((bp - pv.px) / pv.px * 100 / dtMin * 1e4) / 1e4;
         }
         S._btcPrev = { px: bp, at: Date.now() };
+        {
+          const W = 2 * 36e5, now = Date.now();
+          S._btcPx = bp;
+          if (!S._btcHi || now - (S._btcHiAt || 0) > W) {
+            S._btcHi = bp;
+            S._btcHiAt = now;
+          } else if (bp > S._btcHi) {
+            S._btcHi = bp;
+            S._btcHiAt = now;
+          }
+          if (!S._btcLo || now - (S._btcLoAt || 0) > W) {
+            S._btcLo = bp;
+            S._btcLoAt = now;
+          } else if (bp < S._btcLo) {
+            S._btcLo = bp;
+            S._btcLoAt = now;
+          }
+        }
       }
     } catch (e) {
       logSwallow("silent-catch", e);
@@ -4809,6 +4875,11 @@ function saveCfg(v) {
       pushLog("server", "\u{1F9F9} \u0623\u064F\u0644\u063A\u064A\u062A " + __staleOpen.length + " \u0635\u0641\u0642\u0627\u062A \u0627\u0644\u0632\u0648\u062C \u0627\u0644\u0633\u0627\u0628\u0642 \u0627\u0644\u0645\u0641\u062A\u0648\u062D\u0629 \u2014 \u0633\u064A\u0627\u0642 \u0642\u062F\u064A\u0645 \u0644\u0627 \u064A\u064F\u0642\u0641\u0644 \u0628\u0639\u0645\u0644\u0629 \u062C\u062F\u064A\u062F\u0629");
     }
     S._dwellAt = Date.now();
+    S._slideHi = null;
+    S._slideHiAt = 0;
+    S._slideLo = null;
+    S._slideLoAt = 0;
+    S._slideVetoAt = 0;
     const pf = S.memory && S.memory.profiles && S.memory.profiles[sym];
     startStudy(!!(pf && Date.now() - pf.at < 24 * 3600 * 1e3));
     pushLog("server", "\u0627\u0646\u062A\u0642\u0627\u0644 \u0625\u0644\u0649 " + S.config.displaySymbol + " \u2014 \u0623\u064F\u0644\u063A\u064A\u062A \u062D\u0627\u0644\u0629 \u0627\u0644\u0632\u0648\u062C \u0627\u0644\u0633\u0627\u0628\u0642" + (pf && Date.now() - pf.at < 24 * 3600 * 1e3 ? " \xB7 \u0628\u0635\u0645\u062A\u0647\u0627 \u0645\u0639\u0631\u0648\u0641\u0629 \u2014 \u0625\u062D\u0645\u0627\u0621 \u0642\u0635\u064A\u0631" : " \xB7 \u062A\u064F\u062F\u0631\u0633 60 \u062B\u0627\u0646\u064A\u0629 \u0642\u0628\u0644 \u0623\u064A \u062F\u062E\u0648\u0644"));
