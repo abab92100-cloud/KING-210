@@ -1843,6 +1843,11 @@ function creditExFillReal(l,delta,fp,realFee){ if(!(delta>0)||!(fp>0)) return fa
   return false; }
 function fillLevel(id,fp,taker){ const l=S.grid.find(g=>g.id===id);
   if(!l||l.status==='filled') return;
+  // ─── البوابة الحديدية (قاعدة المالك، أمر 2026-10-25): أثناء توقف القاطع
+  // لا تنفَّذ أي تعبئة دخول مهما كان مسارها (شبكة/صيد/تعويض جني جزئي —
+  // ثقوب 8× و9× كلها من هنا). الجني reduceOnly وحده يعمل ───
+  if(!l.reduceOnly&&batchHoldActive()){
+    l.status='cancelled'; l.exchangeOrderId=null; return; }
   if(!l.reduceOnly&&coveringLoser(l,fp)) return;
   l.status='filled'; l.filledAt=Date.now(); l.filledPrice=fp;
   // كمية الجني الفعّالة = المتبقي فعلًا في المركز — تنفيذ جزئي سابق على المنصة
@@ -2233,7 +2238,7 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
     return packHunt(p); }
   if(toxicBlocked(S.config.direction)) return null;
   // القاطع المرحلي: لا إضافات صيد أثناءه
-  if(S.position&&batchHoldActive()) return null;
+  if(batchHoldActive()) return null;
   // سقف التعرّض: لا إضافات جديدة عنده — الحجم الكلي محكوم رياضياً
   if(S.position&&exposureCapped()) return null;
   // ─── إصلاح الكارثة: لا إضافات صيد مادامت فرملة التقلب نشطة — لا تغذية للانهيار ───
@@ -2276,6 +2281,29 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   S._lastSig=sig.slice(0,3).join(' · ');
   return packHunt(p); }
 function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
+  // ─── نافذة الانزلاق المستدام (ساعتان): تتبع قمم/قيعان النافذة ───
+  { const W=2*3600000, now=Date.now();
+    if(p>0){
+      if(!S._slideHi||now-(S._slideHiAt||0)>W){ S._slideHi=p; S._slideHiAt=now; }
+      else if(p>S._slideHi){ S._slideHi=p; S._slideHiAt=now; }
+      if(!S._slideLo||now-(S._slideLoAt||0)>W){ S._slideLo=p; S._slideLoAt=now; }
+      else if(p<S._slideLo){ S._slideLo=p; S._slideLoAt=now; } } }
+  // ─── فيتو مناطق الدخول (قاعدة المالك 2026-10-25): لا شراء في هبوط مستدام
+  // ولا بيع في صعود مستدام — لا العملة نفسها (تحت قمة ساعتينها بـ2%+) ولا
+  // سلة الميمز كلها إذا كان قائدها BTC تحت قمته بساعتين بـ1.5%+ ───
+  { const W=2*3600000, now=Date.now(), long=hit.side!=='short', px=S.lastPrice||p;
+    let veto='', why='';
+    if(long&&S._slideHiAt&&now-S._slideHiAt<W&&px>0&&px<S._slideHi*0.98)
+      { veto='coin'; why='العملة تحت قمة الساعتين بـ2%+ — هبوط مستدام'; }
+    else if(!long&&S._slideLoAt&&now-S._slideLoAt<W&&px>0&&px>S._slideLo*1.02)
+      { veto='coin'; why='العملة فوق قاع الساعتين بـ2%+ — صعود مستدام'; }
+    else if(long&&S._btcHiAt&&now-S._btcHiAt<W&&S._btcPx>0&&S._btcPx<S._btcHi*0.985)
+      { veto='btc'; why='BTC تحت قمته بساعتين بـ1.5%+ — سلة الميمز تنزل معاً'; }
+    else if(!long&&S._btcLoAt&&now-S._btcLoAt<W&&S._btcPx>0&&S._btcPx>S._btcLo*1.015)
+      { veto='btc'; why='BTC فوق قاعه بساعتين بـ1.5%+ — السلة تصعد معاً'; }
+    if(veto){ if(Date.now()-(S._slideVetoAt||0)>300000){ S._slideVetoAt=Date.now();
+        pushLog('server','⛔ فيتو منطقة الدخول ('+(veto==='btc'?'السوق':'العملة')+'): '+why+' — لا دخول الآن'); }
+      return false; } }
   if(!spacingGate(p)){ if(Date.now()-(S._gateLogAt||0)>120000){ S._gateLogAt=Date.now();
     pushLog('server','قفل التباعد: تُخّر دخول الصيد — للسعة قريبة جدًا من آخر تنفيذ'); } return false; }
   S.lastHuntAt=Date.now(); S.huntAnchor=p;
@@ -2370,7 +2398,8 @@ function reversalAgainst(p){ if(!S.position) return false;
   return false; }
 function cancelPendingAdds(){ const live=S.config.mode==='live'&&S.keys;
   for(const g of S.grid){
-  if(g.lane==='comp') continue; // مستويات تعويض الجني الجزئي مقدسة — تبقى حتى يكتمل المركز
+  // مستويات تعويض الجني الجزئي مقدسة — إلا أثناء توقف القاطع: لا تعويض يزيد تعرضاً
+  if(g.lane==='comp'&&!batchHoldActive()) continue;
   if(!g.reduceOnly&&(g.status==='armed'||g.status==='open')&&!g.filledAt){
     g.status='cancelled';
     // الحقيقي: الإلغاء على المنصة فورًا — الانتظار لدورة المزامنة (حتى 5ث) كان
@@ -2740,7 +2769,13 @@ async function loadMarket(full){
     if(bp>0){ const pv=S._btcPrev;
       if(pv&&pv.px>0){ const dtMin=Math.max(0.05,(Date.now()-pv.at)/60000);
         S._btcImp=Math.round(((bp-pv.px)/pv.px*100)/dtMin*10000)/10000; } // تغير % لكل دقيقة
-      S._btcPrev={px:bp,at:Date.now()}; } }catch(e){ logSwallow("silent-catch", e); } }
+      S._btcPrev={px:bp,at:Date.now()};
+      // نافذة ساعتين لقائد السوق — أساس فيتو السلة
+      { const W=2*3600000, now=Date.now(); S._btcPx=bp;
+        if(!S._btcHi||now-(S._btcHiAt||0)>W){ S._btcHi=bp; S._btcHiAt=now; }
+        else if(bp>S._btcHi){ S._btcHi=bp; S._btcHiAt=now; }
+        if(!S._btcLo||now-(S._btcLoAt||0)>W){ S._btcLo=bp; S._btcLoAt=now; }
+        else if(bp<S._btcLo){ S._btcLo=bp; S._btcLoAt=now; } } } }catch(e){ logSwallow("silent-catch", e); } }
   return m;
 }
 
@@ -3148,6 +3183,7 @@ export function saveCfg(v){
     if(__staleOpen.length){ S.journal=S.journal.filter(j=>j.status!=='open');
       pushLog('server','🧹 أُلغيت '+__staleOpen.length+' صفقات الزوج السابق المفتوحة — سياق قديم لا يُقفل بعملة جديدة'); }
     S._dwellAt=Date.now(); // بداية إقامة جديدة: لا تبديل جديد قبل 10 دقائق عمل فعلي
+    S._slideHi=null; S._slideHiAt=0; S._slideLo=null; S._slideLoAt=0; S._slideVetoAt=0;
     // بصمة العملة الجديدة: معروفة وحديثة = إحماء قصير · جديدة = دراسة كاملة قبل التداول
     const pf=S.memory&&S.memory.profiles&&S.memory.profiles[sym];
     startStudy(!!(pf&&Date.now()-pf.at<24*3600*1000));
