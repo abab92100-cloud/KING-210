@@ -177,8 +177,89 @@ jobs:
             /tmp/TRQ-latest.apk
             /tmp/trq-server.mjs
 
+  build-trg:
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.ref }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - name: Build web + server
+        working-directory: AB-KING/app/trg-new
+        run: |
+          npm ci
+          npm run build
+          npm run build:server
+      - name: Sync Capacitor Android
+        working-directory: AB-KING/app/trg-new
+        run: npx cap sync android
+      - name: Install ImageMagick
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick >/dev/null 2>&1 || true
+      - name: Generate launcher icons from assets/trg-app-icon.png
+        working-directory: AB-KING/app/trg-new/android/app/src/main/res
+        run: |
+          set -e
+          ICON="${GITHUB_WORKSPACE}/assets/trg-app-icon.png"
+          if [ ! -f "$ICON" ]; then echo "no TRG icon found"; exit 0; fi
+          convert "$ICON" -resize 1024x1024^ -gravity center -extent 1024x1024 /tmp/icon-master.png
+          convert /tmp/icon-master.png -resize 48x48   mipmap-mdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 72x72   mipmap-hdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 96x96   mipmap-xhdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 144x144 mipmap-xxhdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 192x192 mipmap-xxxhdpi/ic_launcher.png
+          convert /tmp/icon-master.png -resize 48x48   mipmap-mdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 72x72   mipmap-hdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 96x96   mipmap-xhdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 144x144 mipmap-xxhdpi/ic_launcher_round.png
+          convert /tmp/icon-master.png -resize 192x192 mipmap-xxxhdpi/ic_launcher_round.png
+          fg() { N=$1; S=$((N*66/100)); DEST=$2
+            convert -size ${N}x${N} xc:none               \( /tmp/icon-master.png -resize ${S}x${S} \)               -gravity center -composite "$DEST"; }
+          fg 108 mipmap-mdpi/ic_launcher_foreground.png
+          fg 162 mipmap-hdpi/ic_launcher_foreground.png
+          fg 216 mipmap-xhdpi/ic_launcher_foreground.png
+          fg 324 mipmap-xxhdpi/ic_launcher_foreground.png
+          fg 432 mipmap-xxxhdpi/ic_launcher_foreground.png
+          echo "TRG icons generated"
+      - name: Ensure stable release keystore
+        working-directory: AB-KING/app/trg-new/android
+        run: |
+          if [ ! -f king-release.keystore ]; then
+            keytool -genkeypair -v -keystore king-release.keystore -alias king-release               -keyalg RSA -keysize 2048 -validity 10950               -storepass KINGtrading2024 -keypass KINGtrading2024               -dname "CN=TRG-new, OU=Mobile, O=TRG, L=Riyadh, C=SA"
+          fi
+      - name: Sign with stable keystore
+        working-directory: AB-KING/app/trg-new/android
+        run: |
+          cat >> app/build.gradle <<'EOF'
+          android.signingConfigs {
+              kingRelease {
+                  storeFile rootProject.file('king-release.keystore')
+                  storePassword 'KINGtrading2024'
+                  keyAlias 'king-release'
+                  keyPassword 'KINGtrading2024'
+              }
+          }
+          android.buildTypes.release.signingConfig = android.signingConfigs.kingRelease
+          EOF
+      - name: Build APK
+        working-directory: AB-KING/app/trg-new/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk /tmp/TRG-latest.apk
+          cp ${GITHUB_WORKSPACE}/AB-KING/app/trg-new/server-dist/ab-king-server.mjs /tmp/trg-server.mjs
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trg-artifacts
+          path: |
+            /tmp/TRG-latest.apk
+            /tmp/trg-server.mjs
+
   publish:
-    needs: [build-abking, build-trq]
+    needs: [build-abking, build-trq, build-trg]
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:
@@ -192,6 +273,10 @@ jobs:
         with:
           name: trq-artifacts
           path: /tmp/trq
+      - uses: actions/download-artifact@v4
+        with:
+          name: trg-artifacts
+          path: /tmp/trg
       - name: Commit releases
         run: |
           git config user.name "ci-bot"
@@ -200,6 +285,8 @@ jobs:
           cp /tmp/abk/king-server.mjs releases/king-server.mjs
           cp /tmp/trq/TRQ-latest.apk releases/TRQ-latest.apk
           cp /tmp/trq/trq-server.mjs releases/trq-server.mjs
-          git add releases/AB-KING-latest.apk releases/king-server.mjs releases/TRQ-latest.apk releases/trq-server.mjs
+          cp /tmp/trg/TRG-latest.apk releases/TRG-latest.apk
+          cp /tmp/trg/trg-server.mjs releases/trg-server.mjs
+          git add releases/AB-KING-latest.apk releases/king-server.mjs releases/TRQ-latest.apk releases/trq-server.mjs releases/TRG-latest.apk releases/trg-server.mjs
           git commit -m "ci: update AB-KING + TRQ APKs and servers [skip ci]" || echo "no change"
           git push
