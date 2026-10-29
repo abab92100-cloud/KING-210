@@ -401,6 +401,8 @@ function dynamicTpNet() {
   return Math.max(0.08, Math.round(target * 100) / 100);
 }
 function tpBase() {
+  const fix = Number(S.config.tpUsd);
+  if (fix > 0) return fix;
   return dynamicTpNet();
 }
 var clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -800,6 +802,7 @@ var S = {
     cycleBalance: 100,
     mode: "paper",
     tpNet: 0.12,
+    tpUsd: 1,
     patienceHrs: 24,
     patienceUsd: 0,
     gapMode: false
@@ -981,6 +984,15 @@ function loadAll() {
           }
         });
         if (__n > 0) pushLog("server", "\u{1F9FC} \u062A\u0635\u062D\u064A\u062D " + __n + " \u0635\u0641\u0642\u0629 \u0628\u0642\u064A\u0645 \u0634\u0627\u0630\u0629 \u0645\u0646 \u0625\u0635\u062F\u0627\u0631 \u0633\u0627\u0628\u0642 \u2014 \u0635\u064F\u0641\u0651\u0631\u062A \u0642\u064A\u0645\u0647\u0627 \u0627\u0644\u0648\u0647\u0645\u064A\u0629");
+      }
+      if (S.position) {
+        const __oj = (S.journal || []).find((j) => j.status === "open");
+        S._batchFills = Math.max(4, __oj && __oj.mergedOrders || 4);
+        if (!S._batchHoldAt) {
+          S._batchHoldAt = Date.now();
+          S._batchStudiedAt = true;
+        }
+        pushLog("server", "\u{1F9F7} \u062D\u0645\u0627\u064A\u0629 \u0627\u0644\u0625\u0642\u0644\u0627\u0639: \u0645\u0631\u0643\u0632 \u0642\u0627\u0626\u0645 (" + S._batchFills + " \u0623\u0645\u0631) \u2014 \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0642\u0641\u0644 \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A \u0627\u0644\u0643\u0627\u0645\u0644");
       }
     }
     if (S.status === "running") {
@@ -1270,6 +1282,7 @@ function openNextReady() {
     gridStepPct: S.config.gridStepPct,
     huntPct: S.config.huntPct,
     tpNet: S.config.tpNet,
+    tpUsd: S.config.tpUsd,
     cycleBalance: S.config.cycleBalance,
     directionMode: S.config.directionMode,
     mode: S.config.mode,
@@ -1490,6 +1503,7 @@ async function postHarvestReselect() {
       gridStepPct: S.config.gridStepPct,
       huntPct: S.config.huntPct,
       tpNet: S.config.tpNet,
+      tpUsd: S.config.tpUsd,
       cycleBalance: S.config.cycleBalance,
       directionMode: S.config.directionMode,
       mode: S.config.mode,
@@ -1759,6 +1773,7 @@ async function maybeSwitchSymbol() {
         gridStepPct: S.config.gridStepPct,
         huntPct: S.config.huntPct,
         tpNet: S.config.tpNet,
+        tpUsd: S.config.tpUsd,
         cycleBalance: S.config.cycleBalance,
         directionMode: S.config.directionMode,
         mode: S.config.mode,
@@ -1781,6 +1796,7 @@ async function maybeSwitchSymbol() {
       gridStepPct: S.config.gridStepPct,
       huntPct: S.config.huntPct,
       tpNet: S.config.tpNet,
+      tpUsd: S.config.tpUsd,
       cycleBalance: S.config.cycleBalance,
       directionMode: S.config.directionMode,
       mode: S.config.mode,
@@ -2143,18 +2159,6 @@ function batchHoldActive() {
     const el = Math.floor((Date.now() - S._batchHoldAt) / H), min = Math.floor((Date.now() - S._batchHoldAt) % H / 6e4);
     const calm = S._batchWorseAt ? Math.floor((Date.now() - S._batchWorseAt) / H) : 0;
     pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D: " + S._batchFills + " \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u0645\u0636\u0649 " + el + "\u0633" + min + "\u062F \u0645\u0646 \u0648\u062C\u0648\u0628 \u0627\u0644\u06403 \u0633\u0627\u0639\u0627\u062A" + (S._batchWorseAt ? Date.now() - S._batchWorseAt > H ? " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u062A\u0648\u0642\u0641 \u0645\u0646\u0630 " + calm + " \u0633\u0627\u0639\u0629" : " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u0627 \u0632\u0627\u0644 \u0646\u0634\u0637\u0627\u064B" : " \u2014 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629"));
-  }
-  if (S._batchHoldAt && S._batchStudiedAt && S.studyUntil === 0 && Date.now() - S._batchHoldAt > 3 * H && // حد أدنى: 3 ساعات كاملة
-  (S._batchWorseAt ? Date.now() - S._batchWorseAt > H : true) && // لا انزلاق جديد منذ ساعة كاملة
-  !volBrakeActive()) {
-    S._batchFills = 0;
-    S._batchHoldAt = 0;
-    S._batchStudiedAt = false;
-    S._batchWorst = null;
-    S._batchWorseAt = 0;
-    S._batchHoldLogAt = 0;
-    pushLog("server", "\u2705 \u0627\u0644\u0642\u0627\u0637\u0639 \u0623\u064F\u0637\u0644\u0642 (\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u06403+1 \u0633\u0627\u0639\u0627\u062A): \u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u062A\u0648\u0642\u0641 \u0645\u0646\u0630 \u0633\u0627\u0639\u0629+ \u0648\u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u062F\u0631\u0627\u0633\u0629 \u0648\u0627\u0644\u0625\u0634\u0627\u0631\u0629 \u062C\u064A\u062F\u0629 \u2014 \u062F\u062E\u0648\u0644 \u0645\u062A\u0628\u0627\u0639\u062F \u062D\u062A\u0649 4 \u0623\u0648\u0627\u0645\u0631");
-    return false;
   }
   if (S._batchHoldAt && !S._batchStudiedAt) {
     S._batchStudiedAt = true;
@@ -3249,6 +3253,16 @@ function huntAligned() {
   if (short && conf.momentum > 0.06) return false;
   if (!short && conf.momentum < -0.06) return false;
   if (short && S.biasScore >= 10) return false;
+  if (!S.position) {
+    const ef = S.emaFast, es = S.emaSlow;
+    if (ef && es) {
+      const emaUp = ef > es;
+      if (short && emaUp) return false;
+      if (!short && !emaUp) return false;
+    }
+    if (short && S.biasScore > 0) return false;
+    if (!short && S.biasScore < 0) return false;
+  }
   if (!short && S.biasScore <= -10) return false;
   if (short && conf.score >= 12) return false;
   if (!short && conf.score <= -12) return false;
@@ -4933,6 +4947,7 @@ function saveCfg(v) {
   S.config.gridStepPct = clamp(+v.gridStepPct || 0.3, 0.05, 5);
   S.config.huntPct = clamp(+v.huntPct || 0.15, 0.03, 5);
   if (v.tpNet != null && v.tpNet !== "") S.config.tpNet = clamp(+v.tpNet || TP_BASE_NET, 0.03, 50);
+  if (v.tpUsd != null && v.tpUsd !== "") S.config.tpUsd = clamp(+v.tpUsd || 0, 0, 1e3);
   S.config.cycleBalance = Math.max(1, +v.cycleBalance || 100);
   S.config.directionMode = v.directionMode;
   S.config.mode = v.mode;
