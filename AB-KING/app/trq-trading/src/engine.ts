@@ -361,6 +361,8 @@ const _swallowAt={};
 function logSwallow(where:any,err:any){
   try{
     const msg=String((err&&err.message)||err||'unknown');
+    // 404 «Not Found» متوقع (إلغاء أمر منتهٍ/مركز غير موجود) — ليس حدثًا يُسجل
+    if(/not found|404/i.test(msg)) return;
     // أخطاء الشبكة العابرة (تقطيع تغطية/مهلة زمنية مقصودة) — متوقعة على الجوال ولا تسجل أبدًا:
     // البوت مصمم ليعمل عبر قناة WebSocket، وREST للقراءة الثانوية فقط — فشله العابر ليس حدثًا
     if(/failed to fetch|networkerror|network error|load failed/i.test(msg)) return;
@@ -1102,11 +1104,11 @@ async function exPlaceStopGuard(){ if(S.config.mode!=='live'||!S.keys||!S.positi
   // المرساة الآن: الأسبق بين «قبل التصفية مباشرة» و«مسافة خسارة الكارثة 16$ من الدخول»
   let liq=S.exLiqPrice||pos.liquidation||S.liqPrice||0;
   if(!(liq>0)||(sh?liq<=mark*1.005:liq>=mark*0.995)) liq=0; // تصفية غير معقولة = لا تصفية
-  const e=pos.entry||mark;
-  const notional=Math.max(1e-9,pos.size*(S.multiplier||1)*e);
-  const dDis=LOSS_STOP_USD/notional*1.1; // حركة تعادل خسارة 16$ + هامش 10%
-  const cands=[sh?e*(1+dDis):e*(1-dDis)];
-  if(liq>0) cands.push(sh?liq*0.99:liq*1.01);
+  // ─── قاعدة المالك المطلقة (حادثة SHIB 2026-10-30): لا وقف خسارة على المنصة
+  // إطلاقاً. الحارس السابق عند -16$ نفّذ البيع على المنصة بخسارة والمحرك لم
+  // يعلم. الحارس الآن = حارس تصفية فقط (قبل التصفية مباشرة) — وCROSS بلا سعر
+  // تصفية معلن = لا حارس. الحماية الحقيقية: سقف التعرض 4× + الصمود + الجني ───
+  const cands=(liq>0)?[sh?liq*0.99:liq*1.01]:[];
   const gp=roundTick(sh?Math.min(...cands):Math.max(...cands),S.tickSize||1e-10);
   // سلامة: سعر منحط أو ملاصق للسوق لا يحمي شيئًا — لا تُرسله
   if(!(gp>0)||(sh?gp<=mark*1.003:gp>=mark*0.997)){ S._guardId=null; return; }
@@ -2807,6 +2809,10 @@ let _ordErrAt=0, _syncErrAt=0, _syncErrMsg='';
 let _huntErrAt=0; // خنق فشل الصيد — كل ثانية كان يغرق السجل بلا فائدة
 export async function liveSync(){ if(R()) return; // وضع المرآة: الحالة ملك السيرفر — لا مزامنة منصّة محلية تزاحمه
   if(S.config.mode!=='live'||!S.keys) return;
+  // حصة القراءة (درس عاصفة 429 على «قراءة المركز»): 4ث كحد أدنى بين الدورات،
+  // وعند رفض الحصة (429) تبريد 45ث كاملة — لا نطرق الباب أثناء العاصفة
+  if(Date.now()-(S._syncAt||0)<4000) return;
+  S._syncAt=Date.now();
   const sym=S.config.symbol;
   try{
     const pos=await exPosition(sym);
@@ -2823,7 +2829,19 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
           if(openRow){ const oldFees=openRow.fees||0; openRow.entry=pos.entry;
             if(openRow.qty>0&&S.position.size!==prevSize){ openRow.qty=S.position.size; openRow.fees=oldFees; } }
           if(S.activeCycle) S.activeCycle.entry=pos.entry; } } }
-    else if(S.position&&Date.now()>S.ignoreExchangeUntil){ S.position=null; S._guardPx=0; S._guardId=null; S._tpBanked=0; S._trailFloor=0; }
+    else if(S.position&&Date.now()>S.ignoreExchangeUntil){
+      // ─── درس SHIB: المركز وُجد على المنصة سابقاً والآن لا مركز — أُغلق بلا
+      // علم المحرك (وقف منصّي/يدوي/تصفية) وكان يُمسح بصمت فلا يظهر في السجل.
+      // الآن: يُغلق صف السجل بالقيمة الفعلية التقريبية ويُسجل بتنبيه واضح ───
+      const __row=S.journal.find(j=>j.status==='open');
+      const __ex=Number(pos&&(pos as any).exitPrice)||S.markPrice||S.lastPrice||(__row?__row.entry:0);
+      if(__row&&__ex>0){
+        try{ noteClose(__row.qty,__ex,0,'إغلاق منصة',undefined,__row.id); }catch{}
+        S._harvestAt=Date.now(); S._reselectDone=false;
+        try{ _harvestCleanup(__ex); }catch{}
+        pushLog('warn','⚠️ المركز أُغلق على المنصة بلا أمر من البوت (وقف/يدوي/تصفية) — سُجل في سجل الصفقات بالقيمة الفعلية وأُعيدت الدراسة لعملة جديدة');
+      } else pushLog('warn','⚠️ لا مركز على المنصة — صُحّحت حالة المحرك محلياً');
+      S.position=null; S._guardPx=0; S._guardId=null; S._tpBanked=0; S._trailFloor=0; }
     if(pos&&pos.liquidation) S.exLiqPrice=pos.liquidation;
     // الرصيد المتاح الحقيقي كل 30 ثانية — حدّ الميزانية به يمنع رفض
     // «insufficient available margin» عندما يكون الهامش محجوزًا كله بالأوامر
@@ -2854,6 +2872,8 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
           {symbol:sym,leverage:String(S.config.leverage)}).catch(()=>{}); } }
     if(S.position) exPlaceStopGuard(); // إيقاف طوارئ على المنصة يحمي المركز حتى لو نام التطبيق
   }catch(e){ const m=String((e as any)?.message||e);
+    // 429 = تجاوز الحصة: تبريد كامل قبل المحاولة التالية (لا نُعمي المحرك بعاصفة طرق)
+    if(/429|Too many requests/i.test(m)){ S._syncAt=Date.now()+45000; }
     if(m!==_syncErrMsg||Date.now()-_syncErrAt>60000){ _syncErrAt=Date.now(); _syncErrMsg=m;
       pushLog('error','قراءة المركز: '+m); } }
   try{
