@@ -3495,6 +3495,16 @@ function huntTrigger(p) {
 function maybeHunt(p) {
   const hit = huntTrigger(p);
   if (!hit) return false;
+  if (S.position && hit.side !== S.position.side) {
+    const __mult = S.multiplier || 1, __g = (S.position.side === "long" ? p - S.position.entry : S.position.entry - p) * __mult * (S.position.size || 0);
+    if (__g < 0.01) {
+      if (!S._noLossHuntAt || Date.now() - S._noLossHuntAt > 18e4) {
+        S._noLossHuntAt = Date.now();
+        pushLog("server", "\u{1F6E1}\uFE0F \u0631\u0641\u0636 \u0635\u064A\u062F \u0645\u0639\u0627\u0643\u0633 \u064A\u063A\u0644\u0642 \u0628\u062E\u0633\u0627\u0631\u0629 (" + fmtUsd(__g) + ") \u2014 \u0627\u0644\u0635\u0645\u0648\u062F \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A");
+      }
+      return false;
+    }
+  }
   {
     const W = 2 * 36e5, now = Date.now();
     if (p > 0) {
@@ -3743,7 +3753,7 @@ async function escapeAdverse(p) {
   const netAll = (pos.side === "short" ? 1 : -1) * (pos.entry - p) * mult * qty - entryFees - qty * mult * p * (S.takerFee || 6e-4);
   if (!danger) return;
   const was = pos.side, nextSide = was === "long" ? "short" : "long";
-  await flattenAt(p, danger ? "\u0645\u0631\u0643\u0632" : "\u0643\u0627\u0628\u062D \u0627\u0644\u0643\u0627\u0631\u062B\u0629");
+  await flattenAt(p, danger ? "\u062A\u0635\u0641\u064A\u0629 \u062F\u0627\u0647\u0645\u0629" : "\u0643\u0627\u0628\u062D \u0627\u0644\u0643\u0627\u0631\u062B\u0629");
   if (S.config.directionMode === "auto") S.config.direction = nextSide;
   S.huntAnchor = p;
   S._flipAt = Date.now();
@@ -3896,7 +3906,7 @@ async function flattenAt(p, source) {
     const exitFee = q * mult * p * (S.takerFee || 6e-4);
     const gross = (pos.side === "long" ? p - pos.entry : pos.entry - p) * mult * q;
     const net = gross - openFees - exitFee;
-    const sanctioned = source === "\u0625\u064A\u0642\u0627\u0641" || source === "\u0645\u0631\u0643\u0632" || source === "\u0643\u0627\u0628\u062D \u0627\u0644\u0643\u0627\u0631\u062B\u0629";
+    const sanctioned = source === "\u0625\u064A\u0642\u0627\u0641" || source === "\u062A\u0635\u0641\u064A\u0629 \u062F\u0627\u0647\u0645\u0629";
     if (net < 0.01 && !sanctioned) {
       if (!S._refuseAt || Date.now() - S._refuseAt > 12e4) {
         S._refuseAt = Date.now();
