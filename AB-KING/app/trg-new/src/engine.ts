@@ -2306,6 +2306,13 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   S._lastSig=sig.slice(0,3).join(' · ');
   return packHunt(p); }
 function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
+  // ─── لا إغلاق بخسارة من الصيد المعاكس (كان يتجاوز حاجز flattenAt ويقفل
+  // بـ-0.02 و-0.22): صيد يخالف اتجاه المركز والمركز خاسر → يتخطى ويصمد ───
+  if(S.position&&hit.side!==S.position.side){
+    const __mult=S.multiplier||1, __g=(S.position.side==='long'?p-S.position.entry:S.position.entry-p)*__mult*(S.position.size||0);
+    if(__g<0.01){ if(!S._noLossHuntAt||Date.now()-S._noLossHuntAt>180000){ S._noLossHuntAt=Date.now();
+        pushLog('server','🛡️ رفض صيد معاكس يغلق بخسارة ('+fmtUsd(__g)+') — الصمود حتى الجني'); }
+      return false; } }
   // ─── نافذة الانزلاق المستدام (ساعتان): تتبع قمم/قيعان النافذة ───
   { const W=2*3600000, now=Date.now();
     if(p>0){
@@ -2503,7 +2510,8 @@ async function escapeAdverse(p:any){ if(S.status!=='running'||!S.position||!p) r
   // قاعدة المالك: كابح الكارثة معطّل — الإقفال الوحيد: خطر تصفية حقيقي من المنصة فقط
   if(!danger) return;
   const was=pos.side, nextSide=was==='long'?'short':'long';
-  await flattenAt(p,danger?'مركز':'كابح الكارثة');
+  // 'تصفية داهمة' = العفو الوحيد للخطر الحقيقي (والمصدر القديم 'مركز' لم يعد معفى)
+  await flattenAt(p,danger?'تصفية داهمة':'كابح الكارثة');
   if(S.config.directionMode==='auto') S.config.direction=nextSide;
   S.huntAnchor=p; S._flipAt=Date.now(); S.gridAnchor=p;
   // دراسة الوضع قبل أي دخول جديد مع بوابة استقرار: تذبذب عنيف/سيولة مضطربة =
@@ -2649,7 +2657,11 @@ export async function flattenAt(p:any,source:any){ const pos=S.position;
     const exitFee=q*mult*p*(S.takerFee||0.0006);
     const gross=(pos.side==='long'?p-pos.entry:pos.entry-p)*mult*q;
     const net=gross-openFees-exitFee;
-    const sanctioned=source==='إيقاف'||source==='مركز'||source==='كابح الكارثة';
+    // ─── تشديد الحاجز (حادثة 30 أكتوبر: إغلاقات -6.73 و-0.22): كان يعفي
+    // 'مركز' و'كابح الكارثة' — وتلك بالضبط مصادر escapeAdverse فيمرّ منه
+    // الإقفال بخسارة. الإعفاء الآن: يد المالك فقط + التصفية الداهمة الحقيقية
+    // (حفاظاً على الهامش من مصادرة كاملة — ولو لم تُغلق سيأخذ الليكويديشن أكثر)
+    const sanctioned=source==='إيقاف'||source==='تصفية داهمة';
     if(net<0.01&&!sanctioned){
       if(!S._refuseAt||Date.now()-S._refuseAt>120000){ S._refuseAt=Date.now();
         pushLog('server','🛡️ رفض إغلاق بخسارة ('+source+'): الصافي الآن '+fmtUsd(net)+
