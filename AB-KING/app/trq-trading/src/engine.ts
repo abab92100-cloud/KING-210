@@ -58,7 +58,13 @@ export function dynamicTpNet(){
   // الأرضية 8 سنت (كانت 15): على الأحجام الصغيرة كانت الأرضية تضخم مسافة
   // الجني إلى ~1% — النطاق النسبي (0.2-0.8%) هو الحاكم والحجم الأكبر يجني أوسع
   return Math.max(0.08,Math.round(target*100)/100); }
-function tpBase(){ return dynamicTpNet(); } // الهدف المرجعي في كل المواضع = المدروس
+function tpBase(){
+  // ─── TRG-NEW (قاعدة المالك): جني الربح الثابت بالدولار من الإعدادات ───
+  // المالك يضع 1$ أو 3$ أو أي مبلغ → الجني عند بلوغ صافي المركز هذا المبلغ
+  // بعد الرسوم، مهما كانت الأوامر. صفر = الهدف المدروس الديناميكي (كـTRQ)
+  const fix=Number(S.config.tpUsd);
+  if(fix>0) return fix;
+  return dynamicTpNet(); } // الهدف المرجعي: الثابت بالدولار أو المدروس
 
 /* ---------- أدوات ---------- */
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -245,7 +251,7 @@ export async function detectRemoteServer(){ if(typeof window==='undefined') retu
 export const S: any = {
   keys:null,
   config:{symbol:'XBTUSDTM',displaySymbol:'BTC',leverage:3,gridStepPct:0.3,huntPct:0.15,
-    levels:12,direction:'short',directionMode:'auto',cycleBalance:100,mode:'paper',tpNet:0.12,patienceHrs:24,patienceUsd:0,gapMode:false},
+    levels:12,direction:'short',directionMode:'auto',cycleBalance:100,mode:'paper',tpNet:0.12,tpUsd:1,patienceHrs:24,patienceUsd:0,gapMode:false},
   status:'idle', heartbeat:0, lastPrice:null, markPrice:null,
   multiplier:1, tickSize:0.1, makerFee:0.0002, takerFee:0.0006, funding:0,
   _metaSym:null, maxOrderQty:0, exAvail:null, exLeverage:null, // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
@@ -328,7 +334,13 @@ function loadAll(){ try{
     // الإقفال) — تُصفَّر قيمها الوهمية حتى لا تبقى في السجل والتاريخ
     { const __bound=Math.max(50,(S.config.cycleBalance||0)*3); let __n=0;
       (S.journal||[]).forEach(j=>{ if(j.status==='closed'&&typeof j.pnl==='number'&&Math.abs(j.pnl)>__bound){ j.pnl=0; __n++; } });
-      if(__n>0) pushLog('server','🧼 تصحيح '+__n+' صفقة بقيم شاذة من إصدار سابق — صُفّرت قيمها الوهمية'); } }
+      if(__n>0) pushLog('server','🧼 تصحيح '+__n+' صفقة بقيم شاذة من إصدار سابق — صُفّرت قيمها الوهمية'); }
+    // ─── حماية الإقلاع (أمر المالك): أي مركز قائم عند التشغيل = دخلت أوامره —
+    // القاطع مقفل عليه فوراً (لا إضافات لصفقات معلقة قديمة مثل 11× و14×) ───
+    if(S.position){ const __oj=(S.journal||[]).find(j=>j.status==='open');
+      S._batchFills=Math.max(4,(__oj&&__oj.mergedOrders)||4);
+      if(!S._batchHoldAt){ S._batchHoldAt=Date.now(); S._batchStudiedAt=true; }
+      pushLog('server','🧷 حماية الإقلاع: مركز قائم ('+S._batchFills+' أمر) — القاطع مقفل حتى الجني الكامل'); } }
   // قتل أندرويد للتطبيق في الخلفية ≠ خروج المالك: جلسة كانت تعمل وقُتلت حديثًا
   // (أقل من 30 دقيقة) تُستأنف تلقائيًا من حيث توقفت — وإلا بقيت القاعدة:
   // لا تشغيل بعد فتح التطبيق إلا بضغطة «تشغيل» من المالك (تثبيت جديد / جلسة قديمة)
@@ -545,7 +557,7 @@ export function openNextReady(){
   S._nextReady=false; S._nextSymbol=null; S._reselectDone=true; // قفز ما بعد الجني — إعادة الاختيار تمت
   pushLog('server','\u26A1 \u0641\u062A\u062D \u0641\u0648\u0631\u064A \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u0645\u062F\u0631\u0648\u0633\u0629 \u062E\u0644\u0641\u064A\u064B\u0627 '+sym.replace(/USDTM$/i,'')+' \u062A\u062F\u062E\u0644 \u0627\u0644\u0622\u0646');
   saveCfg({symbol:sym,leverage:S.config.leverage,levels:S.config.levels,
-    gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+    gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,tpUsd:S.config.tpUsd,
     cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
     mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
   return true;
@@ -701,7 +713,7 @@ export async function postHarvestReselect(){
     toast('🔄 بعد الجني: '+bestOther.disp+' — '+bestOther.score);
     nativeNotify('AB-KING — انتقال بعد الجني',bestOther.disp+' درجة '+bestOther.score);
     saveCfg({symbol:bestOther.symbol,leverage:S.config.leverage,levels:S.config.levels,
-      gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+      gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,tpUsd:S.config.tpUsd,
       cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
       mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
   }catch(e){ logSwallow('silent-catch',e); }
@@ -944,7 +956,7 @@ export async function maybeSwitchSymbol(){
       toast('🔄 دوران: '+best.disp+' — '+best.score);
       nativeNotify('AB-KING — دوران البورة',best.disp+' درجة '+best.score+' بدل '+curDisp+' الخامدة');
       saveCfg({symbol:best.symbol,leverage:S.config.leverage,levels:S.config.levels,
-        gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+        gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,tpUsd:S.config.tpUsd,
         cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
         mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
       return; }
@@ -959,7 +971,7 @@ export async function maybeSwitchSymbol(){
     nativeNotify('AB-KING — انتقال للأفضل',best.disp+' درجة '+best.score+' قبل الصفقة');
     // الجني التالي: يُعاد الاختيار من جديد عبر openNextReady وهذه الدالة
     saveCfg({symbol:best.symbol,leverage:S.config.leverage,levels:S.config.levels,
-      gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,
+      gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,tpUsd:S.config.tpUsd,
       cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
       mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
     startBot();
@@ -1210,13 +1222,11 @@ export function batchHoldActive(){
     const calm=S._batchWorseAt?Math.floor((Date.now()-S._batchWorseAt)/H):0;
     pushLog('server','🧷 القاطع ماضٍ: '+S._batchFills+' أوامر دخول — مضى '+el+'س'+min+'د من وجوب الـ3 ساعات'+
       (S._batchWorseAt?(Date.now()-S._batchWorseAt>H?' — الانزلاق متوقف منذ '+calm+' ساعة':' — الانزلاق ما زال نشطاً'):' — بانتظار القراءة')); }
-  if(S._batchHoldAt&&S._batchStudiedAt&&S.studyUntil===0&&
-     Date.now()-S._batchHoldAt>3*H&&                                // حد أدنى: 3 ساعات كاملة
-     (S._batchWorseAt?Date.now()-S._batchWorseAt>H:true)&&          // لا انزلاق جديد منذ ساعة كاملة
-     !volBrakeActive()){
-    S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false; S._batchWorst=null; S._batchWorseAt=0; S._batchHoldLogAt=0;
-    pushLog('server','✅ القاطع أُطلق (قاعدة الـ3+1 ساعات): انزلاق متوقف منذ ساعة+ واكتملت الدراسة والإشارة جيدة — دخول متباعد حتى 4 أوامر');
-    return false; }
+  // ─── القاطع المطلق (أمر المالك 2026-10-30، بعد تكرار 11× و14×): لا إطلاق
+  // أبداً ما دامت الصفقة مفتوحة. جهاز الـ3+1 ساعات كان يفتح دفعة جديدة عند
+  // كل هدوء مؤقت في انزلاق بسيط متدرج فيتراكم 4+4+4... القاعدة النهائية:
+  // 4 أوامر دخول للصفقة الواحدة ثم توقف مطلق حتى تُجنى كاملة — والعودة
+  // للدخول بدورة جديدة نظيفة فقط بعد اكتمال الجني (يصفّر العداد تلقائياً) ───
   if(S._batchHoldAt&&!S._batchStudiedAt){ S._batchStudiedAt=true;
     startStudy(false); // دراسة جيدة جديدة قبل أي عودة — بصمة محدثة للوضع الحالي
     pushLog('server','🔍 بدأت دراسة ما بعد القاطع — لا فتح أوامر حتى يكتمل تقييم الوضع'); }
@@ -1988,6 +1998,19 @@ function huntAligned(){ const conf=S.confluence||{momentum:0,idle:false,score:0}
   if(short&&conf.momentum>0.06) return false;
   if(!short&&conf.momentum<-0.06) return false;
   if(short&&S.biasScore>=10) return false;
+  // ═══ TRG-NEW: دراسة اتجاه أعمق — الدخول مع الاتجاه فقط ═══
+  // كل المؤشرات يجب أن تتفق مع اتجاه الصفقة (لا صفقات عكس الترند):
+  // متوسطات + دفتر أوامر + زخم. تتفق → دخول؛ أي تعارض → لا صفقة الآن
+  if(!S.position){
+    const ef=S.emaFast, es=S.emaSlow;
+    if(ef&&es){
+      const emaUp=ef>es;
+      if(short&&emaUp) return false;       // بيع والمتوسطات صاعدة = عكس الاتجاه
+      if(!short&&!emaUp) return false;     // شراء والمتوسطات هابطة = عكس الاتجاه
+    }
+    if(short&&S.biasScore>0) return false;  // بيع ودفتر المشترين أقوى
+    if(!short&&S.biasScore<0) return false; // شراء ودفتر البائعين أقوى
+  }
   if(!short&&S.biasScore<=-10) return false;
   if(short&&conf.score>=12) return false;
   if(!short&&conf.score<=-12) return false;
@@ -3143,6 +3166,8 @@ export function saveCfg(v){
   S.config.huntPct=clamp(+v.huntPct||0.15,0.03,5);
   // هدف جني الربح الصافي ($) — يُحفظ فقط إن أُرسل صراحة حتى لا يصفّره حفظ عارض
   if(v.tpNet!=null&&v.tpNet!=='') S.config.tpNet=clamp(+v.tpNet||TP_BASE_NET,0.03,50);
+  // TRG-NEW: هدف الجني الثابت بالدولار — يُحفظ فقط إن أُرسل صراحة (0 = مدروس)
+  if(v.tpUsd!=null&&v.tpUsd!=='') S.config.tpUsd=clamp(+v.tpUsd||0,0,1000);
   S.config.cycleBalance=Math.max(1,+v.cycleBalance||100);
   S.config.directionMode=v.directionMode;
   S.config.mode=v.mode;

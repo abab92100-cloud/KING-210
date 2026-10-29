@@ -334,7 +334,13 @@ function loadAll(){ try{
     // الإقفال) — تُصفَّر قيمها الوهمية حتى لا تبقى في السجل والتاريخ
     { const __bound=Math.max(50,(S.config.cycleBalance||0)*3); let __n=0;
       (S.journal||[]).forEach(j=>{ if(j.status==='closed'&&typeof j.pnl==='number'&&Math.abs(j.pnl)>__bound){ j.pnl=0; __n++; } });
-      if(__n>0) pushLog('server','🧼 تصحيح '+__n+' صفقة بقيم شاذة من إصدار سابق — صُفّرت قيمها الوهمية'); } }
+      if(__n>0) pushLog('server','🧼 تصحيح '+__n+' صفقة بقيم شاذة من إصدار سابق — صُفّرت قيمها الوهمية'); }
+    // ─── حماية الإقلاع (أمر المالك): أي مركز قائم عند التشغيل = دخلت أوامره —
+    // القاطع مقفل عليه فوراً (لا إضافات لصفقات معلقة قديمة مثل 11× و14×) ───
+    if(S.position){ const __oj=(S.journal||[]).find(j=>j.status==='open');
+      S._batchFills=Math.max(4,(__oj&&__oj.mergedOrders)||4);
+      if(!S._batchHoldAt){ S._batchHoldAt=Date.now(); S._batchStudiedAt=true; }
+      pushLog('server','🧷 حماية الإقلاع: مركز قائم ('+S._batchFills+' أمر) — القاطع مقفل حتى الجني الكامل'); } }
   // قتل أندرويد للتطبيق في الخلفية ≠ خروج المالك: جلسة كانت تعمل وقُتلت حديثًا
   // (أقل من 30 دقيقة) تُستأنف تلقائيًا من حيث توقفت — وإلا بقيت القاعدة:
   // لا تشغيل بعد فتح التطبيق إلا بضغطة «تشغيل» من المالك (تثبيت جديد / جلسة قديمة)
@@ -1216,13 +1222,11 @@ export function batchHoldActive(){
     const calm=S._batchWorseAt?Math.floor((Date.now()-S._batchWorseAt)/H):0;
     pushLog('server','🧷 القاطع ماضٍ: '+S._batchFills+' أوامر دخول — مضى '+el+'س'+min+'د من وجوب الـ3 ساعات'+
       (S._batchWorseAt?(Date.now()-S._batchWorseAt>H?' — الانزلاق متوقف منذ '+calm+' ساعة':' — الانزلاق ما زال نشطاً'):' — بانتظار القراءة')); }
-  if(S._batchHoldAt&&S._batchStudiedAt&&S.studyUntil===0&&
-     Date.now()-S._batchHoldAt>3*H&&                                // حد أدنى: 3 ساعات كاملة
-     (S._batchWorseAt?Date.now()-S._batchWorseAt>H:true)&&          // لا انزلاق جديد منذ ساعة كاملة
-     !volBrakeActive()){
-    S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false; S._batchWorst=null; S._batchWorseAt=0; S._batchHoldLogAt=0;
-    pushLog('server','✅ القاطع أُطلق (قاعدة الـ3+1 ساعات): انزلاق متوقف منذ ساعة+ واكتملت الدراسة والإشارة جيدة — دخول متباعد حتى 4 أوامر');
-    return false; }
+  // ─── القاطع المطلق (أمر المالك 2026-10-30، بعد تكرار 11× و14×): لا إطلاق
+  // أبداً ما دامت الصفقة مفتوحة. جهاز الـ3+1 ساعات كان يفتح دفعة جديدة عند
+  // كل هدوء مؤقت في انزلاق بسيط متدرج فيتراكم 4+4+4... القاعدة النهائية:
+  // 4 أوامر دخول للصفقة الواحدة ثم توقف مطلق حتى تُجنى كاملة — والعودة
+  // للدخول بدورة جديدة نظيفة فقط بعد اكتمال الجني (يصفّر العداد تلقائياً) ───
   if(S._batchHoldAt&&!S._batchStudiedAt){ S._batchStudiedAt=true;
     startStudy(false); // دراسة جيدة جديدة قبل أي عودة — بصمة محدثة للوضع الحالي
     pushLog('server','🔍 بدأت دراسة ما بعد القاطع — لا فتح أوامر حتى يكتمل تقييم الوضع'); }
