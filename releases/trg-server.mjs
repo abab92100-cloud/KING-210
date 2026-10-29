@@ -943,6 +943,7 @@ function pushLog(kind, text) {
 function logSwallow(where, err) {
   try {
     const msg = String(err && err.message || err || "unknown");
+    if (/not found|404/i.test(msg)) return;
     if (/failed to fetch|networkerror|network error|load failed/i.test(msg)) return;
     if (/aborted?|abort/i.test(msg)) return;
     if (/timeout|timed? ?out/i.test(msg)) return;
@@ -1879,11 +1880,7 @@ async function exPlaceStopGuard() {
   if (!(mark > 0)) return;
   let liq = S.exLiqPrice || pos.liquidation || S.liqPrice || 0;
   if (!(liq > 0) || (sh ? liq <= mark * 1.005 : liq >= mark * 0.995)) liq = 0;
-  const e = pos.entry || mark;
-  const notional = Math.max(1e-9, pos.size * (S.multiplier || 1) * e);
-  const dDis = LOSS_STOP_USD / notional * 1.1;
-  const cands = [sh ? e * (1 + dDis) : e * (1 - dDis)];
-  if (liq > 0) cands.push(sh ? liq * 0.99 : liq * 1.01);
+  const cands = liq > 0 ? [sh ? liq * 0.99 : liq * 1.01] : [];
   const gp = roundTick(sh ? Math.min(...cands) : Math.max(...cands), S.tickSize || 1e-10);
   if (!(gp > 0) || (sh ? gp <= mark * 1.003 : gp >= mark * 0.997)) {
     S._guardId = null;
@@ -1912,10 +1909,10 @@ async function exPlaceStopGuard() {
       S._guardLogged = true;
       pushLog("server", "\u062D\u0627\u0631\u0633 \u062E\u0627\u062F\u0645\u064A \u0645\u0641\u0639\u0651\u0644 \u2014 \u0625\u064A\u0642\u0627\u0641 \u0637\u0648\u0627\u0631\u0626 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u0639\u0646\u062F " + fmtPx(gp) + " (\u064A\u0639\u0645\u0644 \u062D\u062A\u0649 \u0644\u0648 \u0646\u0627\u0645 \u0627\u0644\u062A\u0637\u0628\u064A\u0642)");
     }
-  } catch (e2) {
+  } catch (e) {
     if (!S._guardErrAt || Date.now() - S._guardErrAt > 3e5) {
       S._guardErrAt = Date.now();
-      pushLog("error", "\u0627\u0644\u062D\u0627\u0631\u0633 \u0627\u0644\u062E\u0627\u062F\u0645\u064A: " + String(e2?.message || e2));
+      pushLog("error", "\u0627\u0644\u062D\u0627\u0631\u0633 \u0627\u0644\u062E\u0627\u062F\u0645\u064A: " + String(e?.message || e));
     }
   }
 }
@@ -4146,6 +4143,8 @@ async function loadMarket(full) {
 async function liveSync() {
   if (R()) return;
   if (S.config.mode !== "live" || !S.keys) return;
+  if (Date.now() - (S._syncAt || 0) < 4e3) return;
+  S._syncAt = Date.now();
   const sym = S.config.symbol;
   try {
     const pos = await exPosition(sym);
@@ -4176,6 +4175,21 @@ async function liveSync() {
         }
       }
     } else if (S.position && Date.now() > S.ignoreExchangeUntil) {
+      const __row = S.journal.find((j) => j.status === "open");
+      const __ex = Number(pos && pos.exitPrice) || S.markPrice || S.lastPrice || (__row ? __row.entry : 0);
+      if (__row && __ex > 0) {
+        try {
+          noteClose(__row.qty, __ex, 0, "\u0625\u063A\u0644\u0627\u0642 \u0645\u0646\u0635\u0629", void 0, __row.id);
+        } catch {
+        }
+        S._harvestAt = Date.now();
+        S._reselectDone = false;
+        try {
+          _harvestCleanup(__ex);
+        } catch {
+        }
+        pushLog("warn", "\u26A0\uFE0F \u0627\u0644\u0645\u0631\u0643\u0632 \u0623\u064F\u063A\u0644\u0642 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u0628\u0644\u0627 \u0623\u0645\u0631 \u0645\u0646 \u0627\u0644\u0628\u0648\u062A (\u0648\u0642\u0641/\u064A\u062F\u0648\u064A/\u062A\u0635\u0641\u064A\u0629) \u2014 \u0633\u064F\u062C\u0644 \u0641\u064A \u0633\u062C\u0644 \u0627\u0644\u0635\u0641\u0642\u0627\u062A \u0628\u0627\u0644\u0642\u064A\u0645\u0629 \u0627\u0644\u0641\u0639\u0644\u064A\u0629 \u0648\u0623\u064F\u0639\u064A\u062F\u062A \u0627\u0644\u062F\u0631\u0627\u0633\u0629 \u0644\u0639\u0645\u0644\u0629 \u062C\u062F\u064A\u062F\u0629");
+      } else pushLog("warn", "\u26A0\uFE0F \u0644\u0627 \u0645\u0631\u0643\u0632 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u0635\u064F\u062D\u0651\u062D\u062A \u062D\u0627\u0644\u0629 \u0627\u0644\u0645\u062D\u0631\u0643 \u0645\u062D\u0644\u064A\u0627\u064B");
       S.position = null;
       S._guardPx = 0;
       S._guardId = null;
@@ -4230,6 +4244,9 @@ async function liveSync() {
     if (S.position) exPlaceStopGuard();
   } catch (e) {
     const m = String(e?.message || e);
+    if (/429|Too many requests/i.test(m)) {
+      S._syncAt = Date.now() + 45e3;
+    }
     if (m !== _syncErrMsg || Date.now() - _syncErrAt > 6e4) {
       _syncErrAt = Date.now();
       _syncErrMsg = m;
