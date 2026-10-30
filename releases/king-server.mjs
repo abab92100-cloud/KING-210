@@ -1,73 +1,25 @@
-// src/server-shims.ts
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-process.env.ABKING_SERVER = "1";
-var dir = join(homedir(), ".ab-king");
-try {
-  mkdirSync(dir, { recursive: true });
-} catch {
-}
-var __slot = process.env.ABKING_SLOT || "";
-var file = join(dir, __slot ? `trq-slot-${__slot}-store.json` : "ab-king-server-store.json");
-var data = {};
-try {
-  if (existsSync(file)) data = JSON.parse(readFileSync(file, "utf8") || "{}");
-} catch (e) {
-  data = {};
-}
-var timer = null;
-function persist() {
-  if (timer) return;
-  timer = setTimeout(() => {
-    timer = null;
-    try {
-      writeFileSync(file, JSON.stringify(data));
-    } catch {
-    }
-  }, 300);
-}
-globalThis.localStorage = {
-  getItem: (k) => k in data ? data[k] : null,
-  setItem: (k, v) => {
-    data[k] = String(v);
-    persist();
-  },
-  removeItem: (k) => {
-    delete data[k];
-    persist();
-  },
-  clear: () => {
-    data = {};
-    persist();
-  }
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
-console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u0629: " + file);
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/ws.ts
-var DIRECT = "https://api-futures.kucoin.com";
-var REST = typeof window !== "undefined" && (window.Capacitor || location.protocol === "capacitor:") ? DIRECT : "/kucoin";
-var streamState = {
-  connected: false,
-  connecting: false,
-  lastMsgAt: 0,
-  bookAt: 0,
-  tradeAt: 0,
-  msgs: 0,
-  reconnects: 0,
-  error: null
-};
-var ws = null;
-var pingTimer = null;
-var watchTimer = null;
-var retryTimer = null;
-var symbol = null;
-var onMessage = null;
-var onStatus = null;
-var stopped = true;
-var attempts = 0;
-var connectSeq = 0;
-var offline = false;
 function forceReconnect(reason) {
   if (stopped) return;
   if (retryTimer) {
@@ -250,40 +202,6 @@ function scheduleRetry() {
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = setTimeout(connect, wait);
 }
-if (typeof window !== "undefined" && window.Capacitor) {
-  const KN = (window.Capacitor.Plugins || {}).KingNative;
-  if (KN && KN.addListener) {
-    try {
-      const sub = KN.addListener("netChange", (d) => {
-        const online = !!(d && d.online);
-        if (online) {
-          offline = false;
-          if (stopped) return;
-          forceReconnect("\u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A: \u0639\u0627\u062F \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0648\u0635\u0644 \u0641\u0648\u0631\u064A");
-        } else {
-          offline = true;
-          if (retryTimer) {
-            clearTimeout(retryTimer);
-            retryTimer = null;
-          }
-          streamState.connected = false;
-          streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A \u064A\u0646\u062A\u0638\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
-          if (onStatus) onStatus({ ...streamState });
-        }
-      });
-      if (sub && typeof sub.catch === "function") sub.catch(() => {
-      });
-    } catch {
-    }
-    try {
-      if (KN.isOnline) KN.isOnline().then((r) => {
-        offline = !(r && r.online);
-      }).catch(() => {
-      });
-    } catch {
-    }
-  }
-}
 function startStream(sym, handlers) {
   stopStream();
   stopped = false;
@@ -325,67 +243,177 @@ function stopStream() {
   streamState.connected = false;
   streamState.connecting = false;
 }
-if (typeof document !== "undefined") {
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && !stopped) {
-      const silent = Date.now() - streamState.lastMsgAt;
-      if (!ws || ws.readyState !== 1 || silent > 3e4) {
-        forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0644\u0644\u0648\u0627\u062C\u0647\u0629 \u0648\u0627\u0644\u0642\u0646\u0627\u0629 \u0635\u0627\u0645\u062A\u0629");
-      }
-    }
-  });
-}
-if (typeof window !== "undefined") {
-  window.addEventListener("online", () => {
+var DIRECT, REST, streamState, ws, pingTimer, watchTimer, retryTimer, symbol, onMessage, onStatus, stopped, attempts, connectSeq, offline;
+var init_ws = __esm({
+  "src/ws.ts"() {
+    DIRECT = "https://api-futures.kucoin.com";
+    REST = typeof window !== "undefined" && (window.Capacitor || location.protocol === "capacitor:") ? DIRECT : "/kucoin";
+    streamState = {
+      connected: false,
+      connecting: false,
+      lastMsgAt: 0,
+      bookAt: 0,
+      tradeAt: 0,
+      msgs: 0,
+      reconnects: 0,
+      error: null
+    };
+    ws = null;
+    pingTimer = null;
+    watchTimer = null;
+    retryTimer = null;
+    symbol = null;
+    onMessage = null;
+    onStatus = null;
+    stopped = true;
+    attempts = 0;
+    connectSeq = 0;
     offline = false;
-    if (stopped) return;
-    forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0625\u0639\u0627\u062F\u0629 \u0648\u0635\u0644 \u0627\u0644\u0642\u0646\u0627\u0629 \u0641\u0648\u0631\u064B\u0627");
-  });
-  window.addEventListener("offline", () => {
-    offline = true;
-    streamState.connected = false;
-    streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0641\u064A \u0627\u0646\u062A\u0638\u0627\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
-    if (onStatus) onStatus({ ...streamState });
-    if (retryTimer) {
-      clearTimeout(retryTimer);
-      retryTimer = null;
-    }
-  });
-}
-if (typeof navigator !== "undefined" && navigator.onLine !== void 0) {
-  setInterval(() => {
-    if (stopped) return;
-    const online = typeof navigator.onLine === "boolean" ? navigator.onLine : true;
-    if (online && offline) {
-      offline = false;
-      forceReconnect("\u0634\u064F\u0648\u0647\u062F\u062A \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629 (\u0641\u062D\u0635 \u062F\u0648\u0631\u064A)");
-    }
-    if (!online && !offline) {
-      offline = true;
-      if (retryTimer) {
-        clearTimeout(retryTimer);
-        retryTimer = null;
+    if (typeof window !== "undefined" && window.Capacitor) {
+      const KN = (window.Capacitor.Plugins || {}).KingNative;
+      if (KN && KN.addListener) {
+        try {
+          const sub = KN.addListener("netChange", (d) => {
+            const online = !!(d && d.online);
+            if (online) {
+              offline = false;
+              if (stopped) return;
+              forceReconnect("\u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A: \u0639\u0627\u062F \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0648\u0635\u0644 \u0641\u0648\u0631\u064A");
+            } else {
+              offline = true;
+              if (retryTimer) {
+                clearTimeout(retryTimer);
+                retryTimer = null;
+              }
+              streamState.connected = false;
+              streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A \u064A\u0646\u062A\u0638\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
+              if (onStatus) onStatus({ ...streamState });
+            }
+          });
+          if (sub && typeof sub.catch === "function") sub.catch(() => {
+          });
+        } catch {
+        }
+        try {
+          if (KN.isOnline) KN.isOnline().then((r) => {
+            offline = !(r && r.online);
+          }).catch(() => {
+          });
+        } catch {
+        }
       }
-      streamState.connected = false;
-      streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A";
-      if (onStatus) onStatus({ ...streamState });
     }
-    if (online && !offline && ws && ws.readyState === 1) {
-      const silent = Date.now() - streamState.lastMsgAt;
-      if (silent > 45e3) forceReconnect("\u0635\u0645\u062A \u0627\u0644\u0642\u0646\u0627\u0629 \u0623\u0643\u062B\u0631 \u0645\u0646 45 \u062B\u0627\u0646\u064A\u0629 \u0623\u062B\u0646\u0627\u0621 \u0627\u0644\u0639\u0645\u0644 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629");
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && !stopped) {
+          const silent = Date.now() - streamState.lastMsgAt;
+          if (!ws || ws.readyState !== 1 || silent > 3e4) {
+            forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0644\u0644\u0648\u0627\u062C\u0647\u0629 \u0648\u0627\u0644\u0642\u0646\u0627\u0629 \u0635\u0627\u0645\u062A\u0629");
+          }
+        }
+      });
     }
-  }, 1e4);
-}
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", () => {
+        offline = false;
+        if (stopped) return;
+        forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0625\u0639\u0627\u062F\u0629 \u0648\u0635\u0644 \u0627\u0644\u0642\u0646\u0627\u0629 \u0641\u0648\u0631\u064B\u0627");
+      });
+      window.addEventListener("offline", () => {
+        offline = true;
+        streamState.connected = false;
+        streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0641\u064A \u0627\u0646\u062A\u0638\u0627\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
+        if (onStatus) onStatus({ ...streamState });
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+      });
+    }
+    if (typeof navigator !== "undefined" && navigator.onLine !== void 0) {
+      setInterval(() => {
+        if (stopped) return;
+        const online = typeof navigator.onLine === "boolean" ? navigator.onLine : true;
+        if (online && offline) {
+          offline = false;
+          forceReconnect("\u0634\u064F\u0648\u0647\u062F\u062A \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629 (\u0641\u062D\u0635 \u062F\u0648\u0631\u064A)");
+        }
+        if (!online && !offline) {
+          offline = true;
+          if (retryTimer) {
+            clearTimeout(retryTimer);
+            retryTimer = null;
+          }
+          streamState.connected = false;
+          streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A";
+          if (onStatus) onStatus({ ...streamState });
+        }
+        if (online && !offline && ws && ws.readyState === 1) {
+          const silent = Date.now() - streamState.lastMsgAt;
+          if (silent > 45e3) forceReconnect("\u0635\u0645\u062A \u0627\u0644\u0642\u0646\u0627\u0629 \u0623\u0643\u062B\u0631 \u0645\u0646 45 \u062B\u0627\u0646\u064A\u0629 \u0623\u062B\u0646\u0627\u0621 \u0627\u0644\u0639\u0645\u0644 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629");
+        }
+      }, 1e4);
+    }
+  }
+});
 
 // src/engine.ts
-var TICK_MS = 1e3;
-var MAX_HUNT_OPEN = 3;
-var HUNT_COOLDOWN = 1e4;
-var ADD_COOLDOWN = 15e3;
-var SCOUT_MS = 9e4;
-var MIN_HUNT_GAP = 0.08;
-var TP_BASE_NET = 0.12;
-var LOSS_STOP_USD = 16;
+var engine_exports = {};
+__export(engine_exports, {
+  FLEET_MODE: () => FLEET_MODE,
+  S: () => S,
+  backgroundPipeline: () => backgroundPipeline,
+  batchHoldActive: () => batchHoldActive,
+  bgRadarTick: () => bgRadarTick,
+  botTick: () => botTick,
+  clearKeys: () => clearKeys,
+  contractsForLevel: () => contractsForLevel,
+  desk: () => desk,
+  detectRemoteServer: () => detectRemoteServer,
+  dynamicTpNet: () => dynamicTpNet,
+  effLevels: () => effLevels,
+  emit: () => emit,
+  equity: () => equity,
+  exposureCapped: () => exposureCapped,
+  fetchKlines: () => fetchKlines,
+  flattenAt: () => flattenAt,
+  fmtPx: () => fmtPx,
+  fmtTime: () => fmtTime,
+  fmtUsd: () => fmtUsd,
+  gapHunterTick: () => gapHunterTick,
+  gapScan: () => gapScan,
+  gapSignal: () => gapSignal,
+  initEngine: () => initEngine,
+  levelQtys: () => levelQtys,
+  listContracts: () => listContracts,
+  liveSync: () => liveSync,
+  maybeSwitchSymbol: () => maybeSwitchSymbol,
+  memStats: () => memStats,
+  memStepMult: () => memStepMult,
+  netAlivePing: () => netAlivePing,
+  netDownSince: () => netDownSince,
+  netIsDown: () => netIsDown,
+  newCycle: () => newCycle,
+  onStreamTick: () => onStreamTick,
+  openNextReady: () => openNextReady,
+  pauseBot: () => pauseBot,
+  postHarvestReselect: () => postHarvestReselect,
+  priceKick: () => priceKick,
+  pulseAge: () => pulseAge,
+  pushLog: () => pushLog,
+  remoteSync: () => remoteSync,
+  repairAccount: () => repairAccount,
+  saveCfg: () => saveCfg,
+  saveKeys: () => saveKeys,
+  scanRadar: () => scanRadar,
+  startBot: () => startBot,
+  startSilentKeepAlive: () => startSilentKeepAlive,
+  stopBot: () => stopBot,
+  studiedEarlyExit: () => studiedEarlyExit,
+  studiedTpZone: () => studiedTpZone,
+  subscribe: () => subscribe2,
+  volBrakeActive: () => volBrakeActive
+});
 function dynamicTpNet() {
   const hf = S && S.config && S.config.hfMode;
   const posN = S.position ? Math.max(0, (S.position.size || 0) * (S.multiplier || 1) * (S.position.entry || 0)) : 0;
@@ -405,22 +433,6 @@ function tpBase() {
   if (fix > 0) return fix;
   return dynamicTpNet();
 }
-var clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-var uid = (p) => p + "_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-var fmtPx = (n) => {
-  n = Number(n);
-  if (!n || !isFinite(n) || n <= 0) return "\u2014";
-  if (n >= 1e3) return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
-  if (n >= 1) return n.toFixed(2);
-  const d = Math.min(12, Math.max(4, -Math.floor(Math.log10(n)) + 4));
-  return n.toFixed(d);
-};
-var fmtUsd = (n, d = 2) => {
-  const s = n < 0 ? "-" : n > 0 ? "+" : "";
-  return s + Math.abs(n).toFixed(d);
-};
-var nextEma = (p, x, k) => p == null ? x : x * k + p * (1 - k);
-var volSum = (l) => (l || []).reduce((a, b) => a + (b.size || 0), 0);
 function roundTick(p, t) {
   if (!t || t <= 0) return p;
   const n = Math.round(p / t) * t, d = Math.max(0, Math.ceil(-Math.log10(t)));
@@ -481,7 +493,6 @@ function lnPlugin() {
     return null;
   }
 }
-var _channelsReady = false;
 function ensureChannels(LN) {
   if (_channelsReady || !LN.createChannel) return;
   _channelsReady = true;
@@ -523,7 +534,6 @@ function nativeNotify(title, body, ongoing) {
   }).catch(() => {
   });
 }
-var _kaCtx = null;
 function startSilentKeepAlive() {
   if (_kaCtx || !(typeof window !== "undefined" && window.Capacitor)) return;
   try {
@@ -543,7 +553,6 @@ function startSilentKeepAlive() {
     logSwallow("silent-catch", e);
   }
 }
-var _fsTimer = null;
 function fsStart() {
   if (!(typeof window !== "undefined" && window.Capacitor)) return;
   try {
@@ -672,8 +681,10 @@ function notify(txt, kind) {
   pushLog(kind === "warn" ? "error" : "fill", txt);
   nativeNotify("AB-KING", txt);
 }
-var listeners = /* @__PURE__ */ new Set();
-var emitTimer = null;
+function subscribe2(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
 function emit() {
   for (const fn of [...listeners]) fn();
 }
@@ -689,7 +700,6 @@ function toast(m) {
   S.toastMsg = { text: m, at: Date.now() };
   emit();
 }
-var R = () => typeof window !== "undefined" && window.__ABKING_REMOTE ? String(window.__ABKING_REMOTE) : null;
 async function remoteCmd(action, payload) {
   const base = R();
   if (!base) return { ok: false, error: "no server" };
@@ -704,10 +714,6 @@ async function remoteCmd(action, payload) {
     return { ok: false, error: String(e?.message || e) };
   }
 }
-var _remoteFails = 0;
-var _remoteLogSeen = null;
-var _relayText = "";
-var _relayAt = 0;
 function relayServerLogs() {
   const logs = S.logs || [];
   if (_remoteLogSeen == null) {
@@ -788,94 +794,12 @@ async function detectRemoteServer() {
   }
   return false;
 }
-var S = {
-  keys: null,
-  config: {
-    symbol: "XBTUSDTM",
-    displaySymbol: "BTC",
-    leverage: 3,
-    gridStepPct: 0.3,
-    huntPct: 0.15,
-    levels: 12,
-    direction: "short",
-    directionMode: "auto",
-    cycleBalance: 100,
-    mode: "paper",
-    tpNet: 0.12,
-    tpUsd: 1,
-    patienceHrs: 24,
-    patienceUsd: 0,
-    gapMode: false
-  },
-  status: "idle",
-  heartbeat: 0,
-  lastPrice: null,
-  markPrice: null,
-  // قاعدة المالك: تجميد الدخول عند وجود مراكز منصة غير مغلقة + حد أوامر الدورة
-  _exOpenCount: 0,
-  _noNewEntries: false,
-  _cycleMaxFills: 4,
-  _nextCycleMax: 0,
-  multiplier: 1,
-  tickSize: 0.1,
-  makerFee: 2e-4,
-  takerFee: 6e-4,
-  funding: 0,
-  _metaSym: null,
-  maxOrderQty: 0,
-  exAvail: null,
-  exLeverage: null,
-  // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
-  grid: [],
-  position: null,
-  journal: [],
-  logs: [],
-  history: [],
-  linkOk: false,
-  intel: null,
-  exEquity: null,
-  realizedPnl: 0,
-  feesPaid: 0,
-  fundingPaid: 0,
-  cycleHarvested: 0,
-  slipCost: 0,
-  priceTrail: [],
-  emaFast: null,
-  emaSlow: null,
-  cvd: 0,
-  tape: [],
-  biasScore: 0,
-  biasReasons: [],
-  regime: null,
-  confluence: null,
-  huntAnchor: null,
-  gridAnchor: null,
-  lastHuntAt: 0,
-  lastAddAt: 0,
-  lastWorkAt: 0,
-  huntCount: 0,
-  liqPrice: null,
-  exLiqPrice: null,
-  mmr: 4e-3,
-  orderBook: { bids: [], asks: [] },
-  startedAt: null,
-  activeCycle: null,
-  studyUntil: 0,
-  studyAcc: null,
-  // دراسة العملة الجديدة قبل أي دخول
-  ignoreExchangeUntil: 0,
-  lastTickAt: null,
-  sound: true,
-  soundTone: "soft",
-  permDenied: false,
-  toastMsg: null,
-  _metaAt: 0,
-  _lastTrailAt: 0,
-  memory: { pairs: {}, cycles: 0, totalPnl: 0 }
-  // الذاكرة القوية — تبقى عبر الدورات ولا تُمسح أبدًا
-};
-var _netFailStreak = 0;
-var _netDownAt = 0;
+function netIsDown() {
+  return _netDownAt > 0;
+}
+function netDownSince() {
+  return _netDownAt > 0 ? Math.round((Date.now() - _wasDownStart) / 1e3) : 0;
+}
 function netAlivePing(ok) {
   if (ok) {
     const wasDown = _netDownAt > 0;
@@ -899,7 +823,6 @@ function netAlivePing(ok) {
     }
   }
 }
-var _wasDownStart = 0;
 function saveAll() {
   try {
     localStorage.setItem("abking:cfg", JSON.stringify(S.config));
@@ -1018,7 +941,6 @@ function loadAll() {
 function pushLog(kind, text) {
   S.logs = [{ id: uid("l"), at: Date.now(), kind, text }, ...S.logs].slice(0, 80);
 }
-var _swallowAt = {};
 function logSwallow(where, err) {
   try {
     const msg = String(err && err.message || err || "unknown");
@@ -1038,10 +960,6 @@ function pushJr(row) {
   row.symbol = row.symbol || S.config.displaySymbol;
   S.journal = [row, ...S.journal].slice(0, 120);
 }
-var DIRECT_BASE = "https://api-futures.kucoin.com";
-var IS_SERVER = typeof process !== "undefined" && !!(process && process.env && process.env.ABKING_SERVER);
-var IS_NATIVE = IS_SERVER || typeof window !== "undefined" && (window.Capacitor || location.protocol === "capacitor:");
-var API_BASE = IS_NATIVE ? DIRECT_BASE : "/kucoin";
 function sig(ms) {
   const c = new AbortController();
   setTimeout(() => c.abort(), ms);
@@ -1138,33 +1056,24 @@ async function kcPrivate(method, path, body) {
   if (j.code !== "200000") throw new Error(j.msg || "KuCoin " + res.status);
   return j.data;
 }
-var fetchTicker = (s) => kcPublic("/api/v1/ticker?symbol=" + encodeURIComponent(s), 2500);
-var fetchContract = (s) => kcPublic("/api/v1/contracts/" + encodeURIComponent(s), 3500);
-var _bookFailsAt = 0;
-var _tapeFailsAt = 0;
-var fetchBook = (s) => kcPublic("/api/v1/level2/depth20?symbol=" + encodeURIComponent(s), 2500).then((d) => {
-  _bookFailsAt = 0;
-  return {
-    bids: (d.bids || []).map((r) => ({ price: +r[0], size: +r[1] })).filter((r) => r.price > 0),
-    asks: (d.asks || []).map((r) => ({ price: +r[0], size: +r[1] })).filter((r) => r.price > 0)
-  };
-}).catch((e) => {
-  _bookFailsAt = Date.now();
-  throw e;
-});
-var fetchTape = (s) => kcPublic("/api/v1/trade/history?symbol=" + encodeURIComponent(s), 2500).then((a) => {
-  _tapeFailsAt = 0;
-  return (a || []).slice(0, 32).map((t) => ({ side: String(t.side || ""), size: +t.size || 0, price: +t.price || 0 }));
-}).catch((e) => {
-  _tapeFailsAt = Date.now();
-  throw e;
-});
 function fetchKlines(symbol2, gran) {
   return kcPublic("/api/v1/kline/query?symbol=" + encodeURIComponent(symbol2) + "&granularity=" + gran, 6e3).then((a) => (a || []).map((r) => {
     let t = +r[0];
     if (t < 1e12) t *= 1e3;
     return { t, o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] || 0 };
   }).filter((k) => k.t > 0 && k.o > 0).sort((x, y) => x.t - y.t));
+}
+function listContracts() {
+  if (contractsCache && Date.now() - contractsCache.at < 3e5) return Promise.resolve(contractsCache.items);
+  return kcPublic("/api/v1/contracts/active", 6e3).then((d) => {
+    const items = (d || []).map((c) => ({
+      symbol: c.symbol,
+      base: String(c.baseCurrency || c.symbol.replace(/USDTM?$/i, "")),
+      name: String(c.baseCurrency || "")
+    }));
+    contractsCache = { at: Date.now(), items };
+    return items;
+  });
 }
 function radarScore(x) {
   let sc = 50;
@@ -1233,9 +1142,6 @@ function radarScore(x) {
   }
   return { score: clamp(Math.round(sc), 0, 100), why };
 }
-S._nextSymbol = null;
-S._nextReady = false;
-var _bgPipeAt = 0;
 async function backgroundPipeline() {
   if (S.status !== "running") return;
   if (Date.now() - _bgPipeAt < 3e4) return;
@@ -1297,7 +1203,6 @@ function openNextReady() {
   });
   return true;
 }
-var FLEET_MODE = () => !!(typeof process !== "undefined" && process.env && process.env.ABKING_SLOT);
 async function scanRadar() {
   if (S._radarBusy) return S.radar;
   S._radarBusy = true;
@@ -1520,7 +1425,6 @@ async function postHarvestReselect() {
     logSwallow("silent-catch", e);
   }
 }
-var _bgScanAt = 0;
 function bgRadarTick() {
   if (!R()) {
     if (Date.now() - _bgScanAt < 5 * 60 * 1e3) return;
@@ -1529,10 +1433,6 @@ function bgRadarTick() {
     });
   }
 }
-var _lastSwitchAt = 0;
-var GAP_MODE_ON = () => !!S.config.gapMode;
-var _gapScanAt = 0;
-var _gapStats = null;
 async function gapScan() {
   if (!GAP_MODE_ON()) return null;
   if (Date.now() - _gapScanAt < 60 * 1e3) return _gapStats;
@@ -1640,7 +1540,6 @@ function inPeakWindow() {
   const h = (/* @__PURE__ */ new Date()).getUTCHours();
   return h >= 13 && h <= 19;
 }
-var _btcLead = null;
 async function btcLead() {
   try {
     const now = Date.now();
@@ -1830,38 +1729,6 @@ async function exPosition(symbol2) {
     openedAt: Date.now()
   };
 }
-var exOrders = (symbol2) => kcPrivate("GET", "/api/v1/orders?status=active&symbol=" + encodeURIComponent(symbol2)).then((d) => {
-  const a = Array.isArray(d) ? d : d.items || [];
-  return a.map((o) => ({
-    orderId: o.id,
-    clientOid: o.clientOid || null,
-    side: o.side === "sell" ? "sell" : "buy",
-    price: +o.price,
-    size: +o.size,
-    filledSize: +(o.filledSize ?? o.dealSize ?? 0) || 0,
-    reduceOnly: !!o.reduceOnly
-  }));
-}).catch(() => null);
-var exFills = (symbol2) => kcPrivate("GET", "/api/v1/fills?symbol=" + encodeURIComponent(symbol2) + "&pageSize=100").then((d) => {
-  const a = Array.isArray(d) ? d : d.items || [];
-  return a.map((f) => ({
-    orderId: f.orderId || "",
-    clientOid: f.clientOid || null,
-    side: f.side === "sell" ? "sell" : "buy",
-    price: +f.price || 0,
-    size: +f.size || 0,
-    fee: Math.abs(+f.fee || 0),
-    feeCurrency: f.feeCurrency || "",
-    at: +f.createdAt || 0,
-    ts: f.tradeId || ""
-  }));
-}).catch(() => null);
-var exStops = (symbol2) => kcPrivate("GET", "/api/v1/stopOrders?symbol=" + encodeURIComponent(symbol2)).then((d) => {
-  const a = Array.isArray(d) ? d : d.items || [];
-  return a.map((o) => ({ id: o.id || o.orderId || "", stopPrice: +(o.stopPrice ?? o.price ?? 0) || 0 }));
-}).catch(() => null);
-var mmTried = {};
-var mmCache = {};
 function _mmFromPos(pos) {
   if (!pos) return null;
   if (typeof pos.marginMode === "string" && pos.marginMode) return pos.marginMode.toUpperCase();
@@ -1952,6 +1819,60 @@ async function ensureLiveMeta(symbol2) {
     throw new Error("\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0639\u0642\u062F \u063A\u064A\u0631 \u062C\u0627\u0647\u0632\u0629 \u2014 \u0623\u064F\u062C\u0651\u0644 \u0627\u0644\u0623\u0645\u0631 \u0644\u062D\u064A\u0646 \u062A\u0648\u062B\u064A\u0642 \u0627\u0644\u0645\u0636\u0627\u0639\u0641");
   }
 }
+async function repairAccount() {
+  if (S.config.mode !== "live" || !S.keys) return { ok: false, error: "\u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0641\u0642\u0637" };
+  pushLog("server", "\u{1F527} \u0628\u062F\u0621 \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0627\u0644\u0634\u0627\u0645\u0644 \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639...");
+  const report = [];
+  let cancelled = 0, stops = 0;
+  try {
+    const resp = await kcPrivate("GET", "/api/v1/positions");
+    const list = (resp && resp.data || []).filter((x) => Math.abs(Number(x.currentQty) || 0) > 1e-12);
+    for (const x of list) {
+      const sym = String(x.symbol);
+      try {
+        await exCancelStops(sym);
+        stops++;
+      } catch {
+      }
+      try {
+        const os = await exOrders(sym);
+        for (const o of os || []) {
+          try {
+            await exCancelOne(o.orderId);
+            cancelled++;
+          } catch {
+          }
+        }
+      } catch {
+      }
+    }
+    for (const x of list) {
+      const sym = String(x.symbol);
+      const qty = Number(x.currentQty) || 0, side = qty > 0 ? "long" : "short", absQ = Math.abs(qty);
+      const entry = Number(x.avgEntryPrice) || 0, mult = Number(x.multiplier) || 1;
+      const pnl = Number(x.unrealisedPnl) || 0;
+      let tp = 0;
+      try {
+        if (entry > 0 && absQ > 0) {
+          const tpU = Math.max(0.5, Number(S.config.tpUsd) || 1);
+          const dPx = tpU / absQ / mult * 1.25;
+          const price = roundTick(side === "long" ? entry + dPx : entry - dPx, S.tickSize || 1e-8);
+          await exPlaceLimit({ symbol: sym, side: side === "long" ? "sell" : "buy", price, qty: absQ, reduceOnly: true, clientOid: uid("rep") });
+          tp = price;
+        }
+      } catch (e) {
+        pushLog("warn", "\u0647\u062F\u0641 \u062C\u0646\u064A " + sym + " \u0641\u0634\u0644: " + String(e?.message || e));
+      }
+      report.push({ symbol: sym, side, size: absQ, entry: Number(entry.toFixed(8)), pnl: Number(pnl.toFixed(2)), tp: Number(tp) || null });
+    }
+    const msg = "\u{1F527} \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628: " + list.length + " \u0645\u0631\u0643\u0632\u0627\u064B \u062D\u064A\u0627\u064B \u2014 \u0623\u064F\u0644\u063A\u064A\u062A " + cancelled + " \u0623\u0645\u0631\u0627\u064B \u0648" + stops + " \u0633\u062A\u0648\u0628 \u2014 \u0644\u0643\u0644 \u0645\u0631\u0643\u0632 \u0647\u062F\u0641 \u062C\u0646\u064A \u0631\u0627\u0628\u062D" + (list.length ? " \u2014 \u0644\u0627 \u062E\u0633\u0627\u0631\u0629 \u0648\u0644\u0627 \u062F\u062E\u0648\u0644 \u062C\u062F\u064A\u062F \u062D\u062A\u0649 \u062A\u064F\u063A\u0646\u0649 \u0643\u0644\u0647\u0627" : "");
+    pushLog("server", msg);
+    return { ok: true, positions: report, cancelledOrders: cancelled, cancelledStops: stops, message: msg };
+  } catch (e) {
+    pushLog("error", "\u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0641\u0634\u0644: " + String(e?.message || e));
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
 async function orphanSweep() {
   if (S.config.mode !== "live" || !S.keys) return;
   try {
@@ -2035,12 +1956,6 @@ async function exPlaceMarket(symbol2, side, qty) {
     marginMode: "CROSS"
   });
 }
-var exCancelAll = (symbol2) => kcPrivate("DELETE", "/api/v1/orders?symbol=" + encodeURIComponent(symbol2)).catch(() => {
-});
-var exCancelOne = (id) => kcPrivate("DELETE", "/api/v1/orders/" + id).catch(() => {
-});
-var exCancelStops = (symbol2) => kcPrivate("DELETE", "/api/v1/stopOrders?symbol=" + encodeURIComponent(symbol2)).catch(() => {
-});
 function exCloseQty(symbol2, side, qty) {
   return placeOrderSmart({
     clientOid: "cls_" + Date.now().toString(36) + Math.floor(Math.random() * 1e3),
@@ -4126,18 +4041,16 @@ async function flattenAt(p, source) {
     for (let att = 0; att < 5 && !closed; att++) {
       try {
         await exCloseQty(S.config.symbol, pos.side, pos.size);
-        closed = true;
       } catch (e) {
         pushLog("error", "\u0645\u062D\u0627\u0648\u0644\u0629 \u0625\u063A\u0644\u0627\u0642 " + (att + 1) + " \u0641\u0634\u0644\u062A: " + String(e?.message || e));
-        await new Promise((r) => setTimeout(r, 500));
-        try {
-          const live = await exPosition(S.config.symbol);
-          if (live && live.size > 0) pos.size = live.size;
-          else {
-            closed = true;
-          }
-        } catch (e2) {
-        }
+      }
+      await new Promise((r) => setTimeout(r, 700));
+      try {
+        const live = await exPosition(S.config.symbol);
+        if (live && live.size > 0) pos.size = live.size;
+        else closed = true;
+      } catch (e2) {
+        if (att === 4) pushLog("error", "\u062A\u0639\u0630\u0631 \u062A\u0623\u0643\u064A\u062F \u0627\u0644\u0635\u0641\u0631\u064A\u0629 \u2014 \u0627\u0644\u0645\u0631\u0643\u0632 \u064A\u0628\u0642\u0649 \u0645\u064F\u062F\u0627\u0631\u0627\u064B");
       }
     }
     if (!closed) {
@@ -4183,6 +4096,7 @@ function pruneGhosts() {
     }
     if (g.status === "filled" && !g.reduceOnly) g.status = "cancelled";
   }
+  if (S.config.mode === "live" && S.keys) return;
   for (const row of S.journal) {
     if (row.status !== "open") continue;
     row.status = "closed";
@@ -4354,10 +4268,6 @@ async function loadMarket(full) {
   }
   return m;
 }
-var _ordErrAt = 0;
-var _syncErrAt = 0;
-var _syncErrMsg = "";
-var _huntErrAt = 0;
 async function liveSync() {
   if (R()) return;
   if (S.config.mode !== "live" || !S.keys) return;
@@ -5188,7 +5098,26 @@ function saveCfg(v) {
   emit();
   toast("\u062A\u0645 \u062D\u0641\u0638 \u0627\u0644\u0645\u0639\u0627\u0645\u0644\u0627\u062A");
 }
-var booted = false;
+function equity() {
+  return S.config.cycleBalance + (S.position ? S.position.unrealized : 0);
+}
+function desk() {
+  const j = S.journal;
+  const closed = j.filter((r) => r.status !== "open"), open = j.filter((r) => r.status === "open");
+  return {
+    win: closed.filter((r) => r.pnl > 0),
+    lose: closed.filter((r) => r.pnl < 0),
+    open,
+    winPnl: closed.filter((r) => r.pnl > 0).reduce((a, r) => a + r.pnl, 0),
+    losePnl: closed.filter((r) => r.pnl < 0).reduce((a, r) => a + r.pnl, 0),
+    fees: S.feesPaid
+  };
+}
+function pulseAge() {
+  if (!S.lastTickAt) return "\u0644\u0627 \u0646\u0628\u0636";
+  const s = Math.max(0, Math.round((Date.now() - S.lastTickAt) / 1e3));
+  return s < 5 ? "\u0627\u0644\u0622\u0646" : s < 60 ? s + " \u062B" : "\u0642\u0628\u0644 " + Math.floor(s / 60) + " \u062F";
+}
 function initEngine() {
   if (booted) return;
   booted = true;
@@ -5282,11 +5211,271 @@ function initEngine() {
   });
   emit();
 }
+var TICK_MS, MAX_HUNT_OPEN, HUNT_COOLDOWN, ADD_COOLDOWN, SCOUT_MS, MIN_HUNT_GAP, TP_BASE_NET, LOSS_STOP_USD, clamp, uid, fmtPx, fmtUsd, fmtTime, nextEma, volSum, _channelsReady, _kaCtx, _fsTimer, listeners, emitTimer, R, _remoteFails, _remoteLogSeen, _relayText, _relayAt, S, _netFailStreak, _netDownAt, _wasDownStart, _swallowAt, DIRECT_BASE, IS_SERVER, IS_NATIVE, API_BASE, fetchTicker, fetchContract, _bookFailsAt, _tapeFailsAt, fetchBook, fetchTape, contractsCache, _bgPipeAt, FLEET_MODE, _bgScanAt, _lastSwitchAt, GAP_MODE_ON, _gapScanAt, _gapStats, _btcLead, exOrders, exFills, exStops, mmTried, mmCache, exCancelAll, exCancelOne, exCancelStops, _ordErrAt, _syncErrAt, _syncErrMsg, _huntErrAt, booted;
+var init_engine = __esm({
+  "src/engine.ts"() {
+    init_ws();
+    TICK_MS = 1e3;
+    MAX_HUNT_OPEN = 3;
+    HUNT_COOLDOWN = 1e4;
+    ADD_COOLDOWN = 15e3;
+    SCOUT_MS = 9e4;
+    MIN_HUNT_GAP = 0.08;
+    TP_BASE_NET = 0.12;
+    LOSS_STOP_USD = 16;
+    clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    uid = (p) => p + "_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+    fmtPx = (n) => {
+      n = Number(n);
+      if (!n || !isFinite(n) || n <= 0) return "\u2014";
+      if (n >= 1e3) return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+      if (n >= 1) return n.toFixed(2);
+      const d = Math.min(12, Math.max(4, -Math.floor(Math.log10(n)) + 4));
+      return n.toFixed(d);
+    };
+    fmtUsd = (n, d = 2) => {
+      const s = n < 0 ? "-" : n > 0 ? "+" : "";
+      return s + Math.abs(n).toFixed(d);
+    };
+    fmtTime = (t) => new Date(t).toLocaleTimeString("en-GB", { hour12: false });
+    nextEma = (p, x, k) => p == null ? x : x * k + p * (1 - k);
+    volSum = (l) => (l || []).reduce((a, b) => a + (b.size || 0), 0);
+    _channelsReady = false;
+    _kaCtx = null;
+    _fsTimer = null;
+    listeners = /* @__PURE__ */ new Set();
+    emitTimer = null;
+    R = () => typeof window !== "undefined" && window.__ABKING_REMOTE ? String(window.__ABKING_REMOTE) : null;
+    _remoteFails = 0;
+    _remoteLogSeen = null;
+    _relayText = "";
+    _relayAt = 0;
+    S = {
+      keys: null,
+      config: {
+        symbol: "XBTUSDTM",
+        displaySymbol: "BTC",
+        leverage: 3,
+        gridStepPct: 0.3,
+        huntPct: 0.15,
+        levels: 12,
+        direction: "short",
+        directionMode: "auto",
+        cycleBalance: 100,
+        mode: "paper",
+        tpNet: 0.12,
+        tpUsd: 1,
+        patienceHrs: 24,
+        patienceUsd: 0,
+        gapMode: false
+      },
+      status: "idle",
+      heartbeat: 0,
+      lastPrice: null,
+      markPrice: null,
+      // قاعدة المالك: تجميد الدخول عند وجود مراكز منصة غير مغلقة + حد أوامر الدورة
+      _exOpenCount: 0,
+      _noNewEntries: false,
+      _cycleMaxFills: 4,
+      _nextCycleMax: 0,
+      multiplier: 1,
+      tickSize: 0.1,
+      makerFee: 2e-4,
+      takerFee: 6e-4,
+      funding: 0,
+      _metaSym: null,
+      maxOrderQty: 0,
+      exAvail: null,
+      exLeverage: null,
+      // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
+      grid: [],
+      position: null,
+      journal: [],
+      logs: [],
+      history: [],
+      linkOk: false,
+      intel: null,
+      exEquity: null,
+      realizedPnl: 0,
+      feesPaid: 0,
+      fundingPaid: 0,
+      cycleHarvested: 0,
+      slipCost: 0,
+      priceTrail: [],
+      emaFast: null,
+      emaSlow: null,
+      cvd: 0,
+      tape: [],
+      biasScore: 0,
+      biasReasons: [],
+      regime: null,
+      confluence: null,
+      huntAnchor: null,
+      gridAnchor: null,
+      lastHuntAt: 0,
+      lastAddAt: 0,
+      lastWorkAt: 0,
+      huntCount: 0,
+      liqPrice: null,
+      exLiqPrice: null,
+      mmr: 4e-3,
+      orderBook: { bids: [], asks: [] },
+      startedAt: null,
+      activeCycle: null,
+      studyUntil: 0,
+      studyAcc: null,
+      // دراسة العملة الجديدة قبل أي دخول
+      ignoreExchangeUntil: 0,
+      lastTickAt: null,
+      sound: true,
+      soundTone: "soft",
+      permDenied: false,
+      toastMsg: null,
+      _metaAt: 0,
+      _lastTrailAt: 0,
+      memory: { pairs: {}, cycles: 0, totalPnl: 0 }
+      // الذاكرة القوية — تبقى عبر الدورات ولا تُمسح أبدًا
+    };
+    _netFailStreak = 0;
+    _netDownAt = 0;
+    _wasDownStart = 0;
+    _swallowAt = {};
+    DIRECT_BASE = "https://api-futures.kucoin.com";
+    IS_SERVER = typeof process !== "undefined" && !!(process && process.env && process.env.ABKING_SERVER);
+    IS_NATIVE = IS_SERVER || typeof window !== "undefined" && (window.Capacitor || location.protocol === "capacitor:");
+    API_BASE = IS_NATIVE ? DIRECT_BASE : "/kucoin";
+    fetchTicker = (s) => kcPublic("/api/v1/ticker?symbol=" + encodeURIComponent(s), 2500);
+    fetchContract = (s) => kcPublic("/api/v1/contracts/" + encodeURIComponent(s), 3500);
+    _bookFailsAt = 0;
+    _tapeFailsAt = 0;
+    fetchBook = (s) => kcPublic("/api/v1/level2/depth20?symbol=" + encodeURIComponent(s), 2500).then((d) => {
+      _bookFailsAt = 0;
+      return {
+        bids: (d.bids || []).map((r) => ({ price: +r[0], size: +r[1] })).filter((r) => r.price > 0),
+        asks: (d.asks || []).map((r) => ({ price: +r[0], size: +r[1] })).filter((r) => r.price > 0)
+      };
+    }).catch((e) => {
+      _bookFailsAt = Date.now();
+      throw e;
+    });
+    fetchTape = (s) => kcPublic("/api/v1/trade/history?symbol=" + encodeURIComponent(s), 2500).then((a) => {
+      _tapeFailsAt = 0;
+      return (a || []).slice(0, 32).map((t) => ({ side: String(t.side || ""), size: +t.size || 0, price: +t.price || 0 }));
+    }).catch((e) => {
+      _tapeFailsAt = Date.now();
+      throw e;
+    });
+    contractsCache = null;
+    S._nextSymbol = null;
+    S._nextReady = false;
+    _bgPipeAt = 0;
+    FLEET_MODE = () => !!(typeof process !== "undefined" && process.env && process.env.ABKING_SLOT);
+    _bgScanAt = 0;
+    _lastSwitchAt = 0;
+    GAP_MODE_ON = () => !!S.config.gapMode;
+    _gapScanAt = 0;
+    _gapStats = null;
+    _btcLead = null;
+    exOrders = (symbol2) => kcPrivate("GET", "/api/v1/orders?status=active&symbol=" + encodeURIComponent(symbol2)).then((d) => {
+      const a = Array.isArray(d) ? d : d.items || [];
+      return a.map((o) => ({
+        orderId: o.id,
+        clientOid: o.clientOid || null,
+        side: o.side === "sell" ? "sell" : "buy",
+        price: +o.price,
+        size: +o.size,
+        filledSize: +(o.filledSize ?? o.dealSize ?? 0) || 0,
+        reduceOnly: !!o.reduceOnly
+      }));
+    }).catch(() => null);
+    exFills = (symbol2) => kcPrivate("GET", "/api/v1/fills?symbol=" + encodeURIComponent(symbol2) + "&pageSize=100").then((d) => {
+      const a = Array.isArray(d) ? d : d.items || [];
+      return a.map((f) => ({
+        orderId: f.orderId || "",
+        clientOid: f.clientOid || null,
+        side: f.side === "sell" ? "sell" : "buy",
+        price: +f.price || 0,
+        size: +f.size || 0,
+        fee: Math.abs(+f.fee || 0),
+        feeCurrency: f.feeCurrency || "",
+        at: +f.createdAt || 0,
+        ts: f.tradeId || ""
+      }));
+    }).catch(() => null);
+    exStops = (symbol2) => kcPrivate("GET", "/api/v1/stopOrders?symbol=" + encodeURIComponent(symbol2)).then((d) => {
+      const a = Array.isArray(d) ? d : d.items || [];
+      return a.map((o) => ({ id: o.id || o.orderId || "", stopPrice: +(o.stopPrice ?? o.price ?? 0) || 0 }));
+    }).catch(() => null);
+    mmTried = {};
+    mmCache = {};
+    exCancelAll = (symbol2) => kcPrivate("DELETE", "/api/v1/orders?symbol=" + encodeURIComponent(symbol2)).catch(() => {
+    });
+    exCancelOne = (id) => kcPrivate("DELETE", "/api/v1/orders/" + id).catch(() => {
+    });
+    exCancelStops = (symbol2) => kcPrivate("DELETE", "/api/v1/stopOrders?symbol=" + encodeURIComponent(symbol2)).catch(() => {
+    });
+    _ordErrAt = 0;
+    _syncErrAt = 0;
+    _syncErrMsg = "";
+    _huntErrAt = 0;
+    booted = false;
+  }
+});
+
+// src/server-shims.ts
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+process.env.ABKING_SERVER = "1";
+var dir = join(homedir(), ".ab-king");
+try {
+  mkdirSync(dir, { recursive: true });
+} catch {
+}
+var __slot = process.env.ABKING_SLOT || "";
+var file = join(dir, __slot ? `trq-slot-${__slot}-store.json` : "ab-king-server-store.json");
+var data = {};
+try {
+  if (existsSync(file)) data = JSON.parse(readFileSync(file, "utf8") || "{}");
+} catch (e) {
+  data = {};
+}
+var timer = null;
+function persist() {
+  if (timer) return;
+  timer = setTimeout(() => {
+    timer = null;
+    try {
+      writeFileSync(file, JSON.stringify(data));
+    } catch {
+    }
+  }, 300);
+}
+globalThis.localStorage = {
+  getItem: (k) => k in data ? data[k] : null,
+  setItem: (k, v) => {
+    data[k] = String(v);
+    persist();
+  },
+  removeItem: (k) => {
+    delete data[k];
+    persist();
+  },
+  clear: () => {
+    data = {};
+    persist();
+  }
+};
+console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u0629: " + file);
 
 // src/server-entry.ts
+init_engine();
 import { createServer } from "node:http";
-var SRV_VER = "AB-KING-1.6.0";
-var PORT = 8787;
+import { spawn } from "node:child_process";
+var SRV_VER = "KING-1.8.5";
+var FLEET_N = 1;
+var BASE_PORT = 9010;
+var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
 function send(res, code, obj) {
   res.writeHead(code, {
     "Content-Type": "application/json; charset=utf-8",
@@ -5297,20 +5486,99 @@ function send(res, code, obj) {
   });
   res.end(JSON.stringify(obj));
 }
-pushLog("server", "\u2705 " + SRV_VER + " \u064A\u0639\u0645\u0644 \u0627\u0644\u0622\u0646 \u2014 \u0627\u0644\u062A\u0628\u062F\u064A\u0644 \u0627\u0644\u062A\u0644\u0642\u0627\u0626\u064A \u0645\u0641\u0639\u0651\u0644: \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A \u0641\u0648\u0631\u064B\u0627 + \u062F\u0648\u0631\u0627\u0646 \u0627\u0644\u0628\u0648\u0631\u0629 \u0639\u0646\u062F 15 \u062F\u0642\u064A\u0642\u0629 \u0628\u0644\u0627 \u062A\u0646\u0641\u064A\u0630");
-setTimeout(() => {
-  liveSync().then(() => pushLog("server", "\u{1F527} \u0627\u0643\u062A\u0645\u0644\u062A \u0645\u0631\u0627\u062C\u0639\u0629 \u0627\u0644\u0648\u0636\u0639 \u0639\u0646\u062F \u0627\u0644\u0625\u0642\u0644\u0627\u0639 \u2014 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0648\u0627\u0644\u0645\u0631\u0627\u0643\u0632 \u0645\u062A\u0637\u0627\u0628\u0642\u0629 \u0645\u0639 \u0627\u0644\u0645\u0646\u0635\u0629")).catch(() => pushLog("server", "\u23F3 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u062A\u064F\u0639\u0627\u062F \u0627\u0644\u0645\u0631\u0627\u062C\u0639\u0629 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0641\u0648\u0631 \u062A\u0648\u0641\u0631 \u0627\u0644\u0634\u0628\u0643\u0629"));
-  scanRadar().catch(() => {
-  });
-}, 1500);
-setInterval(() => {
+async function jfetch(url, ms = 2500, payload) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
   try {
-    const idleMs = Date.now() - (S.lastHuntAt || S._dwellAt || S.startedAt || S._savedAt || Date.now());
-    const idleMin = Math.max(0, Math.round(idleMs / 6e4));
-    pushLog("server", "\u{1F4A1} \u0646\u0628\u0636\u0629 " + SRV_VER + " \u2014 \u0627\u0644\u0639\u0645\u0644\u0629: " + (S.config.displaySymbol || "?") + " \u2014 \u0628\u0644\u0627 \u062A\u0646\u0641\u064A\u0630 \u0645\u0646\u0630 " + idleMin + " \u062F" + (S.position ? " \u2014 \u0645\u0631\u0643\u0632 \u0645\u0641\u062A\u0648\u062D \u064A\u064F\u062F\u0627\u0631 \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A" : " \u2014 \u0627\u0644\u062F\u0648\u0631\u0627\u0646 \u0627\u0644\u062A\u0644\u0642\u0627\u0626\u064A \u0639\u0646\u062F 15 \u062F") + " \u2014 \u0627\u0644\u062D\u0627\u0644\u0629: " + (S.status || "\u061F"));
+    const r = await fetch(url, payload ? { method: "POST", signal: c.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) } : { signal: c.signal });
+    clearTimeout(t);
+    return await r.json();
   } catch {
+    clearTimeout(t);
+    return null;
   }
-}, 30 * 60 * 1e3).unref?.();
+}
+var PORT = BASE_PORT + SLOT;
+if (SLOT > 0) {
+  pushLog("server", "\u2705 " + SRV_VER + " \u2014 \u0645\u062D\u0631\u0643 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 \u0631\u0642\u0645 " + SLOT + "/" + FLEET_N + " \u2014 \u0646\u0635\u064A\u0628\u0647 \u0645\u0646 \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644: \xF7" + FLEET_N + " \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B \u2014 \u062A\u0628\u062F\u064A\u0644\u0647 \u0648\u062C\u0646\u064A\u0647 \u0645\u0633\u062A\u0642\u0644\u0627\u0646");
+  let bootPickDone = false;
+  const fleetSync = () => jfetch("http://127.0.0.1:" + BASE_PORT + "/fleet?i=" + SLOT).then((f) => {
+    if (f && Array.isArray(f.taken)) {
+      S._fleetTaken = f.taken.map((t) => t.sym);
+      if (!bootPickDone && !S.position && S.config.symbol === "XBTUSDTM" && S.radar && Array.isArray(S.radar.list) && S.radar.list.length) {
+        const pick = S.radar.list[Math.min(SLOT - 1, S.radar.list.length - 1)];
+        if (pick && pick.symbol && pick.symbol !== "XBTUSDTM") {
+          bootPickDone = true;
+          pushLog("server", "\u{1F3AF} \u062A\u0639\u064A\u064A\u0646 \u0627\u0644\u0625\u0642\u0644\u0627\u0639: \u0627\u0644\u0645\u062D\u0631\u0643 " + SLOT + " \u064A\u0628\u062F\u0623 \u0639\u0644\u0649 " + pick.disp + " (\u0627\u0644\u0645\u0631\u062A\u0628\u0629 " + SLOT + " \u0641\u064A \u0627\u0644\u0631\u0627\u062F\u0627\u0631)");
+          try {
+            (init_engine(), __toCommonJS(engine_exports)).saveCfg({
+              symbol: pick.symbol,
+              leverage: S.config.leverage,
+              levels: S.config.levels,
+              gridStepPct: S.config.gridStepPct,
+              huntPct: S.config.huntPct,
+              cycleBalance: S.config.cycleBalance,
+              directionMode: S.config.directionMode,
+              mode: S.config.mode
+            });
+          } catch {
+          }
+          return;
+        }
+      }
+      const clash = f.taken.find((t) => t.sym === S.config.symbol);
+      if (clash && clash.holder < SLOT && !S.position) {
+        S._harvestAt = Date.now();
+        S._reselectDone = false;
+        pushLog("server", "\u{1F6A6} \u062A\u0646\u0648\u064A\u0639 \u0627\u0644\u0623\u0633\u0637\u0648\u0644: \u0639\u0645\u0644\u062A\u064A \u064A\u0633\u0643\u0646\u0647\u0627 \u0627\u0644\u0645\u062D\u0631\u0643 " + clash.holder + " \u2014 \u0627\u0646\u062A\u0642\u0627\u0644\u064A \u0644\u0623\u0641\u0636\u0644 \u0628\u062F\u064A\u0644 \u0645\u062A\u0627\u062D");
+      }
+    }
+  }).catch(() => {
+  });
+  setTimeout(fleetSync, 2500);
+  setInterval(fleetSync, 1e4).unref?.();
+  setTimeout(() => {
+    liveSync().then(() => pushLog("server", "\u{1F527} \u0627\u0643\u062A\u0645\u0644\u062A \u0645\u0631\u0627\u062C\u0639\u0629 \u0627\u0644\u0648\u0636\u0639 \u0639\u0646\u062F \u0625\u0642\u0644\u0627\u0639 \u0627\u0644\u0645\u062D\u0631\u0643 " + SLOT + " \u2014 \u0645\u062A\u0637\u0627\u0628\u0642 \u0645\u0639 \u0627\u0644\u0645\u0646\u0635\u0629")).catch(() => {
+    });
+    scanRadar().catch(() => {
+    });
+  }, 1500 + SLOT * 300);
+}
+var slotStates = [];
+async function pollSlots() {
+  for (let i = 1; i <= FLEET_N; i++) {
+    const j = await jfetch("http://127.0.0.1:" + (BASE_PORT + i) + "/state", 2e3);
+    if (j && j.ok && j.state) slotStates[i] = j.state;
+  }
+}
+setInterval(pollSlots, 1e4).unref?.();
+function mergedState(selIn = 0) {
+  const live = [];
+  for (let i = 1; i <= FLEET_N; i++) if (slotStates[i]) live.push(slotStates[i]);
+  if (!live.length) return null;
+  const idx = selIn >= 1 && selIn <= FLEET_N && slotStates[selIn] ? selIn : 0;
+  const primary = idx ? slotStates[idx] : live.find((x) => x.position) || live[0];
+  const st = { ...primary };
+  st.journal = live.flatMap((x, li) => (x.journal || []).map((r) => ({ ...r, _slot: li + 1 }))).sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 150);
+  st.logs = (primary.logs || []).slice(-150);
+  st.realizedPnl = live.reduce((a, x) => a + (x.realizedPnl || 0), 0);
+  st.feesPaid = live.reduce((a, x) => a + (x.feesPaid || 0), 0);
+  st.cycleHarvested = live.reduce((a, x) => a + (x.cycleHarvested || 0), 0);
+  st.slipCost = live.reduce((a, x) => a + (x.slipCost || 0), 0);
+  st.fundingPaid = live.reduce((a, x) => a + (x.fundingPaid || 0), 0);
+  st.config = { ...primary.config || {}, cycleBalance: live.reduce((a, x) => a + (x.config?.cycleBalance || 0), 0) };
+  st.status = live.some((x) => x.status === "running") ? "running" : live[0]?.status || "idle";
+  st.fleet = live.map((x, idx2) => ({
+    slot: idx2 + 1,
+    symbol: x.config?.symbol,
+    disp: x.config?.displaySymbol,
+    position: !!x.position,
+    net: x.position ? x.position.unrealized : 0,
+    balance: x.config?.cycleBalance,
+    running: x.status === "running"
+  }));
+  return st;
+}
 var srv = createServer(async (req, res) => {
   try {
     if (req.method === "OPTIONS") {
@@ -5323,9 +5591,84 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "KING Termux Server", version: SRV_VER, at: Date.now() });
-    if (req.method === "GET" && u.pathname === "/state")
-      return send(res, 200, { ok: true, at: Date.now(), state: S });
+      return send(res, 200, { ok: true, name: "TRG-NEW Fleet Server", version: SRV_VER, fleet: FLEET_N, at: Date.now() });
+    if (SLOT > 0) {
+      if (req.method === "GET" && u.pathname === "/state") {
+        const lp = S.lastPrice || 0, mult = S.multiplier || 1, taker = S.takerFee || 6e-4;
+        const st = {
+          ...S,
+          journal: (S.journal || []).slice(-30).map((r) => {
+            if (r.status !== "open") return r;
+            const feeEst = lp ? r.qty * mult * lp * taker : 0;
+            const f = lp ? (r.side === "short" ? 1 : -1) * (r.entry - lp) * mult * r.qty - (r.fees || 0) - feeEst : 0;
+            return { ...r, floatNet: Math.round((f + Number.EPSILON) * 100) / 100 };
+          }),
+          logs: (S.logs || []).slice(-80)
+        };
+        return send(res, 200, { ok: true, at: Date.now(), state: st });
+      }
+      if (req.method === "POST" && u.pathname === "/cmd") {
+        let body = "";
+        for await (const chunk of req) body += chunk;
+        let j = {};
+        try {
+          j = JSON.parse(body || "{}");
+        } catch {
+        }
+        const a = String(j.action || "");
+        switch (a) {
+          case "start":
+            startBot();
+            return send(res, 200, { ok: true });
+          case "pause":
+            pauseBot();
+            return send(res, 200, { ok: true });
+          case "stop":
+            await stopBot();
+            return send(res, 200, { ok: true });
+          case "newCycle":
+            newCycle();
+            return send(res, 200, { ok: true });
+          case "saveCfg":
+            saveCfg(j.cfg || {});
+            return send(res, 200, { ok: true });
+          case "saveKeys": {
+            const ok = await saveKeys(j.keys || {});
+            return send(res, 200, { ok: !!ok, error: ok ? null : "\u0641\u0634\u0644 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0645\u0641\u0627\u062A\u064A\u062D" });
+          }
+          case "clearKeys":
+            clearKeys();
+            return send(res, 200, { ok: true });
+          case "scanRadar":
+            await scanRadar();
+            return send(res, 200, { ok: true, radar: S.radar || null });
+          case "repair": {
+            const rr = await repairAccount();
+            return send(res, 200, rr);
+          }
+          default:
+            return send(res, 400, { ok: false, error: "\u0625\u062C\u0631\u0627\u0621 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641: " + a });
+        }
+      }
+      send(res, 404, { ok: false, error: "not found" });
+      return;
+    }
+    if (req.method === "GET" && u.pathname === "/fleet") {
+      const i = parseInt(u.searchParams.get("i") || "0", 10) || 0;
+      const taken = [];
+      for (let k = 1; k <= FLEET_N; k++) {
+        if (k === i) continue;
+        const st = slotStates[k];
+        if (st && st.config && st.config.symbol) taken.push({ sym: st.config.symbol, holder: k });
+      }
+      return send(res, 200, { ok: true, taken });
+    }
+    if (req.method === "GET" && u.pathname === "/state") {
+      const sel = parseInt(u.searchParams.get("sel") || "0", 10) || 0;
+      const st = mergedState(sel);
+      if (!st) return send(res, 200, { ok: true, at: Date.now(), state: { status: "idle", heartbeat: Date.now(), logs: [], journal: [], grid: [], config: { cycleBalance: 0 }, fleet: [] } });
+      return send(res, 200, { ok: true, at: Date.now(), state: st });
+    }
     if (req.method === "POST" && u.pathname === "/cmd") {
       let body = "";
       for await (const chunk of req) body += chunk;
@@ -5335,35 +5678,25 @@ var srv = createServer(async (req, res) => {
       } catch {
       }
       const a = String(j.action || "");
-      switch (a) {
-        case "start":
-          startBot();
-          return send(res, 200, { ok: true });
-        case "pause":
-          pauseBot();
-          return send(res, 200, { ok: true });
-        case "stop":
-          await stopBot();
-          return send(res, 200, { ok: true });
-        case "newCycle":
-          newCycle();
-          return send(res, 200, { ok: true });
-        case "saveCfg":
-          saveCfg(j.cfg || {});
-          return send(res, 200, { ok: true });
-        case "saveKeys": {
-          const ok = await saveKeys(j.keys || {});
-          return send(res, 200, { ok: !!ok, error: ok ? null : "\u0641\u0634\u0644 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0645\u0641\u0627\u062A\u064A\u062D" });
-        }
-        case "clearKeys":
-          clearKeys();
-          return send(res, 200, { ok: true });
-        case "scanRadar":
-          await scanRadar();
-          return send(res, 200, { ok: true, radar: S.radar || null });
-        default:
-          return send(res, 400, { ok: false, error: "\u0625\u062C\u0631\u0627\u0621 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641: " + a });
+      if (a === "repair") {
+        const r1 = await jfetch("http://127.0.0.1:" + (BASE_PORT + 1) + "/cmd", 45e3, j);
+        return send(res, 200, r1 || { ok: false, error: "\u0644\u0645 \u064A\u0631\u062F \u0627\u0644\u0645\u062D\u0631\u0643" });
       }
+      let payload = j;
+      if (a === "saveCfg" && j.cfg) {
+        const { symbol: symbol2, displaySymbol, ...rest } = j.cfg;
+        if (rest.cycleBalance != null) rest.cycleBalance = Math.max(1, Math.round(+rest.cycleBalance / FLEET_N * 100) / 100);
+        payload = { ...j, cfg: rest };
+      }
+      const results = await Promise.all(
+        Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 5e3, payload))
+      );
+      const ok = results.some((r) => r && r.ok);
+      if (a === "scanRadar") {
+        const st = mergedState();
+        return send(res, 200, { ok: true, radar: st ? st.radar || null : null });
+      }
+      return send(res, 200, { ok, fleet: results.map((r) => !!(r && r.ok)) });
     }
     send(res, 404, { ok: false, error: "not found" });
   } catch (e) {
@@ -5371,8 +5704,38 @@ var srv = createServer(async (req, res) => {
   }
 });
 srv.listen(PORT, "127.0.0.1", () => {
-  console.log("[AB-KING] \u0633\u064A\u0631\u0641\u0631 \u0627\u0644\u062C\u0648\u0627\u0644 \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT);
-  console.log("[AB-KING] \u0627\u0641\u062A\u062D \u062A\u0637\u0628\u064A\u0642 AB-KING \u2014 \u0633\u064A\u0643\u062A\u0634\u0641 \u0627\u0644\u0633\u064A\u0631\u0641\u0631 \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0648\u064A\u062A\u062D\u0648\u0644 \u0644\u0648\u0636\u0639 \u0627\u0644\u0648\u0627\u062C\u0647\u0629");
+  if (SLOT > 0) {
+    console.log("[TRQ] \u0645\u062D\u0631\u0643 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + SLOT + " \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT);
+  } else {
+    console.log("[TRG] \u0645\u0646\u0633\u0642 \u0623\u0633\u0637\u0648\u0644 TRG-NEW \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT + " \u2014 \u064A\u064F\u0637\u0644\u0642 " + FLEET_N + " \u0645\u062D\u0631\u0643\u0627\u062A");
+    pushLog("server", "\u{1F680} \u0623\u0633\u0637\u0648\u0644 TRQ-TRADING \u0627\u0646\u0637\u0644\u0642 \u2014 " + FLEET_N + " \u0645\u062D\u0631\u0643\u0627\u062A \u0645\u0633\u062A\u0642\u0644\u0629\u060C \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644 \xF7 " + FLEET_N + " \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B\u060C \u0643\u0644 \u0639\u0645\u0644\u0629 \u0628\u0645\u062D\u0631\u0643 \u0648\u062C\u0646\u064A \u0645\u0633\u062A\u0642\u0644\u064A\u0646");
+    const self = process.argv[1];
+    for (let i = 1; i <= FLEET_N; i++) {
+      const child = spawn(process.execPath, [self], {
+        env: { ...process.env, ABKING_SLOT: String(i) },
+        stdio: ["ignore", "inherit", "inherit"],
+        detached: false
+      });
+      child.on("exit", (code) => {
+        console.log("[TRQ] \u0645\u062D\u0631\u0643 " + i + " \u062E\u0631\u062C (" + code + ") \u2014 \u0625\u0639\u0627\u062F\u0629 \u062A\u0634\u063A\u064A\u0644\u0647 \u062E\u0644\u0627\u0644 5 \u062B");
+        setTimeout(() => {
+          try {
+            spawn(process.execPath, [self], { env: { ...process.env, ABKING_SLOT: String(i) }, stdio: ["ignore", "inherit", "inherit"], detached: false });
+          } catch {
+          }
+        }, 5e3);
+      });
+    }
+    setTimeout(pollSlots, 4e3);
+    setInterval(() => {
+      try {
+        const st = mergedState();
+        const fl = st ? st.fleet || [] : [];
+        pushLog("server", "\u{1F4A1} \u0646\u0628\u0636\u0629 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + SRV_VER + " \u2014 " + fl.length + "/" + FLEET_N + " \u0645\u062D\u0631\u0643\u0627\u062A \u062D\u064A\u0629: " + (fl.map((f) => (f.disp || "?") + (f.position ? " (\u0645\u0631\u0643\u0632 " + (f.net >= 0 ? "+" : "") + f.net.toFixed(2) + ")" : "")).join(" \xB7 ") || "\u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0625\u0642\u0644\u0627\u0639"));
+      } catch {
+      }
+    }, 30 * 60 * 1e3).unref?.();
+  }
 });
 initEngine();
-console.log("[AB-KING] \u0627\u0644\u0645\u062D\u0631\u0643 \u0628\u062F\u0623 \u2014 \u0623\u0628\u0642\u0650 Termux \u062D\u064A\u064B\u0627 (termux-wake-lock \u0645\u0641\u0639\u0651\u0644)");
+if (SLOT === 0) console.log("[TRQ] \u0627\u0644\u0645\u0646\u0633\u0642 \u062C\u0627\u0647\u0632 \u2014 \u0623\u0628\u0642\u0650 Termux \u062D\u064A\u064B\u0627 (\u0627\u0644\u062D\u0627\u0631\u0633 \u0627\u0644\u0630\u0627\u062A\u064A \u064A\u062D\u0645\u064A \u0627\u0644\u0623\u0633\u0637\u0648\u0644 \u0643\u0644\u0647)");

@@ -402,6 +402,7 @@ __export(engine_exports, {
   pulseAge: () => pulseAge,
   pushLog: () => pushLog,
   remoteSync: () => remoteSync,
+  repairAccount: () => repairAccount,
   saveCfg: () => saveCfg,
   saveKeys: () => saveKeys,
   scanRadar: () => scanRadar,
@@ -1816,6 +1817,60 @@ async function ensureLiveMeta(symbol2) {
     S._metaAt = Date.now();
   } catch (_) {
     throw new Error("\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0639\u0642\u062F \u063A\u064A\u0631 \u062C\u0627\u0647\u0632\u0629 \u2014 \u0623\u064F\u062C\u0651\u0644 \u0627\u0644\u0623\u0645\u0631 \u0644\u062D\u064A\u0646 \u062A\u0648\u062B\u064A\u0642 \u0627\u0644\u0645\u0636\u0627\u0639\u0641");
+  }
+}
+async function repairAccount() {
+  if (S.config.mode !== "live" || !S.keys) return { ok: false, error: "\u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0641\u0642\u0637" };
+  pushLog("server", "\u{1F527} \u0628\u062F\u0621 \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0627\u0644\u0634\u0627\u0645\u0644 \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639...");
+  const report = [];
+  let cancelled = 0, stops = 0;
+  try {
+    const resp = await kcPrivate("GET", "/api/v1/positions");
+    const list = (resp && resp.data || []).filter((x) => Math.abs(Number(x.currentQty) || 0) > 1e-12);
+    for (const x of list) {
+      const sym = String(x.symbol);
+      try {
+        await exCancelStops(sym);
+        stops++;
+      } catch {
+      }
+      try {
+        const os = await exOrders(sym);
+        for (const o of os || []) {
+          try {
+            await exCancelOne(o.orderId);
+            cancelled++;
+          } catch {
+          }
+        }
+      } catch {
+      }
+    }
+    for (const x of list) {
+      const sym = String(x.symbol);
+      const qty = Number(x.currentQty) || 0, side = qty > 0 ? "long" : "short", absQ = Math.abs(qty);
+      const entry = Number(x.avgEntryPrice) || 0, mult = Number(x.multiplier) || 1;
+      const pnl = Number(x.unrealisedPnl) || 0;
+      let tp = 0;
+      try {
+        if (entry > 0 && absQ > 0) {
+          const tpU = Math.max(0.5, Number(S.config.tpUsd) || 1);
+          const dPx = tpU / absQ / mult * 1.25;
+          const price = roundTick(side === "long" ? entry + dPx : entry - dPx, S.tickSize || 1e-8);
+          await exPlaceLimit({ symbol: sym, side: side === "long" ? "sell" : "buy", price, qty: absQ, reduceOnly: true, clientOid: uid("rep") });
+          tp = price;
+        }
+      } catch (e) {
+        pushLog("warn", "\u0647\u062F\u0641 \u062C\u0646\u064A " + sym + " \u0641\u0634\u0644: " + String(e?.message || e));
+      }
+      report.push({ symbol: sym, side, size: absQ, entry: Number(entry.toFixed(8)), pnl: Number(pnl.toFixed(2)), tp: Number(tp) || null });
+    }
+    const msg = "\u{1F527} \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628: " + list.length + " \u0645\u0631\u0643\u0632\u0627\u064B \u062D\u064A\u0627\u064B \u2014 \u0623\u064F\u0644\u063A\u064A\u062A " + cancelled + " \u0623\u0645\u0631\u0627\u064B \u0648" + stops + " \u0633\u062A\u0648\u0628 \u2014 \u0644\u0643\u0644 \u0645\u0631\u0643\u0632 \u0647\u062F\u0641 \u062C\u0646\u064A \u0631\u0627\u0628\u062D" + (list.length ? " \u2014 \u0644\u0627 \u062E\u0633\u0627\u0631\u0629 \u0648\u0644\u0627 \u062F\u062E\u0648\u0644 \u062C\u062F\u064A\u062F \u062D\u062A\u0649 \u062A\u064F\u063A\u0646\u0649 \u0643\u0644\u0647\u0627" : "");
+    pushLog("server", msg);
+    return { ok: true, positions: report, cancelledOrders: cancelled, cancelledStops: stops, message: msg };
+  } catch (e) {
+    pushLog("error", "\u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0641\u0634\u0644: " + String(e?.message || e));
+    return { ok: false, error: String(e?.message || e) };
   }
 }
 async function orphanSweep() {
@@ -3986,18 +4041,16 @@ async function flattenAt(p, source) {
     for (let att = 0; att < 5 && !closed; att++) {
       try {
         await exCloseQty(S.config.symbol, pos.side, pos.size);
-        closed = true;
       } catch (e) {
         pushLog("error", "\u0645\u062D\u0627\u0648\u0644\u0629 \u0625\u063A\u0644\u0627\u0642 " + (att + 1) + " \u0641\u0634\u0644\u062A: " + String(e?.message || e));
-        await new Promise((r) => setTimeout(r, 500));
-        try {
-          const live = await exPosition(S.config.symbol);
-          if (live && live.size > 0) pos.size = live.size;
-          else {
-            closed = true;
-          }
-        } catch (e2) {
-        }
+      }
+      await new Promise((r) => setTimeout(r, 700));
+      try {
+        const live = await exPosition(S.config.symbol);
+        if (live && live.size > 0) pos.size = live.size;
+        else closed = true;
+      } catch (e2) {
+        if (att === 4) pushLog("error", "\u062A\u0639\u0630\u0631 \u062A\u0623\u0643\u064A\u062F \u0627\u0644\u0635\u0641\u0631\u064A\u0629 \u2014 \u0627\u0644\u0645\u0631\u0643\u0632 \u064A\u0628\u0642\u0649 \u0645\u064F\u062F\u0627\u0631\u0627\u064B");
       }
     }
     if (!closed) {
@@ -4043,6 +4096,7 @@ function pruneGhosts() {
     }
     if (g.status === "filled" && !g.reduceOnly) g.status = "cancelled";
   }
+  if (S.config.mode === "live" && S.keys) return;
   for (const row of S.journal) {
     if (row.status !== "open") continue;
     row.status = "closed";
@@ -5418,9 +5472,9 @@ console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u
 init_engine();
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "TRQ-TRADING-1.7.0";
+var SRV_VER = "TRQ-TRADING-1.7.1";
 var FLEET_N = 5;
-var BASE_PORT = 8987;
+var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
 function send(res, code, obj) {
   res.writeHead(code, {
@@ -5588,6 +5642,10 @@ var srv = createServer(async (req, res) => {
           case "scanRadar":
             await scanRadar();
             return send(res, 200, { ok: true, radar: S.radar || null });
+          case "repair": {
+            const rr = await repairAccount();
+            return send(res, 200, rr);
+          }
           default:
             return send(res, 400, { ok: false, error: "\u0625\u062C\u0631\u0627\u0621 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641: " + a });
         }
@@ -5620,6 +5678,10 @@ var srv = createServer(async (req, res) => {
       } catch {
       }
       const a = String(j.action || "");
+      if (a === "repair") {
+        const r1 = await jfetch("http://127.0.0.1:" + (BASE_PORT + 1) + "/cmd", 45e3, j);
+        return send(res, 200, r1 || { ok: false, error: "\u0644\u0645 \u064A\u0631\u062F \u0627\u0644\u0645\u062D\u0631\u0643" });
+      }
       let payload = j;
       if (a === "saveCfg" && j.cfg) {
         const { symbol: symbol2, displaySymbol, ...rest } = j.cfg;
@@ -5645,7 +5707,7 @@ srv.listen(PORT, "127.0.0.1", () => {
   if (SLOT > 0) {
     console.log("[TRQ] \u0645\u062D\u0631\u0643 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + SLOT + " \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT);
   } else {
-    console.log("[TRQ] \u0645\u0646\u0633\u0642 \u0623\u0633\u0637\u0648\u0644 TRQ-TRADING \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT + " \u2014 \u064A\u064F\u0637\u0644\u0642 " + FLEET_N + " \u0645\u062D\u0631\u0643\u0627\u062A");
+    console.log("[TRG] \u0645\u0646\u0633\u0642 \u0623\u0633\u0637\u0648\u0644 TRG-NEW \u064A\u0639\u0645\u0644 \u0639\u0644\u0649 http://127.0.0.1:" + PORT + " \u2014 \u064A\u064F\u0637\u0644\u0642 " + FLEET_N + " \u0645\u062D\u0631\u0643\u0627\u062A");
     pushLog("server", "\u{1F680} \u0623\u0633\u0637\u0648\u0644 TRQ-TRADING \u0627\u0646\u0637\u0644\u0642 \u2014 " + FLEET_N + " \u0645\u062D\u0631\u0643\u0627\u062A \u0645\u0633\u062A\u0642\u0644\u0629\u060C \u0631\u0623\u0633 \u0627\u0644\u0645\u0627\u0644 \xF7 " + FLEET_N + " \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B\u060C \u0643\u0644 \u0639\u0645\u0644\u0629 \u0628\u0645\u062D\u0631\u0643 \u0648\u062C\u0646\u064A \u0645\u0633\u062A\u0642\u0644\u064A\u0646");
     const self = process.argv[1];
     for (let i = 1; i <= FLEET_N; i++) {
