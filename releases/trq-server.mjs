@@ -1818,6 +1818,44 @@ async function ensureLiveMeta(symbol2) {
     throw new Error("\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0639\u0642\u062F \u063A\u064A\u0631 \u062C\u0627\u0647\u0632\u0629 \u2014 \u0623\u064F\u062C\u0651\u0644 \u0627\u0644\u0623\u0645\u0631 \u0644\u062D\u064A\u0646 \u062A\u0648\u062B\u064A\u0642 \u0627\u0644\u0645\u0636\u0627\u0639\u0641");
   }
 }
+async function orphanSweep() {
+  if (S.config.mode !== "live" || !S.keys) return;
+  try {
+    const resp = await kcPrivate("GET", "/api/v1/positions");
+    const list = resp && resp.data || [];
+    const cur = S.config.symbol;
+    for (const x of list) {
+      const qty = Number(x.currentQty) || 0;
+      if (Math.abs(qty) < 1e-12) continue;
+      const sym = String(x.symbol);
+      if (sym === cur) continue;
+      const side = qty > 0 ? "long" : "short", absQ = qty > 0 ? qty : -qty;
+      const entry = Number(x.avgEntryPrice) || 0;
+      if (!(entry > 0)) continue;
+      try {
+        const os = await exOrders(sym);
+        if (os && os.some((o) => o.reduceOnly && o.size - o.filledSize > 1e-12)) continue;
+      } catch {
+      }
+      const mult = Number(x.multiplier) || 1;
+      const qMax = Number(x.maxOrderQty) || 0;
+      void qMax;
+      const notional = Math.max(1e-9, absQ * mult * entry);
+      const tpU = Math.max(0.5, Number(S.config.tpUsd) || 1);
+      const dPx = tpU / absQ / mult * 1.25;
+      const price = roundTick(side === "long" ? entry + dPx : entry - dPx, S.tickSize || 1e-8);
+      if (!(price > 0)) continue;
+      try {
+        await exPlaceLimit({ symbol: sym, side: side === "long" ? "sell" : "buy", price, qty: absQ, reduceOnly: true, clientOid: uid("orph") });
+        pushLog("server", "\u{1F512} \u0635\u0641\u0642\u0629 \u0645\u0639\u0644\u0642\u0629 \u0633\u0627\u0628\u0642\u0629 (" + sym + " " + side + " " + absQ + ") \u2014 \u062B\u064F\u0628\u0651\u062A \u0644\u0647\u0627 \u0647\u062F\u0641 \u062C\u0646\u064A \u0631\u0627\u0628\u062D @ " + price + " \u2014 \u0644\u0627 \u0625\u063A\u0644\u0627\u0642 \u0628\u062E\u0633\u0627\u0631\u0629");
+      } catch (e) {
+        pushLog("warn", "\u062A\u0639\u0630\u0631 \u062A\u062B\u0628\u064A\u062A \u0647\u062F\u0641 \u062C\u0646\u064A \u0644\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u0645\u0639\u0644\u0642 " + sym + ": " + String(e?.message || e));
+      }
+    }
+  } catch (e) {
+    logSwallow("orphanSweep", e);
+  }
+}
 async function exPlaceLimit(intent) {
   await ensureLiveMeta(intent.symbol);
   return placeOrderSmart({
@@ -3059,10 +3097,12 @@ function harvestRipe(p) {
     S._gapCtx = null;
     return;
   }
-  for (const tp of S.grid.filter((g) => g.reduceOnly && (g.status === "open" || g.status === "armed"))) {
-    const tol = Math.min(S.tickSize > 0 ? S.tickSize * 0.5 : 1e-12, Math.abs(tp.price) * 5e-4);
-    const crossed = tp.side === "sell" ? p >= tp.price - tol : p <= tp.price + tol;
-    if (crossed) fillLevel(tp.id, p, true);
+  if (S.config.mode !== "live" || !S.keys) {
+    for (const tp of S.grid.filter((g) => g.reduceOnly && (g.status === "open" || g.status === "armed"))) {
+      const tol = Math.min(S.tickSize > 0 ? S.tickSize * 0.5 : 1e-12, Math.abs(tp.price) * 5e-4);
+      const crossed = tp.side === "sell" ? p >= tp.price - tol : p <= tp.price + tol;
+      if (crossed) fillLevel(tp.id, p, true);
+    }
   }
   const pv = S._harvPrev;
   if (S.position && pv && pv.px > 0) {
@@ -3939,7 +3979,10 @@ async function flattenAt(p, source) {
         }
       }
     }
-    if (!closed) pushLog("error", "\u0627\u0644\u0625\u063A\u0644\u0627\u0642 \u0644\u0645 \u064A\u064F\u0624\u0643\u064E\u0651\u062F \u0628\u0639\u062F 5 \u0645\u062D\u0627\u0648\u0644\u0627\u062A \u2014 \u0627\u0644\u062D\u0627\u0631\u0633 \u0627\u0644\u0637\u0627\u0631\u0626 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u0648 \u0627\u0644\u062D\u0645\u0627\u064A\u0629 \u0627\u0644\u0623\u062E\u064A\u0631\u0629");
+    if (!closed) {
+      pushLog("error", "\u26A0\uFE0F \u0627\u0644\u0625\u063A\u0644\u0627\u0642 \u0644\u0645 \u062A\u064F\u0624\u0643\u062F\u0647 \u0627\u0644\u0645\u0646\u0635\u0629 \u0628\u0639\u062F 5 \u0645\u062D\u0627\u0648\u0644\u0627\u062A \u2014 \u0627\u0644\u0645\u0631\u0643\u0632 \u064A\u0628\u0642\u0649 \u0645\u064F\u062F\u0627\u0631\u0627\u064B (\u0644\u0627 \u062C\u0646\u064A \u0648\u0647\u0645\u064A) \u2014 \u064A\u064F\u0639\u0627\u062F \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B");
+      return;
+    }
   }
   if (pos && p > 0) {
     const cs = pos.side === "short" ? "buy" : "sell";
@@ -4155,6 +4198,11 @@ async function liveSync() {
   if (S.config.mode !== "live" || !S.keys) return;
   if (Date.now() - (S._syncAt || 0) < 4e3) return;
   S._syncAt = Date.now();
+  if (!S._orphanAt || Date.now() - S._orphanAt > 3e5) {
+    S._orphanAt = Date.now();
+    orphanSweep().catch(() => {
+    });
+  }
   const sym = S.config.symbol;
   try {
     const pos = await exPosition(sym);
