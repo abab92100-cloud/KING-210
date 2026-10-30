@@ -1854,7 +1854,10 @@ function coveringLoser(l,p){ const pos=S.position; if(!pos||l.reduceOnly) return
   return cover&&adversePct(p)>0.08; }
 // تنظيف ما بعد اكتمال الجني: إلغاء كل الأوامر (منصة وبوت) وتصفير بنك الجني
 // الجزئي ومراسي الشبكة — دورة جديدة تبدأ نظيفة بلا أوامر يتيمة
-function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
+function _harvestCleanup(fp){
+  // طلب تأكيد الصفرية من المنصة بعد كل تنقية — الجني لا يُقبل إلا بتنفيذ منصي
+  S._needsFlatCheck=Date.now();
+  if(S.config.mode==='live'&&S.keys){
     exCancelAll(S.config.symbol).catch(()=>{});
     exCancelStops(S.config.symbol).catch(()=>{}); }
   S._harvestAt=Date.now(); // لحظة اكتمال الدورة — القفز للعملة التالية مسموح بعدها فقط
@@ -3056,6 +3059,15 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
         if(l.status!=='filled'){ l.status='filled'; l.filledAt=Date.now(); l.filledPrice=l._avgFillPx>0?l._avgFillPx:l.price; }
         if(!done&&l.reduceOnly&&!S.position){ const tb=S._tpBanked; _harvestCleanup(l.price);
           pushLog('server','جني مكتمل ✓ — نُفّذ على المنصة بالكامل، صافي الدورة '+fmtUsd(tb)); } } }
+    // ─── تأكيد الجني: أي تنقية جرت الآن تُتحقق من المنصة — إن كان المركز ما
+    // زال حياً (جني وهمي) يُعاد فوراً للإدارة ويُقفل عداده على 4 (درس تكرار
+    // «جني 3 صفقات» والصفقات المتراكمة) ───
+    if(S._needsFlatCheck&&Date.now()-S._needsFlatCheck<30000){
+      try{ const lp=await exPosition(sym);
+        if(lp&&lp.size>0){ S._needsFlatCheck=0; S.position=lp;
+          S._batchFills=Math.max(4,S._batchFills||0); if(!S._batchHoldAt) S._batchHoldAt=Date.now();
+          pushLog('warn','⚠️ الجني لم تُؤكده المنصة — المركز عاد للإدارة فوراً (القاطع مقفل، لا صفقة جديدة)'); }
+        else S._needsFlatCheck=0; }catch{} }
     // أي مستوى أُلغي أو نُفّذ محليًا وله أمر حي على المنصة — ألغِه هناك فورًا
     for(const l of S.grid){ if((l.status==='cancelled'||l.status==='filled')&&l.exchangeOrderId){
       exCancelOne(l.exchangeOrderId); l.exchangeOrderId=null; } }
@@ -3206,7 +3218,11 @@ export async function botTick(){
 }
 
 /* ---------- أوامر التشغيل ---------- */
-export function startBot(){ if(R()){ remoteCmd('start').then(()=>remoteSync()); return; }
+export function startBot(){
+  try{ pushLog('server','⚙️ الإعدادات الفعّالة: '+(S.config.mode==='live'?'حقيقي':'ورقي')+' · '+S.config.displaySymbol+
+    ' · رافعة '+S.config.leverage+'× · مستويات '+S.config.levels+' · خطوة '+S.config.gridStepPct+'%'+
+    ' · صيد '+S.config.huntPct+'% · جني '+(Number(S.config.tpUsd)>0?('ثابت '+S.config.tpUsd+'$'):('مدروس '+S.config.tpNet+'$'))+
+    ' · رصيد الدورة '+S.config.cycleBalance+'$ · حد الأوامر '+(S._cycleMaxFills||4)); }catch{} if(R()){ remoteCmd('start').then(()=>remoteSync()); return; }
   if(S.status==='running') return;
   if(S.config.mode==='live'&&!S.keys){ toast('اربط مفاتيح KuCoin أولاً من الإعدادات'); return; }
   const p=S.lastPrice||S.markPrice;

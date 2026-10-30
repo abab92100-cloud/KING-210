@@ -49,6 +49,27 @@ if (SLOT > 0) {
       S._fleetTaken = f.taken.map((t: any) => t.sym); // راداري يستبعد عملات المحركات الأخرى
       // تعيين الإقلاع الحتمي: المحرك N يختار العملة رقم N من راداره —
       // يمنع تقارب المحركات على نفس العملة قبل اكتمال مزامنة التنويع
+      // ─── حسم التكرار (مصدر الصفقات المتراكمة): محركان على نفس العملة =
+      // مركز منصّة واحد يتضخم، ومحرك «يجني» بينما شريكه يضخ بأوامر.
+      // الحسم حتمي: صاحب الرقم الأدنى يحتفظ، والآخر ينتقل لأفضل عملة حرة ───
+      if (!S.position && S.config.symbol) {
+        const duel = f.taken.filter((t: any) => t.sym === S.config.symbol);
+        if (duel.length) {
+          const winner = Math.min(...duel.map((t: any) => Number(t.holder) || 99), SLOT);
+          if (SLOT > winner) {
+            const takenSet = new Set(f.taken.map((t: any) => t.sym));
+            const cand = (S.radar && Array.isArray(S.radar.list) ? S.radar.list : [])
+              .find((x: any) => x && x.symbol && !takenSet.has(x.symbol) && x.symbol !== S.config.symbol);
+            if (cand) {
+              pushLog('server', '⚖️ تكرار على ' + S.config.displaySymbol + ' مع المحرك ' + winner + ' — ينتقل هذا المحرك إلى ' + (cand.disp || cand.symbol));
+              try { saveCfg({ symbol: cand.symbol, leverage: S.config.leverage, levels: S.config.levels,
+                gridStepPct: S.config.gridStepPct, huntPct: S.config.huntPct, tpUsd: S.config.tpUsd,
+                cycleBalance: S.config.cycleBalance, directionMode: S.config.directionMode, mode: S.config.mode }); } catch { /* optional */ }
+              return;
+            }
+          }
+        }
+      }
       if (!bootPickDone && !S.position && S.config.symbol === 'XBTUSDTM' &&
           S.radar && Array.isArray(S.radar.list) && S.radar.list.length) {
         const pick = S.radar.list[Math.min(SLOT - 1, S.radar.list.length - 1)];
