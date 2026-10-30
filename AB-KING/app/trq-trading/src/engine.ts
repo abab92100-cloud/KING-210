@@ -253,6 +253,8 @@ export const S: any = {
   config:{symbol:'XBTUSDTM',displaySymbol:'BTC',leverage:3,gridStepPct:0.3,huntPct:0.15,
     levels:12,direction:'short',directionMode:'auto',cycleBalance:100,mode:'paper',tpNet:0.12,tpUsd:1,patienceHrs:24,patienceUsd:0,gapMode:false},
   status:'idle', heartbeat:0, lastPrice:null, markPrice:null,
+  // قاعدة المالك: تجميد الدخول عند وجود مراكز منصة غير مغلقة + حد أوامر الدورة
+  _exOpenCount:0, _noNewEntries:false, _cycleMaxFills:4, _nextCycleMax:0,
   multiplier:1, tickSize:0.1, makerFee:0.0002, takerFee:0.0006, funding:0,
   _metaSym:null, maxOrderQty:0, exAvail:null, exLeverage:null, // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
   grid:[], position:null, journal:[], logs:[],
@@ -1078,7 +1080,12 @@ async function orphanSweep(){
       const sym=String(x.symbol); if(sym===cur) continue; // مركز العملة الحالية يديره المحرك
       const side=qty>0?'long':'short', absQ=qty>0?qty:-qty;
       const entry=Number(x.avgEntryPrice)||0; if(!(entry>0)) continue;
-      // هل يوجد أمر جني حي لهذا الزوج؟ لا تكرر الإرسال
+      // 1) إلغاء كل ستوبات الزوج (قاعدة المالك: لا وقف خسارة على المنصة أبداً)
+      try{ await exCancelStops(sym); }catch{}
+      // 2) إلغاء أي أوامر دخول/زائدة غير reduceOnly (لا مزيد من الأوامر على اليتيمة)
+      try{ const os0=await exOrders(sym);
+        for(const o of (os0||[])){ if(!(o as any).reduceOnly) { try{ await exCancelOne((o as any).orderId); }catch{} } } }catch{}
+      // 3) هل يوجد أمر جني حي؟ لا تكرر الإرسال
       try{ const os=await exOrders(sym); if(os&&os.some((o:any)=>o.reduceOnly&&(o.size-o.filledSize)>1e-12)) continue; }catch{}
       // هدف جني رابح: tpUsd المحدد + رسوم، وتحويله لمسافة سعرية بحسب الحجم
       const mult=Number(x.multiplier)||1;
@@ -1244,7 +1251,7 @@ export function batchHoldActive(){
     const p=S.lastPrice, long=S.position.side==='long';
     const worst=(S._batchWorst==null)?p:(long?Math.min(S._batchWorst,p):Math.max(S._batchWorst,p));
     if(worst!==S._batchWorst){ S._batchWorst=worst; S._batchWorseAt=Date.now(); } }
-  if((S._batchFills||0)<4) return false;
+  if((S._batchFills||0)<(S._cycleMaxFills||4)) return false;
   // ─── قاعدة المالك الزمنية (أمر 2026-10-24): انزلاق بعد 4 أوامر =
   // توقف كامل 3 ساعات، ثم دراسة: استمرار الانزلاق = +ساعة إضافية ودراسة،
   // ولا عودة إلا باستقرار فعلي (لا انزلاق جديد منذ ساعة كاملة) + إشارة
@@ -1493,6 +1500,7 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
 function armProgressive(){ if(S.status!=='running') return;
   // القاطع المرحلي: لا تسليح جديد أثناءه — الدفعة القادمة بعد الدراسة
   if(batchHoldActive()) return;
+  if(S._noNewEntries) return; // تجميد الدخول حتى تُغلق المراكز الزائدة بربح
   // سقف التعرّض: لا مزيد من المستويات عند بلوغه — حماية من التصفية بلا وقف خسارة
   if(exposureCapped()){
     if(!S._expCapAt||Date.now()-S._expCapAt>300000){ S._expCapAt=Date.now();
@@ -1819,6 +1827,7 @@ function _harvestCleanup(fp){ if(S.config.mode==='live'&&S.keys){
   S._reselectDone=false; // إعادة الاختيار الإجباري بعد كل جني (قاعدة المالك)
   S._posPeakNet=null; // ذروة جديدة لكل دورة — قفل الذروة لا يتسرب بين الصفقات
   S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false; // القاطع المرحلي: دفعة جديدة لكل دورة
+  S._cycleMaxFills=S._nextCycleMax||4; S._nextCycleMax=0; // بعد انزلاق: التالية 3 فقط
   S._batchWorst=null; S._batchWorseAt=0; S._batchHoldLogAt=0;
   S._guardId=null; S._tpBanked=0; S._trailFloor=0;
   for(const g of S.grid){ if(g.status==='armed'||g.status==='open'||g.status==='staged'){
@@ -1890,7 +1899,7 @@ function fillLevel(id,fp,taker){ const l=S.grid.find(g=>g.id===id);
   // ─── البوابة الحديدية (قاعدة المالك، أمر 2026-10-25): أثناء توقف القاطع
   // لا تنفَّذ أي تعبئة دخول مهما كان مسارها (شبكة/صيد/تعويض جني جزئي —
   // ثقوب 8× و9× كلها من هنا). الجني reduceOnly وحده يعمل ───
-  if(!l.reduceOnly&&batchHoldActive()){
+  if(!l.reduceOnly&&(batchHoldActive()||S._noNewEntries)){
     l.status='cancelled'; l.exchangeOrderId=null; return; }
   if(!l.reduceOnly&&coveringLoser(l,fp)) return;
   l.status='filled'; l.filledAt=Date.now(); l.filledPrice=fp;
@@ -1903,7 +1912,7 @@ function fillLevel(id,fp,taker){ const l=S.grid.find(g=>g.id===id);
     // ─── القاطع المرحلي (درس PEPE -136$): عدّ دفعة الأوامر — كل 4 أوامر
     // دخول متتالية يوقف الفتح كلياً حتى يستقر السوق وتُعاد الدراسة الجيدة
     if(!l.reduceOnly){ S._batchFills=(S._batchFills||0)+1;
-      if(S._batchFills>=4&&!S._batchHoldAt){
+      if(S._batchFills>=(S._cycleMaxFills||4)&&!S._batchHoldAt){
         S._batchHoldAt=Date.now(); S._batchStudiedAt=false;
         cancelPendingAdds();
         pushLog('server','🧷 القاطع المرحلي: اكتملت 4 أوامر دخول — توقف الفتح حتى الاستقرار + دراسة جديدة ثم 4 أخرى'); } }
@@ -2301,6 +2310,7 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(toxicBlocked(S.config.direction)) return null;
   // القاطع المرحلي: لا إضافات صيد أثناءه
   if(batchHoldActive()) return null;
+  if(S._noNewEntries) return null; // تجميد كامل: مراكز منصة زائدة لم تُغلق بربح بعد
   // سقف التعرّض: لا إضافات جديدة عنده — الحجم الكلي محكوم رياضياً
   if(S.position&&exposureCapped()) return null;
   // ─── إصلاح الكارثة: لا إضافات صيد مادامت فرملة التقلب نشطة — لا تغذية للانهيار ───
@@ -2382,8 +2392,9 @@ function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
   // إرسال ثانٍ هنا كان يضاعف حجم كل صفقة صيد على المنصة
   if(d.addedQty>0){ // القاطع المرحلي: تعبئات الصيد تُحسب في دفعة الـ4 مثل الشبكة
     S._batchFills=(S._batchFills||0)+1;
-    if(S._batchFills>=4&&!S._batchHoldAt){
+    if(S._batchFills>=(S._cycleMaxFills||4)&&!S._batchHoldAt){
       S._batchHoldAt=Date.now(); S._batchStudiedAt=false; S._batchWorst=null; S._batchWorseAt=0;
+      S._nextCycleMax=3; // بعد الانزلاق: الدورة القادمة 3 أوامر متباعدة فقط (قاعدة المالك)
       cancelPendingAdds();
       pushLog('server','🧷 القاطع المرحلي (صيد): اكتملت 4 أوامر دخول — توقف الفتح حتى يتوقف الانزلاق + دراسة ثم 4 أخرى'); } }
   if(d.closedQty>0){ const of=S.journal.find(j=>j.status==='open')?.fees||0;
@@ -2925,7 +2936,27 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
           .then(()=>{ delete mmCache[sym]; }).catch(()=>{});
         kcPrivate('POST','/api/v2/changeCrossUserLeverage',
           {symbol:sym,leverage:String(S.config.leverage)}).catch(()=>{}); } }
-    if(S.position) exPlaceStopGuard(); // إيقاف طوارئ على المنصة يحمي المركز حتى لو نام التطبيق
+    // ═══ قاعدة المالك الشاملة (أمر 30 أكتوبر): لا فتح جديد حتى تُغلق كل
+    // المراكز الحية بربح — عدّ المراكز الحية في الحساب كله كل 10 ثوانٍ.
+    // المسموح الطبيعي: 5 في الأسطول (مركز لكل محرك) أو 1 في الأحادي —
+    // أي زيادة = بقايا جلسات سابقة → تجميد فوري للدخول والتبديل ═══
+    if(!S._posCntAt||Date.now()-S._posCntAt>10000){ S._posCntAt=Date.now();
+      kcPrivate('GET','/api/v1/positions').then(r=>{
+        const list=(r&&(r as any).data)||[];
+        const n=list.filter((x:any)=>Math.abs(Number(x.currentQty)||0)>1e-12).length;
+        const allowed=(typeof FLEET_MODE==='function'&&FLEET_MODE())?5:1;
+        const was=!!S._noNewEntries;
+        S._exOpenCount=n; S._noNewEntries=n>allowed;
+        if(S._noNewEntries&&!was){ pushLog('server','⛔ تجميد الدخول: '+n+' مركزاً حياً في المنصة (المسموح '+allowed+') — لا صفقات جديدة ولا تبديل حتى تُغلق الزائدة بربح'); }
+        if(!S._noNewEntries&&was){ pushLog('server','✅ رُفع التجميد: المراكز عادت للحد الطبيعي — العودة للعمل'); }
+        // مطابقة الدفاتر: حقوق المنصة هي المرجع الحقيقي
+        try{ if(S.exEquity>0&&(!S._recAt||Date.now()-S._recAt>600000)){ S._recAt=Date.now();
+          const books=(S.config.cycleBalance||0)+(S.realizedPnl||0)-(S.feesPaid||0);
+          const gap=S.exEquity-books;
+          if(Math.abs(gap)>Math.max(3,Math.abs(books)*0.05))
+            pushLog('warn','⚠️ مطابقة الحساب: حقوق المنصة '+fmtUsd(S.exEquity)+' مقابل دفاتر التطبيق '+fmtUsd(books)+' (فارق '+fmtUsd(gap)+') — المنصة هي المرجع والجني يُحتسب تنفيذاً منصياً فقط'); } }catch{}
+      }).catch(()=>{}); }
+    if(S.position) exPlaceStopGuard(); // حارس تصفية فقط (لا وقف خسارة — قاعدة المالك)
   }catch(e){ const m=String((e as any)?.message||e);
     // 429 = تجاوز الحصة: تبريد كامل قبل المحاولة التالية (لا نُعمي المحرك بعاصفة طرق)
     if(/429|Too many requests/i.test(m)){ S._syncAt=Date.now()+45000; }
@@ -3249,6 +3280,14 @@ export function saveCfg(v){
   S.sound=!!v.sound;
   if(v.soundTone) S.soundTone=v.soundTone;
   if(sym!==old){
+    // ─── قاعدة المالك (مصدر المراكز الثمانية): لا انتقال بين العملات والمركز
+    // مفتوح. كان الانتقال يطلق إغلاقاً بلا انتظار تأكيد → فشل الإغلاق (429/هامش)
+    // يترك مركزاً حقيقياً يتيماً على المنصة. الآن: التبديل مرفوض حتى تُجنى ───
+    if(S.config.mode==='live'&&S.keys&&(S.position||S._exOpenCount>0)){
+      S.config.symbol=old;
+      S.config.displaySymbol=old.replace(/USDTM$/i,'').replace(/^XBT$/i,'BTC');
+      pushLog('server','⛔ لا تبديل إلى '+sym+' والمركز الحالي مفتوح — الصمود حتى الجني الكامل ثم يُسمح بالانتقال');
+      return; }
     // الوضع الحقيقي: ألغِ أوامر الزوج السابق وأوقفه وأغلق مركزه قبل الانتقال — لا أوامر يتيمة بلا رقيب
     if(S.config.mode==='live'&&S.keys){ exCancelAll(old).catch(()=>{});
       exCancelStops(old).catch(()=>{});
