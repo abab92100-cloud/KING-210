@@ -811,6 +811,11 @@ var S = {
   heartbeat: 0,
   lastPrice: null,
   markPrice: null,
+  // قاعدة المالك: تجميد الدخول عند وجود مراكز منصة غير مغلقة + حد أوامر الدورة
+  _exOpenCount: 0,
+  _noNewEntries: false,
+  _cycleMaxFills: 4,
+  _nextCycleMax: 0,
   multiplier: 1,
   tickSize: 0.1,
   makerFee: 2e-4,
@@ -1962,6 +1967,22 @@ async function orphanSweep() {
       const entry = Number(x.avgEntryPrice) || 0;
       if (!(entry > 0)) continue;
       try {
+        await exCancelStops(sym);
+      } catch {
+      }
+      try {
+        const os0 = await exOrders(sym);
+        for (const o of os0 || []) {
+          if (!o.reduceOnly) {
+            try {
+              await exCancelOne(o.orderId);
+            } catch {
+            }
+          }
+        }
+      } catch {
+      }
+      try {
         const os = await exOrders(sym);
         if (os && os.some((o) => o.reduceOnly && o.size - o.filledSize > 1e-12)) continue;
       } catch {
@@ -2187,7 +2208,7 @@ function batchHoldActive() {
       S._batchWorseAt = Date.now();
     }
   }
-  if ((S._batchFills || 0) < 4) return false;
+  if ((S._batchFills || 0) < (S._cycleMaxFills || 4)) return false;
   const H = 36e5;
   if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 18e5)) {
     S._batchHoldLogAt = Date.now();
@@ -2507,6 +2528,7 @@ function buildGrid(center, wide, initialCount) {
 function armProgressive() {
   if (S.status !== "running") return;
   if (batchHoldActive()) return;
+  if (S._noNewEntries) return;
   if (exposureCapped()) {
     if (!S._expCapAt || Date.now() - S._expCapAt > 3e5) {
       S._expCapAt = Date.now();
@@ -3012,6 +3034,8 @@ function _harvestCleanup(fp) {
   S._batchFills = 0;
   S._batchHoldAt = 0;
   S._batchStudiedAt = false;
+  S._cycleMaxFills = S._nextCycleMax || 4;
+  S._nextCycleMax = 0;
   S._batchWorst = null;
   S._batchWorseAt = 0;
   S._batchHoldLogAt = 0;
@@ -3117,7 +3141,7 @@ function creditExFillReal(l, delta, fp, realFee) {
 function fillLevel(id, fp, taker) {
   const l = S.grid.find((g) => g.id === id);
   if (!l || l.status === "filled") return;
-  if (!l.reduceOnly && batchHoldActive()) {
+  if (!l.reduceOnly && (batchHoldActive() || S._noNewEntries)) {
     l.status = "cancelled";
     l.exchangeOrderId = null;
     return;
@@ -3133,7 +3157,7 @@ function fillLevel(id, fp, taker) {
   if (d.addedQty > 0) {
     if (!l.reduceOnly) {
       S._batchFills = (S._batchFills || 0) + 1;
-      if (S._batchFills >= 4 && !S._batchHoldAt) {
+      if (S._batchFills >= (S._cycleMaxFills || 4) && !S._batchHoldAt) {
         S._batchHoldAt = Date.now();
         S._batchStudiedAt = false;
         cancelPendingAdds();
@@ -3622,6 +3646,7 @@ function huntTrigger(p) {
   }
   if (toxicBlocked(S.config.direction)) return null;
   if (batchHoldActive()) return null;
+  if (S._noNewEntries) return null;
   if (S.position && exposureCapped()) return null;
   if (S.position && volBrakeActive()) {
     if (!S._brkVetoAt || Date.now() - S._brkVetoAt > 18e4) {
@@ -3737,11 +3762,12 @@ function maybeHunt(p) {
   const d = applyDelta(hit.side, hit.qty, p);
   if (d.addedQty > 0) {
     S._batchFills = (S._batchFills || 0) + 1;
-    if (S._batchFills >= 4 && !S._batchHoldAt) {
+    if (S._batchFills >= (S._cycleMaxFills || 4) && !S._batchHoldAt) {
       S._batchHoldAt = Date.now();
       S._batchStudiedAt = false;
       S._batchWorst = null;
       S._batchWorseAt = 0;
+      S._nextCycleMax = 3;
       cancelPendingAdds();
       pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0627\u0644\u0645\u0631\u062D\u0644\u064A (\u0635\u064A\u062F): \u0627\u0643\u062A\u0645\u0644\u062A 4 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u062A\u0648\u0642\u0641 \u0627\u0644\u0641\u062A\u062D \u062D\u062A\u0649 \u064A\u062A\u0648\u0642\u0641 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 + \u062F\u0631\u0627\u0633\u0629 \u062B\u0645 4 \u0623\u062E\u0631\u0649");
     }
@@ -4438,6 +4464,34 @@ async function liveSync() {
         });
       }
     }
+    if (!S._posCntAt || Date.now() - S._posCntAt > 1e4) {
+      S._posCntAt = Date.now();
+      kcPrivate("GET", "/api/v1/positions").then((r) => {
+        const list = r && r.data || [];
+        const n = list.filter((x) => Math.abs(Number(x.currentQty) || 0) > 1e-12).length;
+        const allowed = typeof FLEET_MODE === "function" && FLEET_MODE() ? 5 : 1;
+        const was = !!S._noNewEntries;
+        S._exOpenCount = n;
+        S._noNewEntries = n > allowed;
+        if (S._noNewEntries && !was) {
+          pushLog("server", "\u26D4 \u062A\u062C\u0645\u064A\u062F \u0627\u0644\u062F\u062E\u0648\u0644: " + n + " \u0645\u0631\u0643\u0632\u0627\u064B \u062D\u064A\u0627\u064B \u0641\u064A \u0627\u0644\u0645\u0646\u0635\u0629 (\u0627\u0644\u0645\u0633\u0645\u0648\u062D " + allowed + ") \u2014 \u0644\u0627 \u0635\u0641\u0642\u0627\u062A \u062C\u062F\u064A\u062F\u0629 \u0648\u0644\u0627 \u062A\u0628\u062F\u064A\u0644 \u062D\u062A\u0649 \u062A\u064F\u063A\u0644\u0642 \u0627\u0644\u0632\u0627\u0626\u062F\u0629 \u0628\u0631\u0628\u062D");
+        }
+        if (!S._noNewEntries && was) {
+          pushLog("server", "\u2705 \u0631\u064F\u0641\u0639 \u0627\u0644\u062A\u062C\u0645\u064A\u062F: \u0627\u0644\u0645\u0631\u0627\u0643\u0632 \u0639\u0627\u062F\u062A \u0644\u0644\u062D\u062F \u0627\u0644\u0637\u0628\u064A\u0639\u064A \u2014 \u0627\u0644\u0639\u0648\u062F\u0629 \u0644\u0644\u0639\u0645\u0644");
+        }
+        try {
+          if (S.exEquity > 0 && (!S._recAt || Date.now() - S._recAt > 6e5)) {
+            S._recAt = Date.now();
+            const books = (S.config.cycleBalance || 0) + (S.realizedPnl || 0) - (S.feesPaid || 0);
+            const gap = S.exEquity - books;
+            if (Math.abs(gap) > Math.max(3, Math.abs(books) * 0.05))
+              pushLog("warn", "\u26A0\uFE0F \u0645\u0637\u0627\u0628\u0642\u0629 \u0627\u0644\u062D\u0633\u0627\u0628: \u062D\u0642\u0648\u0642 \u0627\u0644\u0645\u0646\u0635\u0629 " + fmtUsd(S.exEquity) + " \u0645\u0642\u0627\u0628\u0644 \u062F\u0641\u0627\u062A\u0631 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 " + fmtUsd(books) + " (\u0641\u0627\u0631\u0642 " + fmtUsd(gap) + ") \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639 \u0648\u0627\u0644\u062C\u0646\u064A \u064A\u064F\u062D\u062A\u0633\u0628 \u062A\u0646\u0641\u064A\u0630\u0627\u064B \u0645\u0646\u0635\u064A\u0627\u064B \u0641\u0642\u0637");
+          }
+        } catch {
+        }
+      }).catch(() => {
+      });
+    }
     if (S.position) exPlaceStopGuard();
   } catch (e) {
     const m = String(e?.message || e);
@@ -5029,6 +5083,12 @@ function saveCfg(v) {
   S.sound = !!v.sound;
   if (v.soundTone) S.soundTone = v.soundTone;
   if (sym !== old) {
+    if (S.config.mode === "live" && S.keys && (S.position || S._exOpenCount > 0)) {
+      S.config.symbol = old;
+      S.config.displaySymbol = old.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");
+      pushLog("server", "\u26D4 \u0644\u0627 \u062A\u0628\u062F\u064A\u0644 \u0625\u0644\u0649 " + sym + " \u0648\u0627\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u062D\u0627\u0644\u064A \u0645\u0641\u062A\u0648\u062D \u2014 \u0627\u0644\u0635\u0645\u0648\u062F \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A \u0627\u0644\u0643\u0627\u0645\u0644 \u062B\u0645 \u064A\u064F\u0633\u0645\u062D \u0628\u0627\u0644\u0627\u0646\u062A\u0642\u0627\u0644");
+      return;
+    }
     if (S.config.mode === "live" && S.keys) {
       exCancelAll(old).catch(() => {
       });
