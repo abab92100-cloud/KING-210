@@ -2937,6 +2937,7 @@ function coveringLoser(l, p) {
   return cover && adversePct(p) > 0.08;
 }
 function _harvestCleanup(fp) {
+  S._needsFlatCheck = Date.now();
   if (S.config.mode === "live" && S.keys) {
     exCancelAll(S.config.symbol).catch(() => {
     });
@@ -4517,6 +4518,19 @@ async function liveSync() {
         }
       }
     }
+    if (S._needsFlatCheck && Date.now() - S._needsFlatCheck < 3e4) {
+      try {
+        const lp = await exPosition(sym);
+        if (lp && lp.size > 0) {
+          S._needsFlatCheck = 0;
+          S.position = lp;
+          S._batchFills = Math.max(4, S._batchFills || 0);
+          if (!S._batchHoldAt) S._batchHoldAt = Date.now();
+          pushLog("warn", "\u26A0\uFE0F \u0627\u0644\u062C\u0646\u064A \u0644\u0645 \u062A\u064F\u0624\u0643\u062F\u0647 \u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u0627\u0644\u0645\u0631\u0643\u0632 \u0639\u0627\u062F \u0644\u0644\u0625\u062F\u0627\u0631\u0629 \u0641\u0648\u0631\u0627\u064B (\u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0642\u0641\u0644\u060C \u0644\u0627 \u0635\u0641\u0642\u0629 \u062C\u062F\u064A\u062F\u0629)");
+        } else S._needsFlatCheck = 0;
+      } catch {
+      }
+    }
     for (const l of S.grid) {
       if ((l.status === "cancelled" || l.status === "filled") && l.exchangeOrderId) {
         exCancelOne(l.exchangeOrderId);
@@ -4757,6 +4771,10 @@ async function botTick() {
   }
 }
 function startBot() {
+  try {
+    pushLog("server", "\u2699\uFE0F \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0641\u0639\u0651\u0627\u0644\u0629: " + (S.config.mode === "live" ? "\u062D\u0642\u064A\u0642\u064A" : "\u0648\u0631\u0642\u064A") + " \xB7 " + S.config.displaySymbol + " \xB7 \u0631\u0627\u0641\u0639\u0629 " + S.config.leverage + "\xD7 \xB7 \u0645\u0633\u062A\u0648\u064A\u0627\u062A " + S.config.levels + " \xB7 \u062E\u0637\u0648\u0629 " + S.config.gridStepPct + "% \xB7 \u0635\u064A\u062F " + S.config.huntPct + "% \xB7 \u062C\u0646\u064A " + (Number(S.config.tpUsd) > 0 ? "\u062B\u0627\u0628\u062A " + S.config.tpUsd + "$" : "\u0645\u062F\u0631\u0648\u0633 " + S.config.tpNet + "$") + " \xB7 \u0631\u0635\u064A\u062F \u0627\u0644\u062F\u0648\u0631\u0629 " + S.config.cycleBalance + "$ \xB7 \u062D\u062F \u0627\u0644\u0623\u0648\u0627\u0645\u0631 " + (S._cycleMaxFills || 4));
+  } catch {
+  }
   if (R()) {
     remoteCmd("start").then(() => remoteSync());
     return;
@@ -5505,6 +5523,34 @@ if (SLOT > 0) {
   const fleetSync = () => jfetch("http://127.0.0.1:" + BASE_PORT + "/fleet?i=" + SLOT).then((f) => {
     if (f && Array.isArray(f.taken)) {
       S._fleetTaken = f.taken.map((t) => t.sym);
+      if (!S.position && S.config.symbol) {
+        const duel = f.taken.filter((t) => t.sym === S.config.symbol);
+        if (duel.length) {
+          const winner = Math.min(...duel.map((t) => Number(t.holder) || 99), SLOT);
+          if (SLOT > winner) {
+            const takenSet = new Set(f.taken.map((t) => t.sym));
+            const cand = (S.radar && Array.isArray(S.radar.list) ? S.radar.list : []).find((x) => x && x.symbol && !takenSet.has(x.symbol) && x.symbol !== S.config.symbol);
+            if (cand) {
+              pushLog("server", "\u2696\uFE0F \u062A\u0643\u0631\u0627\u0631 \u0639\u0644\u0649 " + S.config.displaySymbol + " \u0645\u0639 \u0627\u0644\u0645\u062D\u0631\u0643 " + winner + " \u2014 \u064A\u0646\u062A\u0642\u0644 \u0647\u0630\u0627 \u0627\u0644\u0645\u062D\u0631\u0643 \u0625\u0644\u0649 " + (cand.disp || cand.symbol));
+              try {
+                saveCfg({
+                  symbol: cand.symbol,
+                  leverage: S.config.leverage,
+                  levels: S.config.levels,
+                  gridStepPct: S.config.gridStepPct,
+                  huntPct: S.config.huntPct,
+                  tpUsd: S.config.tpUsd,
+                  cycleBalance: S.config.cycleBalance,
+                  directionMode: S.config.directionMode,
+                  mode: S.config.mode
+                });
+              } catch {
+              }
+              return;
+            }
+          }
+        }
+      }
       if (!bootPickDone && !S.position && S.config.symbol === "XBTUSDTM" && S.radar && Array.isArray(S.radar.list) && S.radar.list.length) {
         const pick = S.radar.list[Math.min(SLOT - 1, S.radar.list.length - 1)];
         if (pick && pick.symbol && pick.symbol !== "XBTUSDTM") {
