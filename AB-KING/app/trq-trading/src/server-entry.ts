@@ -8,12 +8,12 @@
 import './server-shims'; // أولًا دائمًا: يثبّت البيئة قبل تقييم المحرك
 import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
-  saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync,
+  saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
 } from './engine';
 
-const SRV_VER = 'TRQ-TRADING-1.7.0';
+const SRV_VER = 'TRQ-TRADING-1.7.1';
 const FLEET_N = 5;
-const BASE_PORT = 8987; // منفذ أسطول TRQ — مستقل تماماً عن سيرفر AB-KING (8787)
+const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
 
 import { createServer } from 'node:http';
@@ -167,6 +167,7 @@ const srv = createServer(async (req, res) => {
           }
           case 'clearKeys': clearKeys(); return send(res, 200, { ok: true });
           case 'scanRadar': await scanRadar(); return send(res, 200, { ok: true, radar: S.radar || null });
+          case 'repair': { const rr = await repairAccount(); return send(res, 200, rr); }
           default: return send(res, 400, { ok: false, error: 'إجراء غير معروف: ' + a });
         }
       }
@@ -201,6 +202,11 @@ const srv = createServer(async (req, res) => {
       const a = String(j.action || '');
       // saveCfg يُبث بلا رمز عملة — كل محرك يحتفظ بعملته (التنويع) — والرصيد
       // الكلي يقسمه المنسق مرة واحدة: كل محرك يستلم نصيبه (÷5) فوراً
+      // repair: محرك واحد فقط (نفس المفاتيح والحساب — التكرار يكرر الأوامر)
+      if (a === 'repair') {
+        const r1 = await jfetch('http://127.0.0.1:' + (BASE_PORT + 1) + '/cmd', 45000, j);
+        return send(res, 200, r1 || { ok: false, error: 'لم يرد المحرك' });
+      }
       let payload = j;
       if (a === 'saveCfg' && j.cfg) {
         const { symbol, displaySymbol, ...rest } = j.cfg;
@@ -228,7 +234,7 @@ srv.listen(PORT, '127.0.0.1', () => {
   if (SLOT > 0) {
     console.log('[TRQ] محرك الأسطول ' + SLOT + ' يعمل على http://127.0.0.1:' + PORT);
   } else {
-    console.log('[TRQ] منسق أسطول TRQ-TRADING يعمل على http://127.0.0.1:' + PORT + ' — يُطلق ' + FLEET_N + ' محركات');
+    console.log('[TRG] منسق أسطول TRG-NEW يعمل على http://127.0.0.1:' + PORT + ' — يُطلق ' + FLEET_N + ' محركات');
     pushLog('server', '🚀 أسطول TRQ-TRADING انطلق — ' + FLEET_N + ' محركات مستقلة، رأس المال ÷ ' + FLEET_N + ' تلقائياً، كل عملة بمحرك وجني مستقلين');
     // إطلاق المحركات الخمسة — نفس الملف بمعرف قطاع ومنفذ خاص
     const self = process.argv[1];

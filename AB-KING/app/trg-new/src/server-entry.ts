@@ -8,7 +8,7 @@
 import './server-shims'; // أولًا دائمًا: يثبّت البيئة قبل تقييم المحرك
 import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
-  saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync,
+  saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
 } from './engine';
 
 const SRV_VER = 'TRG-NEW-1.0.0';
@@ -167,6 +167,7 @@ const srv = createServer(async (req, res) => {
           }
           case 'clearKeys': clearKeys(); return send(res, 200, { ok: true });
           case 'scanRadar': await scanRadar(); return send(res, 200, { ok: true, radar: S.radar || null });
+          case 'repair': { const rr = await repairAccount(); return send(res, 200, rr); }
           default: return send(res, 400, { ok: false, error: 'إجراء غير معروف: ' + a });
         }
       }
@@ -201,6 +202,11 @@ const srv = createServer(async (req, res) => {
       const a = String(j.action || '');
       // saveCfg يُبث بلا رمز عملة — كل محرك يحتفظ بعملته (التنويع) — والرصيد
       // الكلي يقسمه المنسق مرة واحدة: كل محرك يستلم نصيبه (÷5) فوراً
+      // repair: محرك واحد فقط (نفس المفاتيح والحساب — التكرار يكرر الأوامر)
+      if (a === 'repair') {
+        const r1 = await jfetch('http://127.0.0.1:' + (BASE_PORT + 1) + '/cmd', 45000, j);
+        return send(res, 200, r1 || { ok: false, error: 'لم يرد المحرك' });
+      }
       let payload = j;
       if (a === 'saveCfg' && j.cfg) {
         const { symbol, displaySymbol, ...rest } = j.cfg;

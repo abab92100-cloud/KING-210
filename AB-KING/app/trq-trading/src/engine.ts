@@ -1069,6 +1069,40 @@ async function ensureLiveMeta(symbol){ if(S._metaSym===symbol&&S.multiplier>0) r
    فشل إغلاق المركز القديم (429/هامش) ترك مراكز حقيقية بلا إدارة. هذا الفحص
    يلتقط كل مركز في الحساب ليس للعملة الحالية ويُثبت له أمر جني رابح (tpUsd)
    — لا إغلاق بخسارة أبداً، ولا ترك مركز بلا إدارة ─── */
+/* ─── إصلاح الحساب الشامل (أمر المالك الصريح): يمسح كل مراكز الحساب، يلغي
+   كل الأوامر والستوبات، يثبت لكل مركز هدف جني رابحاً واحداً، ويعيد تقريراً
+   كاملاً يُعرض في التطبيق — المنصة هي المرجع الوحيد ─── */
+export async function repairAccount(){
+  if(S.config.mode!=='live'||!S.keys) return { ok:false, error:'الوضع الحقيقي فقط' };
+  pushLog('server','🔧 بدء إصلاح الحساب الشامل — المنصة هي المرجع...');
+  const report:any[]=[]; let cancelled=0, stops=0;
+  try{
+    const resp=await kcPrivate('GET','/api/v1/positions');
+    const list=((resp&&(resp as any).data)||[]).filter((x:any)=>Math.abs(Number(x.currentQty)||0)>1e-12);
+    // إلغاء كل الأوامر والستوبات على كل رموز المراكز
+    for(const x of list){ const sym=String(x.symbol);
+      try{ await exCancelStops(sym); stops++; }catch{}
+      try{ const os=await exOrders(sym);
+        for(const o of (os||[])){ try{ await exCancelOne((o as any).orderId); cancelled++; }catch{} } }catch{} }
+    // لكل مركز: هدف جني رابح واحد
+    for(const x of list){ const sym=String(x.symbol);
+      const qty=Number(x.currentQty)||0, side=qty>0?'long':'short', absQ=Math.abs(qty);
+      const entry=Number(x.avgEntryPrice)||0, mult=Number(x.multiplier)||1;
+      const pnl=Number((x as any).unrealisedPnl)||0;
+      let tp=0;
+      try{
+        if(entry>0&&absQ>0){ const tpU=Math.max(0.5,Number(S.config.tpUsd)||1);
+          const dPx=tpU/absQ/mult*1.25;
+          const price=roundTick(side==='long'?entry+dPx:entry-dPx,S.tickSize||1e-8);
+          await exPlaceLimit({symbol:sym,side:side==='long'?'sell':'buy',price,qty:absQ,reduceOnly:true,clientOid:uid('rep')});
+          tp=price; } }catch(e:any){ pushLog('warn','هدف جني '+sym+' فشل: '+String(e?.message||e)); }
+      report.push({symbol:sym,side,size:absQ,entry:Number(entry.toFixed(8)),pnl:Number(pnl.toFixed(2)),tp:Number(tp)||null});
+    }
+    const msg='🔧 إصلاح الحساب: '+list.length+' مركزاً حياً — أُلغيت '+(cancelled)+' أمراً و'+stops+' ستوب — لكل مركز هدف جني رابح'+(list.length?' — لا خسارة ولا دخول جديد حتى تُغنى كلها':'');
+    pushLog('server',msg);
+    return { ok:true, positions:report, cancelledOrders:cancelled, cancelledStops:stops, message:msg };
+  }catch(e:any){ pushLog('error','إصلاح الحساب فشل: '+String(e?.message||e)); return { ok:false, error:String(e?.message||e) }; } }
+
 async function orphanSweep(){
   if(S.config.mode!=='live'||!S.keys) return;
   try{
@@ -2722,13 +2756,14 @@ export async function flattenAt(p:any,source:any){ const pos=S.position;
     // إلزام التأكيد: حتى 5 محاولات فورية متتالية — الكارثة لا تنتظر النبضة التالية
     let closed=false;
     for(let att=0;att<5&&!closed;att++){
-      try{ await exCloseQty(S.config.symbol,pos.side,pos.size); closed=true; }
-      catch(e:any){
-        pushLog('error','محاولة إغلاق '+(att+1)+' فشلت: '+String(e?.message||e));
-        await new Promise(r=>setTimeout(r,500));
-        try{ const live=await exPosition(S.config.symbol);
-          if(live&&live.size>0) pos.size=live.size; else { closed=true; } }catch(e2){ /* مواصلة المحاولات */ }
-      } }
+      try{ await exCloseQty(S.config.symbol,pos.side,pos.size); }
+      catch(e:any){ pushLog('error','محاولة إغلاق '+(att+1)+' فشلت: '+String(e?.message||e)); }
+      // ─── لا نثق بنجاح النداء وحده: الصفرية تُؤكد بقراءة المنصة (كان النجاح
+      // الشكلي يكفي للإعلان الوهمي — أمر مقبول لكن غير منفَّذ) ───
+      await new Promise(r=>setTimeout(r,700));
+      try{ const live=await exPosition(S.config.symbol);
+        if(live&&live.size>0) pos.size=live.size; else closed=true; }
+      catch(e2){ if(att===4) pushLog('error','تعذر تأكيد الصفرية — المركز يبقى مُداراً'); } }
     if(!closed){
       // ─── لا إغلاق محلي بلا تأكيد المنصة (كان يُعلن جنيّاً وهمياً ويترك
       // المركز حياً على المنصة) — المركز يبقى في المحرك ويُعاد المحاولة لاحقاً
@@ -2750,6 +2785,9 @@ function pruneGhosts(){ if(S.position) return;
   for(const g of S.grid){ if(g.reduceOnly&&(g.status==='open'||g.status==='armed')){
       g.status='cancelled'; g.exchangeOrderId=null; }
     if(g.status==='filled'&&!g.reduceOnly) g.status='cancelled'; }
+  // ─── الوضع الحقيقي: صفوف السجل تُغلق فقط بتأكيد المنصة (تنفيذ فعلي) —
+  // الإغلاق هنا بسعر السوق كان يعلن «جني ربح» وهمياً كل نبضة (3 صفقات وهمية!) ───
+  if(S.config.mode==='live'&&S.keys) return;
   for(const row of S.journal){ if(row.status!=='open') continue;
     row.status='closed'; row.exit=S.lastPrice||row.entry; row.closedAt=Date.now();
     if(!row.pnl&&row.exit) row.pnl=lotNet(row.side,row.entry,row.exit,row.qty,row.fees); } }
