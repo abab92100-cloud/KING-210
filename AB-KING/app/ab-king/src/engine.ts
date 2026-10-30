@@ -1063,6 +1063,38 @@ async function ensureLiveMeta(symbol){ if(S._metaSym===symbol&&S.multiplier>0) r
     S.multiplier=mul; S.tickSize=+ct.tickSize||S.tickSize; S._metaSym=symbol;
     if(+ct.maxOrderQty>0) S.maxOrderQty=+ct.maxOrderQty; S._metaAt=Date.now();
   }catch(_){ throw new Error('بيانات العقد غير جاهزة — أُجّل الأمر لحين توثيق المضاعف'); } }
+/* ─── سرب إنقاذ المراكز اليتيمة (كارثة 8 مراكز): الانتقال بين العملات مع
+   فشل إغلاق المركز القديم (429/هامش) ترك مراكز حقيقية بلا إدارة. هذا الفحص
+   يلتقط كل مركز في الحساب ليس للعملة الحالية ويُثبت له أمر جني رابح (tpUsd)
+   — لا إغلاق بخسارة أبداً، ولا ترك مركز بلا إدارة ─── */
+async function orphanSweep(){
+  if(S.config.mode!=='live'||!S.keys) return;
+  try{
+    const resp=await kcPrivate('GET','/api/v1/positions');
+    const list=(resp&&(resp as any).data)||[];
+    const cur=S.config.symbol;
+    for(const x of list){
+      const qty=Number(x.currentQty)||0; if(Math.abs(qty)<1e-12) continue;
+      const sym=String(x.symbol); if(sym===cur) continue; // مركز العملة الحالية يديره المحرك
+      const side=qty>0?'long':'short', absQ=qty>0?qty:-qty;
+      const entry=Number(x.avgEntryPrice)||0; if(!(entry>0)) continue;
+      // هل يوجد أمر جني حي لهذا الزوج؟ لا تكرر الإرسال
+      try{ const os=await exOrders(sym); if(os&&os.some((o:any)=>o.reduceOnly&&(o.size-o.filledSize)>1e-12)) continue; }catch{}
+      // هدف جني رابح: tpUsd المحدد + رسوم، وتحويله لمسافة سعرية بحسب الحجم
+      const mult=Number(x.multiplier)||1;
+      const qMax=Number(x.maxOrderQty)||0; void qMax;
+      const notional=Math.max(1e-9,absQ*mult*entry);
+      const tpU=Math.max(0.5,Number(S.config.tpUsd)||1);
+      const dPx=tpU/absQ/mult*1.25; // صافي الهدف + هامش رسوم 25%
+      const price=roundTick(side==='long'?entry+dPx:entry-dPx,S.tickSize||1e-8);
+      if(!(price>0)) continue;
+      try{
+        await exPlaceLimit({symbol:sym,side:side==='long'?'sell':'buy',price,qty:absQ,reduceOnly:true,clientOid:uid('orph')});
+        pushLog('server','🔒 صفقة معلقة سابقة ('+sym+' '+side+' '+absQ+') — ثُبّت لها هدف جني رابح @ '+price+' — لا إغلاق بخسارة');
+      }catch(e:any){ pushLog('warn','تعذر تثبيت هدف جني للمركز المعلق '+sym+': '+String(e?.message||e)); }
+    }
+  }catch(e){ logSwallow('orphanSweep',e); } }
+
 async function exPlaceLimit(intent){
   await ensureLiveMeta(intent.symbol);
   return placeOrderSmart({clientOid:intent.clientOid,symbol:intent.symbol,
@@ -1960,10 +1992,15 @@ function harvestRipe(p){ if(!p||S.status==='idle') return;
     S._gapCtx=null;
     return;
   }
-  for(const tp of S.grid.filter(g=>g.reduceOnly&&(g.status==='open'||g.status==='armed'))){
-    const tol=Math.min(S.tickSize>0?S.tickSize*0.5:1e-12, Math.abs(tp.price)*0.0005);
-    const crossed=tp.side==='sell'?p>=tp.price-tol:p<=tp.price+tol;
-    if(crossed) fillLevel(tp.id,p,true); }
+  // ─── الكارثة الكبرى (أمر 30 أكتوبر): كان أمر الجني «يُملّأ محلياً» عند
+  // ملامسة السعر حتى في الوضع الحقيقي — فيُعلن جني تمّ والمنصة لم تنفذ شيئاً
+  // وتتراكم مراكز حقيقية (8 صفقات!). الآن: التعبئة المحلية للجني في الورقي فقط.
+  // الحقيقي: تنفيذ أمر الجني يأتي حصراً من مزامنة صفقات المنصة (exFills) ───
+  if(S.config.mode!=='live'||!S.keys){
+    for(const tp of S.grid.filter(g=>g.reduceOnly&&(g.status==='open'||g.status==='armed'))){
+      const tol=Math.min(S.tickSize>0?S.tickSize*0.5:1e-12, Math.abs(tp.price)*0.0005);
+      const crossed=tp.side==='sell'?p>=tp.price-tol:p<=tp.price+tol;
+      if(crossed) fillLevel(tp.id,p,true); } }
 
   // ——— درع الانزلاق العكسي ———
   // حركة حادة ضد المركز خلال ثوانٍ: ألغِ تسليح المستويات فورًا — إضافة في شلال = متوسط كارثي
@@ -2681,7 +2718,11 @@ export async function flattenAt(p:any,source:any){ const pos=S.position;
         try{ const live=await exPosition(S.config.symbol);
           if(live&&live.size>0) pos.size=live.size; else { closed=true; } }catch(e2){ /* مواصلة المحاولات */ }
       } }
-    if(!closed) pushLog('error','الإغلاق لم يُؤكَّد بعد 5 محاولات — الحارس الطارئ على المنصة هو الحماية الأخيرة'); }
+    if(!closed){
+      // ─── لا إغلاق محلي بلا تأكيد المنصة (كان يُعلن جنيّاً وهمياً ويترك
+      // المركز حياً على المنصة) — المركز يبقى في المحرك ويُعاد المحاولة لاحقاً
+      pushLog('error','⚠️ الإغلاق لم تُؤكده المنصة بعد 5 محاولات — المركز يبقى مُداراً (لا جني وهمي) — يُعاد تلقائياً');
+      return; } }
   if(pos&&p>0){ const cs=pos.side==='short'?'buy':'sell';
     const fee=feeFor(pos.size*(S.multiplier||1)*p,true); S.feesPaid+=fee;
     const d=applyDelta(cs,pos.size,p);
@@ -2825,6 +2866,8 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
   // وعند رفض الحصة (429) تبريد 45ث كاملة — لا نطرق الباب أثناء العاصفة
   if(Date.now()-(S._syncAt||0)<4000) return;
   S._syncAt=Date.now();
+  // سرب إنقاذ المراكز اليتيمة كل 5 دقائق — قبل أي منطق آخر
+  if(!S._orphanAt||Date.now()-S._orphanAt>300000){ S._orphanAt=Date.now(); orphanSweep().catch(()=>{}); }
   const sym=S.config.symbol;
   try{
     const pos=await exPosition(sym);
