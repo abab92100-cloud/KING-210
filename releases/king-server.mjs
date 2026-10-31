@@ -2380,7 +2380,8 @@ function buildGrid(center, wide, initialCount) {
   const c = S.config, tick = S.tickSize || 1e-10;
   const vol = retStdev() || 0.05;
   const volF = wide ? 1 : Math.max(1, Math.min(3, vol * 10));
-  const step = c.gridStepPct / 100 * (wide ? 4 : memStepMult() * (S.regime ? S.regime.stepMult : 1) * volF);
+  const liveWide = S.config.mode === "live" && S.keys ? 1.8 : 1;
+  const step = c.gridStepPct / 100 * (wide ? 4 : memStepMult() * (S.regime ? S.regime.stepMult : 1) * volF) * liveWide;
   const stepPct = wide ? Math.max(0.12, c.gridStepPct) * 4 : addStepPct();
   const n = effLevels();
   const qtys = levelQtys(center, n);
@@ -4282,6 +4283,13 @@ async function liveSync() {
   const sym = S.config.symbol;
   try {
     const pos = await exPosition(sym);
+    if (pos) {
+      S._flatStrikes = 0;
+      S._flatConfirmed = false;
+    } else {
+      S._flatStrikes = (S._flatStrikes || 0) + 1;
+      if (S._flatStrikes >= 3) S._flatConfirmed = true;
+    }
     const inGrace = S.ignoreExchangeUntil && Date.now() < S.ignoreExchangeUntil;
     if (pos) {
       if (inGrace && !S.position) {
@@ -4308,7 +4316,7 @@ async function liveSync() {
           if (S.activeCycle) S.activeCycle.entry = pos.entry;
         }
       }
-    } else if (S.position && Date.now() > S.ignoreExchangeUntil) {
+    } else if (S.position && Date.now() > S.ignoreExchangeUntil && S._flatConfirmed) {
       const __row = S.journal.find((j) => j.status === "open");
       const __ex = Number(pos && pos.exitPrice) || S.markPrice || S.lastPrice || (__row ? __row.entry : 0);
       if (__row && __ex > 0) {
@@ -4384,6 +4392,17 @@ async function liveSync() {
         const was = !!S._noNewEntries;
         S._exOpenCount = n;
         S._noNewEntries = n > allowed;
+        S.exPositions = list.filter((x) => Math.abs(Number(x.currentQty) || 0) > 1e-12).map((x) => ({
+          symbol: String(x.symbol),
+          side: (Number(x.currentQty) || 0) > 0 ? "long" : "short",
+          size: Math.abs(Number(x.currentQty) || 0),
+          entry: Number(x.avgEntryPrice) || 0,
+          pnl: Math.round((Number(x.unrealisedPnl) || 0) * 100) / 100
+        }));
+        if (!S._exListLogAt || Date.now() - S._exListLogAt > 3e5) {
+          S._exListLogAt = Date.now();
+          if (n > 0) pushLog("server", "\u{1F4CB} \u0645\u0631\u0627\u0643\u0632 \u0627\u0644\u0645\u0646\u0635\u0629 \u0627\u0644\u062D\u0642\u064A\u0642\u064A\u0629 (" + n + "): " + S.exPositions.map((p) => p.symbol.replace("USDTM", "")).join(" \xB7 "));
+        }
         if (S._noNewEntries && !was) {
           pushLog("server", "\u26D4 \u062A\u062C\u0645\u064A\u062F \u0627\u0644\u062F\u062E\u0648\u0644: " + n + " \u0645\u0631\u0643\u0632\u0627\u064B \u062D\u064A\u0627\u064B \u0641\u064A \u0627\u0644\u0645\u0646\u0635\u0629 (\u0627\u0644\u0645\u0633\u0645\u0648\u062D " + allowed + ") \u2014 \u0644\u0627 \u0635\u0641\u0642\u0627\u062A \u062C\u062F\u064A\u062F\u0629 \u0648\u0644\u0627 \u062A\u0628\u062F\u064A\u0644 \u062D\u062A\u0649 \u062A\u064F\u063A\u0644\u0642 \u0627\u0644\u0632\u0627\u0626\u062F\u0629 \u0628\u0631\u0628\u062D");
         }
@@ -5011,10 +5030,10 @@ function saveCfg(v) {
   S.sound = !!v.sound;
   if (v.soundTone) S.soundTone = v.soundTone;
   if (sym !== old) {
-    if (S.config.mode === "live" && S.keys && (S.position || S._exOpenCount > 0)) {
+    if (S.config.mode === "live" && S.keys && (S.position || S._exOpenCount > 0 || !S._flatConfirmed)) {
       S.config.symbol = old;
       S.config.displaySymbol = old.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");
-      pushLog("server", "\u26D4 \u0644\u0627 \u062A\u0628\u062F\u064A\u0644 \u0625\u0644\u0649 " + sym + " \u0648\u0627\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u062D\u0627\u0644\u064A \u0645\u0641\u062A\u0648\u062D \u2014 \u0627\u0644\u0635\u0645\u0648\u062F \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A \u0627\u0644\u0643\u0627\u0645\u0644 \u062B\u0645 \u064A\u064F\u0633\u0645\u062D \u0628\u0627\u0644\u0627\u0646\u062A\u0642\u0627\u0644");
+      pushLog("server", "\u26D4 \u0644\u0627 \u062A\u0628\u062F\u064A\u0644 \u0625\u0644\u0649 " + sym + " \u2014 " + (S.position ? "\u0648\u0627\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u062D\u0627\u0644\u064A \u0645\u0641\u062A\u0648\u062D" : !S._flatConfirmed ? "\u0628\u0644\u0627 \u062A\u0623\u0643\u064A\u062F \u0635\u0641\u0631\u064A\u0629 \u0645\u0646 \u0627\u0644\u0645\u0646\u0635\u0629 \u0628\u0639\u062F" : "\u0645\u0631\u0627\u0643\u0632 \u0623\u062E\u0631\u0649 \u062D\u064A\u0629") + " \u2014 \u0627\u0644\u0635\u0645\u0648\u062F \u062D\u062A\u0649 \u062A\u062A\u0623\u0643\u062F \u0627\u0644\u0645\u0646\u0635\u0629 \u062B\u0645 \u064A\u064F\u0633\u0645\u062D \u0628\u0627\u0644\u0627\u0646\u062A\u0642\u0627\u0644");
       return;
     }
     if (S.config.mode === "live" && S.keys) {
@@ -5296,6 +5315,9 @@ var init_engine = __esm({
       _noNewEntries: false,
       _cycleMaxFills: 4,
       _nextCycleMax: 0,
+      exPositions: [],
+      _flatStrikes: 0,
+      _flatConfirmed: false,
       multiplier: 1,
       tickSize: 0.1,
       makerFee: 2e-4,
@@ -5490,7 +5512,7 @@ console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u
 init_engine();
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "KING-1.8.5";
+var SRV_VER = "KING-1.8.6";
 var FLEET_N = 1;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
