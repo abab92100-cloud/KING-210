@@ -1824,6 +1824,32 @@ async function exAllPositions() {
   const arr = Array.isArray(raw) ? raw : raw && raw.data || [];
   return (arr || []).filter((x) => Math.abs(Number(x.currentQty) || 0) > 1e-12);
 }
+async function profitTpPrice(sym, entry, qty, side, x) {
+  const tpU = Math.max(0.5, Number(S.config.tpUsd) || 1);
+  const mark = Number(x && x.markPrice) || 0, pnlNow = Number(x && x.unrealisedPnl) || 0;
+  let perPx = 0;
+  if (mark > 0 && Math.abs(mark - entry) > 1e-12 && Math.abs(pnlNow) > 1e-9) perPx = Math.abs(pnlNow) / Math.abs(mark - entry);
+  let tick = 0;
+  try {
+    const ct = await fetchContract(sym);
+    tick = Number(ct && ct.tickSize) || 0;
+    const m2 = Number(ct && ct.multiplier) || 0;
+    if (!(perPx > 0) && m2 > 0) perPx = qty * m2;
+  } catch {
+  }
+  if (!(perPx > 0)) perPx = qty * (S.multiplier || 1);
+  if (!(tick > 0)) tick = S.tickSize || 1e-10;
+  if (!(perPx > 0) || !(entry > 0)) return { price: 0, why: "\u0628\u064A\u0627\u0646\u0627\u062A \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629" };
+  const dPx = tpU * 1.3 / perPx;
+  if (!(dPx > 0)) return { price: 0, why: "\u0645\u0633\u0627\u0641\u0629 \u0635\u0641\u0631\u064A\u0629" };
+  if (dPx > entry * 0.25) return { price: 0, why: "\u0645\u0633\u0627\u0641\u0629 " + (dPx / entry * 100).toFixed(0) + "% \u063A\u064A\u0631 \u0645\u0646\u0637\u0642\u064A\u0629 \u2014 \u0645\u0631\u0641\u0648\u0636\u0629" };
+  const raw = side === "long" ? entry + dPx : entry - dPx;
+  const price = roundTick(raw, tick);
+  if (!(price > 0)) return { price: 0, why: "\u0633\u0639\u0631 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D" };
+  if (side === "long" && !(price > entry)) return { price: 0, why: "\u0627\u0644\u0633\u0639\u0631 \u0644\u0627 \u064A\u0633\u0628\u0642 \u0627\u0644\u062F\u062E\u0648\u0644" };
+  if (side === "short" && !(price < entry)) return { price: 0, why: "\u0627\u0644\u0633\u0639\u0631 \u0644\u0627 \u064A\u0633\u0628\u0642 \u0627\u0644\u062F\u062E\u0648\u0644" };
+  return { price, why: "" };
+}
 async function repairAccount() {
   if (S.config.mode !== "live" || !S.keys) return { ok: false, error: "\u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0641\u0642\u0637" };
   pushLog("server", "\u{1F527} \u0628\u062F\u0621 \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0627\u0644\u0634\u0627\u0645\u0644 \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639...");
@@ -1858,11 +1884,11 @@ async function repairAccount() {
       let tp = 0;
       try {
         if (entry > 0 && absQ > 0) {
-          const tpU = Math.max(0.5, Number(S.config.tpUsd) || 1);
-          const dPx = tpU / absQ / mult * 1.25;
-          const price = roundTick(side === "long" ? entry + dPx : entry - dPx, S.tickSize || 1e-8);
-          await exPlaceLimit({ symbol: sym, side: side === "long" ? "sell" : "buy", price, qty: absQ, reduceOnly: true, clientOid: uid("rep") });
-          tp = price;
+          const rr = await profitTpPrice(sym, entry, absQ, side, x);
+          if (rr.price > 0) {
+            await exPlaceLimit({ symbol: sym, side: side === "long" ? "sell" : "buy", price: rr.price, qty: absQ, reduceOnly: true, clientOid: uid("rep") });
+            tp = rr.price;
+          } else pushLog("warn", "\u0647\u062F\u0641 \u062C\u0646\u064A " + sym + " \u0645\u0631\u0641\u0648\u0636: " + rr.why);
         }
       } catch (e) {
         pushLog("warn", "\u0647\u062F\u0641 \u062C\u0646\u064A " + sym + " \u0641\u0634\u0644: " + String(e?.message || e));
@@ -1911,14 +1937,9 @@ async function orphanSweep() {
         if (os && os.some((o) => o.reduceOnly && o.size - o.filledSize > 1e-12)) continue;
       } catch {
       }
-      const mult = Number(x.multiplier) || 1;
-      const qMax = Number(x.maxOrderQty) || 0;
-      void qMax;
-      const notional = Math.max(1e-9, absQ * mult * entry);
-      const tpU = Math.max(0.5, Number(S.config.tpUsd) || 1);
-      const dPx = tpU / absQ / mult * 1.25;
-      const price = roundTick(side === "long" ? entry + dPx : entry - dPx, S.tickSize || 1e-8);
-      if (!(price > 0)) continue;
+      const rr = await profitTpPrice(sym, entry, absQ, side, x);
+      if (!(rr.price > 0)) continue;
+      const price = rr.price;
       try {
         await exPlaceLimit({ symbol: sym, side: side === "long" ? "sell" : "buy", price, qty: absQ, reduceOnly: true, clientOid: uid("orph") });
         pushLog("server", "\u{1F512} \u0635\u0641\u0642\u0629 \u0645\u0639\u0644\u0642\u0629 \u0633\u0627\u0628\u0642\u0629 (" + sym + " " + side + " " + absQ + ") \u2014 \u062B\u064F\u0628\u0651\u062A \u0644\u0647\u0627 \u0647\u062F\u0641 \u062C\u0646\u064A \u0631\u0627\u0628\u062D @ " + price + " \u2014 \u0644\u0627 \u0625\u063A\u0644\u0627\u0642 \u0628\u062E\u0633\u0627\u0631\u0629");
@@ -2383,11 +2404,14 @@ function buildGrid(center, wide, initialCount) {
   const c = S.config, tick = S.tickSize || 1e-10;
   const vol = retStdev() || 0.05;
   const volF = wide ? 1 : Math.max(1, Math.min(3, vol * 10));
-  const liveWide = S.config.mode === "live" && S.keys ? 1.8 : 1;
+  const liveWide = S.config.mode === "live" && S.keys ? 2.2 : 1;
   const step = c.gridStepPct / 100 * (wide ? 4 : memStepMult() * (S.regime ? S.regime.stepMult : 1) * volF) * liveWide;
   const stepPct = wide ? Math.max(0.12, c.gridStepPct) * 4 : addStepPct();
   const n = effLevels();
   const qtys = levelQtys(center, n);
+  if (initialCount && initialCount > 1) {
+    for (let i = 0; i < Math.min(initialCount, qtys.length); i++) qtys[i] = qtys[0];
+  }
   const filledN = filledAdds();
   const entry = S.position ? S.position.entry : center;
   const fills = S.grid.filter((g) => !g.reduceOnly && g.status === "filled").map((g) => g.filledPrice || g.price).filter((v) => v > 0);
@@ -5514,7 +5538,7 @@ console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u
 init_engine();
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "TRQ-TRADING-1.7.3";
+var SRV_VER = "TRQ-TRADING-1.7.4";
 var FLEET_N = 5;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
