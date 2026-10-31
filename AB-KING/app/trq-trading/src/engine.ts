@@ -1490,13 +1490,13 @@ export function levelQtys(center,n){ const c=S.config;
     if(acc+q*cv/lev>budget&&out.length) break; // لا تتجاوز السيولة أبدًا
     out.push(q); acc+=q*cv/lev; }
   return out; }
-function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tick=S.tickSize||1e-10;
+export function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tick=S.tickSize||1e-10;
   // خطوة متكيفة مع التقلب اللحظي: الحركات المفاجئة توسّع المناطق تلقائيًا
   const vol=retStdev()||0.05;
   const volF=wide?1:Math.max(1,Math.min(3,vol*10));
   // التباعد المنطقي (أمر المالك 31 أكتوبر): في الوضع الحقيقي الخطوة ×1.8
   // (0.3% → 0.54% بين كل أمر) — كانت 0.3% ملاصقة فيفتح 4 أوامر شبه متطابقة
-  const liveWide=(S.config.mode==='live'&&S.keys)?2.2:1; // 0.3% → 0.66% بين كل أمر (أمر المالك: تباعد منطقي واضح)
+  const liveWide=1; // التباعد الآن بسلّم المالك المتدرج (لا مضاعف موحد)
   const step=c.gridStepPct/100*(wide?4:memStepMult()*(S.regime?S.regime.stepMult:1)*volF)*liveWide;
   const stepPct=wide?Math.max(0.12,c.gridStepPct)*4:addStepPct();
   const n=effLevels(); // تركيز يناسب رأس المال — لا تفتيت على 25 مستوى تافهًا
@@ -1532,13 +1532,20 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
   // +260% فوُلدت مستويات زومبي ضخمة ترفضها المنصة (insufficient margin كل دقيقة)
   const reach=Math.max(spanMin,Math.min(step*n*2,0.12));
   if(span>reach) span=reach;
+  // ─── سلم المالك (31 أكتوبر، بدقة): أول 4 أوامر في مناطق قريبة جيدة جداً
+  // (تباعد 0.15% قابل للتقلب — يلتقط الارتدادات المبكرة)، الأربعة التالية
+  // بتباعد 0.22%، وما بعدها بتباعد 0.66% — لا تكدس ولا تشتت بعيد ───
+  const pctA=Math.max(0.12,Math.min(0.30,(S.config.gridStepPct||0.3)*0.5))/100;
+  const pctB=0.22/100, pctC=0.66/100;
+  const ownerLadderDist=(idx:any)=>{ let d=0;
+    for(let j=1;j<=idx;j++){ d+= j<=4?pctA:(j<=8?pctB:pctC); } return d; };
   let prevDist=0;
   for(let i=1;i<=n;i++){
     // الشبكة الواسعة أيضًا لها سقف (5%) — الامتداد المفتوح كان يسلّح مستويات على بعد 30%
     // تباعد ذكي: لا يقرب أي مستوى من سابقه أقل من 0.8×خطوة الشبكة المضبوطة
     // — الصيغة التدريجية كانت تكتظ أول 4 مستويات داخل 0.6% فيلتقطها انزلاق واحد
-    let dist=wide?Math.min(step*i,0.05):span*Math.pow(i/n,1.5);
-    if(!wide){ const minGap=Math.max(step*(S.config.hfMode?0.3:1),(stepPct/100)*(S.config.hfMode?0.3:1));
+    let dist=wide?Math.min(step*i,0.05):ownerLadderDist(i);
+    if(!wide){ const minGap=Math.min(pctA*0.5,step*0.4);
       if(i===1) dist=Math.max(dist,minGap);
       else dist=Math.max(dist,prevDist+minGap); }
     prevDist=dist;
@@ -1548,8 +1555,10 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
     // مستوى لن يعيش المركز ليراه عبء أعمى، لكن بقية المسافة صالحة للتسليح
     if(liq>0){ if(c.direction==='short'&&price>=liq*0.985) continue;
       if(c.direction==='long'&&price<=liq*1.015) continue; }
-    if(grid.some(g=>tooClose(g.price,price,stepPct))) continue;
-    if(c.direction==='short'&&price<=center*(1+step*0.4)) continue;
+    // فلتر التقارب بالسلم المتدرج: المسافة المطلوبة بين أي مستويين = نصف أصغر
+    // خطوة في السلم (0.06%) — أوسع فلاتر القديمة كانت ترمي مستويات السلم
+    if(grid.some(g=>Math.abs(g.price-price)/price<0.0006)) continue;
+    if(c.direction==='short'&&price<=center*(1+pctA*0.6)) continue;
     if(c.direction==='long'&&price>=center*(1-step*0.4)) continue;
     // حجم المستوى يتبع ترتيبه الحقيقي في السلم (بعد المناطق المملوءة)
     const qi=Math.min(filledN+i-1,qtys.length-1);
