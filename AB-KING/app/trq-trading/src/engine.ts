@@ -1070,6 +1070,13 @@ async function ensureLiveMeta(symbol){ if(S._metaSym===symbol&&S.multiplier>0) r
    فشل إغلاق المركز القديم (429/هامش) ترك مراكز حقيقية بلا إدارة. هذا الفحص
    يلتقط كل مركز في الحساب ليس للعملة الحالية ويُثبت له أمر جني رابح (tpUsd)
    — لا إغلاق بخسارة أبداً، ولا ترك مركز بلا إدارة ─── */
+// قراءة قائمة مراكز الحساب — شكل kcPrivate يعيد data مباشرة (مصفوفة)،
+// والقراءة القديمة resp.data كانت ترجع فارغاً دائماً (لهذا repair رأى 0 مركز)
+async function exAllPositions(){
+  const raw=await kcPrivate('GET','/api/v1/positions');
+  const arr=Array.isArray(raw)?raw:((raw&&(raw as any).data)||[]);
+  return (arr||[]).filter((x:any)=>Math.abs(Number(x.currentQty)||0)>1e-12);
+}
 /* ─── إصلاح الحساب الشامل (أمر المالك الصريح): يمسح كل مراكز الحساب، يلغي
    كل الأوامر والستوبات، يثبت لكل مركز هدف جني رابحاً واحداً، ويعيد تقريراً
    كاملاً يُعرض في التطبيق — المنصة هي المرجع الوحيد ─── */
@@ -1078,8 +1085,7 @@ export async function repairAccount(){
   pushLog('server','🔧 بدء إصلاح الحساب الشامل — المنصة هي المرجع...');
   const report:any[]=[]; let cancelled=0, stops=0;
   try{
-    const resp=await kcPrivate('GET','/api/v1/positions');
-    const list=((resp&&(resp as any).data)||[]).filter((x:any)=>Math.abs(Number(x.currentQty)||0)>1e-12);
+    const list=await exAllPositions();
     // إلغاء كل الأوامر والستوبات على كل رموز المراكز
     for(const x of list){ const sym=String(x.symbol);
       try{ await exCancelStops(sym); stops++; }catch{}
@@ -1099,7 +1105,7 @@ export async function repairAccount(){
           tp=price; } }catch(e:any){ pushLog('warn','هدف جني '+sym+' فشل: '+String(e?.message||e)); }
       report.push({symbol:sym,side,size:absQ,entry:Number(entry.toFixed(8)),pnl:Number(pnl.toFixed(2)),tp:Number(tp)||null});
     }
-    const msg='🔧 إصلاح الحساب: '+list.length+' مركزاً حياً — أُلغيت '+(cancelled)+' أمراً و'+stops+' ستوب — لكل مركز هدف جني رابح'+(list.length?' — لا خسارة ولا دخول جديد حتى تُغنى كلها':'');
+    const msg='🔧 إصلاح الحساب: '+list.length+' مركزاً حياً'+(list.length?(' ('+list.map((x:any)=>String(x.symbol).replace('USDTM','')).join(' · ')+')'):'')+' — أُلغيت '+cancelled+' أمراً و'+stops+' ستوب — لكل مركز هدف جني رابح'+(list.length?' — لا خسارة ولا دخول جديد حتى تُجنى كلها':'');
     pushLog('server',msg);
     return { ok:true, positions:report, cancelledOrders:cancelled, cancelledStops:stops, message:msg };
   }catch(e:any){ pushLog('error','إصلاح الحساب فشل: '+String(e?.message||e)); return { ok:false, error:String(e?.message||e) }; } }
@@ -1107,8 +1113,7 @@ export async function repairAccount(){
 async function orphanSweep(){
   if(S.config.mode!=='live'||!S.keys) return;
   try{
-    const resp=await kcPrivate('GET','/api/v1/positions');
-    const list=(resp&&(resp as any).data)||[];
+    const list=await exAllPositions();
     const cur=S.config.symbol;
     for(const x of list){
       const qty=Number(x.currentQty)||0; if(Math.abs(qty)<1e-12) continue;
@@ -2992,9 +2997,8 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     // المسموح الطبيعي: 5 في الأسطول (مركز لكل محرك) أو 1 في الأحادي —
     // أي زيادة = بقايا جلسات سابقة → تجميد فوري للدخول والتبديل ═══
     if(!S._posCntAt||Date.now()-S._posCntAt>10000){ S._posCntAt=Date.now();
-      kcPrivate('GET','/api/v1/positions').then(r=>{
-        const list=(r&&(r as any).data)||[];
-        const n=list.filter((x:any)=>Math.abs(Number(x.currentQty)||0)>1e-12).length;
+      exAllPositions().then(list=>{
+        const n=list.length;
         const allowed=(typeof FLEET_MODE==='function'&&FLEET_MODE())?5:1;
         const was=!!S._noNewEntries;
         S._exOpenCount=n; S._noNewEntries=n>allowed;

@@ -11,7 +11,7 @@ import {
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
 } from './engine';
 
-const SRV_VER = 'KING-1.8.6';
+const SRV_VER = 'KING-1.8.7';
 const FLEET_N = 1;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
@@ -72,7 +72,14 @@ if (SLOT > 0) {
       }
       if (!bootPickDone && !S.position && S.config.symbol === 'XBTUSDTM' &&
           S.radar && Array.isArray(S.radar.list) && S.radar.list.length) {
-        const pick = S.radar.list[Math.min(SLOT - 1, S.radar.list.length - 1)];
+        // ─── دراسة الإقلاع (أمر المالك: لا اختيار عشوائي): لا دخول إلا لعملة
+        // درجتها 75+ وسيولتها اليومية قوية، وإقلاع متدرج 15ث لكل محرك ───
+        const bootStarted=(S as any)._bootAt||((S as any)._bootAt=Date.now());
+        if(Date.now()-bootStarted < (SLOT-1)*15000) return;
+        const qual=S.radar.list.filter((x:any)=>x&&x.symbol&&x.symbol!=='XBTUSDTM'&&
+          (Number(x.score)||0)>=75&&(Number(x.vol24h)||Number(x.turnover)||Number(x.volume)||1e18)>=3e6);
+        const pick = qual[Math.min(SLOT - 1, Math.max(0, qual.length - 1))] ||
+          S.radar.list[Math.min(SLOT - 1, S.radar.list.length - 1)];
         if (pick && pick.symbol && pick.symbol !== 'XBTUSDTM') {
           bootPickDone = true;
           pushLog('server', '🎯 تعيين الإقلاع: المحرك ' + SLOT + ' يبدأ على ' + pick.disp + ' (المرتبة ' + SLOT + ' في الرادار)');
