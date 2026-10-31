@@ -1077,6 +1077,30 @@ async function exAllPositions(){
   const arr=Array.isArray(raw)?raw:((raw&&(raw as any).data)||[]);
   return (arr||[]).filter((x:any)=>Math.abs(Number(x.currentQty)||0)>1e-12);
 }
+// حساب سعر جني رابح دقيق من بيانات المنصة الحقيقية: دولار لكل وحدة سعر
+// من الـPnL الفعلي والمسافة الفعلية — بديل المضاعف المحلي الذي أعطى
+// أجيالاً فاسدة (ADA جني 0.40 لدخول 0.195!) ورفض السعر من المنصة
+async function profitTpPrice(sym:any,entry:any,qty:any,side:any,x:any){
+  const tpU=Math.max(0.5,Number(S.config.tpUsd)||1);
+  const mark=Number(x&&x.markPrice)||0, pnlNow=Number(x&&x.unrealisedPnl)||0;
+  let perPx=0; // دولار لكل وحدة سعر واحدة
+  if(mark>0&&Math.abs(mark-entry)>1e-12&&Math.abs(pnlNow)>1e-9) perPx=Math.abs(pnlNow)/Math.abs(mark-entry);
+  let tick=0;
+  try{ const ct=await fetchContract(sym); tick=Number(ct&&(ct as any).tickSize)||0;
+    const m2=Number(ct&&(ct as any).multiplier)||0; if(!(perPx>0)&&m2>0) perPx=qty*m2; }catch{}
+  if(!(perPx>0)) perPx=qty*(S.multiplier||1);
+  if(!(tick>0)) tick=S.tickSize||1e-10;
+  if(!(perPx>0)||!(entry>0)) return {price:0,why:'بيانات غير كافية'};
+  const dPx=(tpU*1.3)/perPx; // الهدف + هامش رسوم 30%
+  if(!(dPx>0)) return {price:0,why:'مسافة صفرية'};
+  if(dPx>entry*0.25) return {price:0,why:'مسافة '+(dPx/entry*100).toFixed(0)+'% غير منطقية — مرفوضة'};
+  const raw=side==='long'?entry+dPx:entry-dPx;
+  const price=roundTick(raw,tick);
+  if(!(price>0)) return {price:0,why:'سعر غير صالح'};
+  if(side==='long'&&!(price>entry)) return {price:0,why:'السعر لا يسبق الدخول'};
+  if(side==='short'&&!(price<entry)) return {price:0,why:'السعر لا يسبق الدخول'};
+  return {price,why:''};
+}
 /* ─── إصلاح الحساب الشامل (أمر المالك الصريح): يمسح كل مراكز الحساب، يلغي
    كل الأوامر والستوبات، يثبت لكل مركز هدف جني رابحاً واحداً، ويعيد تقريراً
    كاملاً يُعرض في التطبيق — المنصة هي المرجع الوحيد ─── */
@@ -1098,11 +1122,9 @@ export async function repairAccount(){
       const pnl=Number((x as any).unrealisedPnl)||0;
       let tp=0;
       try{
-        if(entry>0&&absQ>0){ const tpU=Math.max(0.5,Number(S.config.tpUsd)||1);
-          const dPx=tpU/absQ/mult*1.25;
-          const price=roundTick(side==='long'?entry+dPx:entry-dPx,S.tickSize||1e-8);
-          await exPlaceLimit({symbol:sym,side:side==='long'?'sell':'buy',price,qty:absQ,reduceOnly:true,clientOid:uid('rep')});
-          tp=price; } }catch(e:any){ pushLog('warn','هدف جني '+sym+' فشل: '+String(e?.message||e)); }
+        if(entry>0&&absQ>0){ const rr=await profitTpPrice(sym,entry,absQ,side,x);
+          if(rr.price>0){ await exPlaceLimit({symbol:sym,side:side==='long'?'sell':'buy',price:rr.price,qty:absQ,reduceOnly:true,clientOid:uid('rep')});
+            tp=rr.price; } else pushLog('warn','هدف جني '+sym+' مرفوض: '+rr.why); } }catch(e:any){ pushLog('warn','هدف جني '+sym+' فشل: '+String(e?.message||e)); }
       report.push({symbol:sym,side,size:absQ,entry:Number(entry.toFixed(8)),pnl:Number(pnl.toFixed(2)),tp:Number(tp)||null});
     }
     const msg='🔧 إصلاح الحساب: '+list.length+' مركزاً حياً'+(list.length?(' ('+list.map((x:any)=>String(x.symbol).replace('USDTM','')).join(' · ')+')'):'')+' — أُلغيت '+cancelled+' أمراً و'+stops+' ستوب — لكل مركز هدف جني رابح'+(list.length?' — لا خسارة ولا دخول جديد حتى تُجنى كلها':'');
@@ -1127,14 +1149,10 @@ async function orphanSweep(){
         for(const o of (os0||[])){ if(!(o as any).reduceOnly) { try{ await exCancelOne((o as any).orderId); }catch{} } } }catch{}
       // 3) هل يوجد أمر جني حي؟ لا تكرر الإرسال
       try{ const os=await exOrders(sym); if(os&&os.some((o:any)=>o.reduceOnly&&(o.size-o.filledSize)>1e-12)) continue; }catch{}
-      // هدف جني رابح: tpUsd المحدد + رسوم، وتحويله لمسافة سعرية بحسب الحجم
-      const mult=Number(x.multiplier)||1;
-      const qMax=Number(x.maxOrderQty)||0; void qMax;
-      const notional=Math.max(1e-9,absQ*mult*entry);
-      const tpU=Math.max(0.5,Number(S.config.tpUsd)||1);
-      const dPx=tpU/absQ/mult*1.25; // صافي الهدف + هامش رسوم 25%
-      const price=roundTick(side==='long'?entry+dPx:entry-dPx,S.tickSize||1e-8);
-      if(!(price>0)) continue;
+      // هدف جني رابح من بيانات المنصة الحقيقية (PnL الفعلي/مواصفات العقد)
+      const rr=await profitTpPrice(sym,entry,absQ,side,x);
+      if(!(rr.price>0)) continue;
+      const price=rr.price;
       try{
         await exPlaceLimit({symbol:sym,side:side==='long'?'sell':'buy',price,qty:absQ,reduceOnly:true,clientOid:uid('orph')});
         pushLog('server','🔒 صفقة معلقة سابقة ('+sym+' '+side+' '+absQ+') — ثُبّت لها هدف جني رابح @ '+price+' — لا إغلاق بخسارة');
@@ -1478,11 +1496,14 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
   const volF=wide?1:Math.max(1,Math.min(3,vol*10));
   // التباعد المنطقي (أمر المالك 31 أكتوبر): في الوضع الحقيقي الخطوة ×1.8
   // (0.3% → 0.54% بين كل أمر) — كانت 0.3% ملاصقة فيفتح 4 أوامر شبه متطابقة
-  const liveWide=(S.config.mode==='live'&&S.keys)?1.8:1;
+  const liveWide=(S.config.mode==='live'&&S.keys)?2.2:1; // 0.3% → 0.66% بين كل أمر (أمر المالك: تباعد منطقي واضح)
   const step=c.gridStepPct/100*(wide?4:memStepMult()*(S.regime?S.regime.stepMult:1)*volF)*liveWide;
   const stepPct=wide?Math.max(0.12,c.gridStepPct)*4:addStepPct();
   const n=effLevels(); // تركيز يناسب رأس المال — لا تفتيت على 25 مستوى تافهًا
   const qtys=levelQtys(center,n);
+  // أحجام متساوية للدفعة الأولى (أمر المالك: «حجم الأوامر المختلف» عيب) —
+  // الأربعة الأولى بنفس حجم المستوى الأول، التصاعد يبدأ بعدها فقط
+  if(initialCount&&initialCount>1){ for(let i=0;i<Math.min(initialCount,qtys.length);i++) qtys[i]=qtys[0]; }
   const filledN=filledAdds(); // عدد الأوامر الفعلية المملوءة (وليس صفوف الدفتر المدمجة) — حجم المستوى التالي يتبع ترتيبه الحقيقي
   const entry=S.position?S.position.entry:center;
   // السلم يمتد للخارج فقط: لا تسليح أبدًا داخل منطقة سبق الدخول فيها —

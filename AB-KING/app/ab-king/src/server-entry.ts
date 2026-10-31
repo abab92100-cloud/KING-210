@@ -11,7 +11,7 @@ import {
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
 } from './engine';
 
-const SRV_VER = 'KING-1.8.7';
+const SRV_VER = 'KING-1.8.8';
 const FLEET_N = 1;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
