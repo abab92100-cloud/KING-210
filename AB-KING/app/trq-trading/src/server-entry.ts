@@ -11,7 +11,7 @@ import {
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
 } from './engine';
 
-const SRV_VER = 'TRQ-TRADING-1.7.1';
+const SRV_VER = 'TRQ-TRADING-1.7.2';
 const FLEET_N = 5;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;

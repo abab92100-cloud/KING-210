@@ -255,6 +255,7 @@ export const S: any = {
   status:'idle', heartbeat:0, lastPrice:null, markPrice:null,
   // قاعدة المالك: تجميد الدخول عند وجود مراكز منصة غير مغلقة + حد أوامر الدورة
   _exOpenCount:0, _noNewEntries:false, _cycleMaxFills:4, _nextCycleMax:0,
+  exPositions:[] as any[], _flatStrikes:0, _flatConfirmed:false,
   multiplier:1, tickSize:0.1, makerFee:0.0002, takerFee:0.0006, funding:0,
   _metaSym:null, maxOrderQty:0, exAvail:null, exLeverage:null, // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
   grid:[], position:null, journal:[], logs:[],
@@ -1470,7 +1471,10 @@ function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.config,tic
   // خطوة متكيفة مع التقلب اللحظي: الحركات المفاجئة توسّع المناطق تلقائيًا
   const vol=retStdev()||0.05;
   const volF=wide?1:Math.max(1,Math.min(3,vol*10));
-  const step=c.gridStepPct/100*(wide?4:memStepMult()*(S.regime?S.regime.stepMult:1)*volF);
+  // التباعد المنطقي (أمر المالك 31 أكتوبر): في الوضع الحقيقي الخطوة ×1.8
+  // (0.3% → 0.54% بين كل أمر) — كانت 0.3% ملاصقة فيفتح 4 أوامر شبه متطابقة
+  const liveWide=(S.config.mode==='live'&&S.keys)?1.8:1;
+  const step=c.gridStepPct/100*(wide?4:memStepMult()*(S.regime?S.regime.stepMult:1)*volF)*liveWide;
   const stepPct=wide?Math.max(0.12,c.gridStepPct)*4:addStepPct();
   const n=effLevels(); // تركيز يناسب رأس المال — لا تفتيت على 25 مستوى تافهًا
   const qtys=levelQtys(center,n);
@@ -2923,6 +2927,12 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
   const sym=S.config.symbol;
   try{
     const pos=await exPosition(sym);
+    // ─── قراءة ناجحة عادت «لا مركز»: لا تصدّقها من أول مرة (كانت قراءة واحدة
+    // وسط 429 تمسح المركز وتتركه حياً على المنصة ثم تبدّل العملة — مصدر 6 و8
+    // و9 مراكز). التسجيل: 3 قراءات فارغة متتالية (التباعد 4 ثوانٍ بينها) ───
+    if(pos){ S._flatStrikes=0; S._flatConfirmed=false; }
+    else { S._flatStrikes=(S._flatStrikes||0)+1;
+      if(S._flatStrikes>=3) S._flatConfirmed=true; }
     const inGrace=S.ignoreExchangeUntil&&Date.now()<S.ignoreExchangeUntil;
     if(pos){
       if(inGrace&&!S.position){ /* ignore stale center during grace window */ }
@@ -2936,7 +2946,7 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
           if(openRow){ const oldFees=openRow.fees||0; openRow.entry=pos.entry;
             if(openRow.qty>0&&S.position.size!==prevSize){ openRow.qty=S.position.size; openRow.fees=oldFees; } }
           if(S.activeCycle) S.activeCycle.entry=pos.entry; } } }
-    else if(S.position&&Date.now()>S.ignoreExchangeUntil){
+    else if(S.position&&Date.now()>S.ignoreExchangeUntil&&S._flatConfirmed){
       // ─── درس SHIB: المركز وُجد على المنصة سابقاً والآن لا مركز — أُغلق بلا
       // علم المحرك (وقف منصّي/يدوي/تصفية) وكان يُمسح بصمت فلا يظهر في السجل.
       // الآن: يُغلق صف السجل بالقيمة الفعلية التقريبية ويُسجل بتنبيه واضح ───
@@ -2988,6 +2998,13 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
         const allowed=(typeof FLEET_MODE==='function'&&FLEET_MODE())?5:1;
         const was=!!S._noNewEntries;
         S._exOpenCount=n; S._noNewEntries=n>allowed;
+        // قائمة المراكز الحقيقية كما تراها المنصة — تظهر في التطبيق كمرجع حقيقي
+        S.exPositions=list.filter((x:any)=>Math.abs(Number(x.currentQty)||0)>1e-12).map((x:any)=>({
+          symbol:String(x.symbol), side:(Number(x.currentQty)||0)>0?'long':'short',
+          size:Math.abs(Number(x.currentQty)||0), entry:Number(x.avgEntryPrice)||0,
+          pnl:Math.round((Number((x as any).unrealisedPnl)||0)*100)/100 }));
+        if(!S._exListLogAt||Date.now()-S._exListLogAt>300000){ S._exListLogAt=Date.now();
+          if(n>0) pushLog('server','📋 مراكز المنصة الحقيقية ('+n+'): '+S.exPositions.map((p:any)=>p.symbol.replace('USDTM','')).join(' · ')); }
         if(S._noNewEntries&&!was){ pushLog('server','⛔ تجميد الدخول: '+n+' مركزاً حياً في المنصة (المسموح '+allowed+') — لا صفقات جديدة ولا تبديل حتى تُغلق الزائدة بربح'); }
         if(!S._noNewEntries&&was){ pushLog('server','✅ رُفع التجميد: المراكز عادت للحد الطبيعي — العودة للعمل'); }
         // مطابقة الدفاتر: حقوق المنصة هي المرجع الحقيقي
@@ -3337,10 +3354,10 @@ export function saveCfg(v){
     // ─── قاعدة المالك (مصدر المراكز الثمانية): لا انتقال بين العملات والمركز
     // مفتوح. كان الانتقال يطلق إغلاقاً بلا انتظار تأكيد → فشل الإغلاق (429/هامش)
     // يترك مركزاً حقيقياً يتيماً على المنصة. الآن: التبديل مرفوض حتى تُجنى ───
-    if(S.config.mode==='live'&&S.keys&&(S.position||S._exOpenCount>0)){
+    if(S.config.mode==='live'&&S.keys&&(S.position||S._exOpenCount>0||!S._flatConfirmed)){
       S.config.symbol=old;
       S.config.displaySymbol=old.replace(/USDTM$/i,'').replace(/^XBT$/i,'BTC');
-      pushLog('server','⛔ لا تبديل إلى '+sym+' والمركز الحالي مفتوح — الصمود حتى الجني الكامل ثم يُسمح بالانتقال');
+      pushLog('server','⛔ لا تبديل إلى '+sym+' — '+(S.position?'والمركز الحالي مفتوح':(!S._flatConfirmed?'بلا تأكيد صفرية من المنصة بعد':'مراكز أخرى حية'))+' — الصمود حتى تتأكد المنصة ثم يُسمح بالانتقال');
       return; }
     // الوضع الحقيقي: ألغِ أوامر الزوج السابق وأوقفه وأغلق مركزه قبل الانتقال — لا أوامر يتيمة بلا رقيب
     if(S.config.mode==='live'&&S.keys){ exCancelAll(old).catch(()=>{});
