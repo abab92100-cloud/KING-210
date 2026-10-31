@@ -366,6 +366,7 @@ __export(engine_exports, {
   batchHoldActive: () => batchHoldActive,
   bgRadarTick: () => bgRadarTick,
   botTick: () => botTick,
+  buildGrid: () => buildGrid,
   clearKeys: () => clearKeys,
   contractsForLevel: () => contractsForLevel,
   desk: () => desk,
@@ -2404,7 +2405,7 @@ function buildGrid(center, wide, initialCount) {
   const c = S.config, tick = S.tickSize || 1e-10;
   const vol = retStdev() || 0.05;
   const volF = wide ? 1 : Math.max(1, Math.min(3, vol * 10));
-  const liveWide = S.config.mode === "live" && S.keys ? 2.2 : 1;
+  const liveWide = 1;
   const step = c.gridStepPct / 100 * (wide ? 4 : memStepMult() * (S.regime ? S.regime.stepMult : 1) * volF) * liveWide;
   const stepPct = wide ? Math.max(0.12, c.gridStepPct) * 4 : addStepPct();
   const n = effLevels();
@@ -2430,11 +2431,20 @@ function buildGrid(center, wide, initialCount) {
   }
   const reach = Math.max(spanMin, Math.min(step * n * 2, 0.12));
   if (span > reach) span = reach;
+  const pctA = Math.max(0.12, Math.min(0.3, (S.config.gridStepPct || 0.3) * 0.5)) / 100;
+  const pctB = 0.22 / 100, pctC = 0.66 / 100;
+  const ownerLadderDist = (idx) => {
+    let d = 0;
+    for (let j = 1; j <= idx; j++) {
+      d += j <= 4 ? pctA : j <= 8 ? pctB : pctC;
+    }
+    return d;
+  };
   let prevDist = 0;
   for (let i = 1; i <= n; i++) {
-    let dist = wide ? Math.min(step * i, 0.05) : span * Math.pow(i / n, 1.5);
+    let dist = wide ? Math.min(step * i, 0.05) : ownerLadderDist(i);
     if (!wide) {
-      const minGap = Math.max(step * (S.config.hfMode ? 0.3 : 1), stepPct / 100 * (S.config.hfMode ? 0.3 : 1));
+      const minGap = Math.min(pctA * 0.5, step * 0.4);
       if (i === 1) dist = Math.max(dist, minGap);
       else dist = Math.max(dist, prevDist + minGap);
     }
@@ -2446,8 +2456,8 @@ function buildGrid(center, wide, initialCount) {
       if (c.direction === "short" && price >= liq * 0.985) continue;
       if (c.direction === "long" && price <= liq * 1.015) continue;
     }
-    if (grid.some((g) => tooClose(g.price, price, stepPct))) continue;
-    if (c.direction === "short" && price <= center * (1 + step * 0.4)) continue;
+    if (grid.some((g) => Math.abs(g.price - price) / price < 6e-4)) continue;
+    if (c.direction === "short" && price <= center * (1 + pctA * 0.6)) continue;
     if (c.direction === "long" && price >= center * (1 - step * 0.4)) continue;
     const qi = Math.min(filledN + i - 1, qtys.length - 1);
     const qty = qtys.length ? qtys[Math.max(0, qi)] : contractsForLevel(center);
