@@ -1819,14 +1819,18 @@ async function ensureLiveMeta(symbol2) {
     throw new Error("\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0639\u0642\u062F \u063A\u064A\u0631 \u062C\u0627\u0647\u0632\u0629 \u2014 \u0623\u064F\u062C\u0651\u0644 \u0627\u0644\u0623\u0645\u0631 \u0644\u062D\u064A\u0646 \u062A\u0648\u062B\u064A\u0642 \u0627\u0644\u0645\u0636\u0627\u0639\u0641");
   }
 }
+async function exAllPositions() {
+  const raw = await kcPrivate("GET", "/api/v1/positions");
+  const arr = Array.isArray(raw) ? raw : raw && raw.data || [];
+  return (arr || []).filter((x) => Math.abs(Number(x.currentQty) || 0) > 1e-12);
+}
 async function repairAccount() {
   if (S.config.mode !== "live" || !S.keys) return { ok: false, error: "\u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0641\u0642\u0637" };
   pushLog("server", "\u{1F527} \u0628\u062F\u0621 \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0627\u0644\u0634\u0627\u0645\u0644 \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639...");
   const report = [];
   let cancelled = 0, stops = 0;
   try {
-    const resp = await kcPrivate("GET", "/api/v1/positions");
-    const list = (resp && resp.data || []).filter((x) => Math.abs(Number(x.currentQty) || 0) > 1e-12);
+    const list = await exAllPositions();
     for (const x of list) {
       const sym = String(x.symbol);
       try {
@@ -1865,7 +1869,7 @@ async function repairAccount() {
       }
       report.push({ symbol: sym, side, size: absQ, entry: Number(entry.toFixed(8)), pnl: Number(pnl.toFixed(2)), tp: Number(tp) || null });
     }
-    const msg = "\u{1F527} \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628: " + list.length + " \u0645\u0631\u0643\u0632\u0627\u064B \u062D\u064A\u0627\u064B \u2014 \u0623\u064F\u0644\u063A\u064A\u062A " + cancelled + " \u0623\u0645\u0631\u0627\u064B \u0648" + stops + " \u0633\u062A\u0648\u0628 \u2014 \u0644\u0643\u0644 \u0645\u0631\u0643\u0632 \u0647\u062F\u0641 \u062C\u0646\u064A \u0631\u0627\u0628\u062D" + (list.length ? " \u2014 \u0644\u0627 \u062E\u0633\u0627\u0631\u0629 \u0648\u0644\u0627 \u062F\u062E\u0648\u0644 \u062C\u062F\u064A\u062F \u062D\u062A\u0649 \u062A\u064F\u063A\u0646\u0649 \u0643\u0644\u0647\u0627" : "");
+    const msg = "\u{1F527} \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628: " + list.length + " \u0645\u0631\u0643\u0632\u0627\u064B \u062D\u064A\u0627\u064B" + (list.length ? " (" + list.map((x) => String(x.symbol).replace("USDTM", "")).join(" \xB7 ") + ")" : "") + " \u2014 \u0623\u064F\u0644\u063A\u064A\u062A " + cancelled + " \u0623\u0645\u0631\u0627\u064B \u0648" + stops + " \u0633\u062A\u0648\u0628 \u2014 \u0644\u0643\u0644 \u0645\u0631\u0643\u0632 \u0647\u062F\u0641 \u062C\u0646\u064A \u0631\u0627\u0628\u062D" + (list.length ? " \u2014 \u0644\u0627 \u062E\u0633\u0627\u0631\u0629 \u0648\u0644\u0627 \u062F\u062E\u0648\u0644 \u062C\u062F\u064A\u062F \u062D\u062A\u0649 \u062A\u064F\u062C\u0646\u0649 \u0643\u0644\u0647\u0627" : "");
     pushLog("server", msg);
     return { ok: true, positions: report, cancelledOrders: cancelled, cancelledStops: stops, message: msg };
   } catch (e) {
@@ -1876,8 +1880,7 @@ async function repairAccount() {
 async function orphanSweep() {
   if (S.config.mode !== "live" || !S.keys) return;
   try {
-    const resp = await kcPrivate("GET", "/api/v1/positions");
-    const list = resp && resp.data || [];
+    const list = await exAllPositions();
     const cur = S.config.symbol;
     for (const x of list) {
       const qty = Number(x.currentQty) || 0;
@@ -4385,9 +4388,8 @@ async function liveSync() {
     }
     if (!S._posCntAt || Date.now() - S._posCntAt > 1e4) {
       S._posCntAt = Date.now();
-      kcPrivate("GET", "/api/v1/positions").then((r) => {
-        const list = r && r.data || [];
-        const n = list.filter((x) => Math.abs(Number(x.currentQty) || 0) > 1e-12).length;
+      exAllPositions().then((list) => {
+        const n = list.length;
         const allowed = typeof FLEET_MODE === "function" && FLEET_MODE() ? 5 : 1;
         const was = !!S._noNewEntries;
         S._exOpenCount = n;
@@ -5512,7 +5514,7 @@ console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u
 init_engine();
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "KING-1.8.6";
+var SRV_VER = "KING-1.8.7";
 var FLEET_N = 1;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
@@ -5574,7 +5576,10 @@ if (SLOT > 0) {
         }
       }
       if (!bootPickDone && !S.position && S.config.symbol === "XBTUSDTM" && S.radar && Array.isArray(S.radar.list) && S.radar.list.length) {
-        const pick = S.radar.list[Math.min(SLOT - 1, S.radar.list.length - 1)];
+        const bootStarted = S._bootAt || (S._bootAt = Date.now());
+        if (Date.now() - bootStarted < (SLOT - 1) * 15e3) return;
+        const qual = S.radar.list.filter((x) => x && x.symbol && x.symbol !== "XBTUSDTM" && (Number(x.score) || 0) >= 75 && (Number(x.vol24h) || Number(x.turnover) || Number(x.volume) || 1e18) >= 3e6);
+        const pick = qual[Math.min(SLOT - 1, Math.max(0, qual.length - 1))] || S.radar.list[Math.min(SLOT - 1, S.radar.list.length - 1)];
         if (pick && pick.symbol && pick.symbol !== "XBTUSDTM") {
           bootPickDone = true;
           pushLog("server", "\u{1F3AF} \u062A\u0639\u064A\u064A\u0646 \u0627\u0644\u0625\u0642\u0644\u0627\u0639: \u0627\u0644\u0645\u062D\u0631\u0643 " + SLOT + " \u064A\u0628\u062F\u0623 \u0639\u0644\u0649 " + pick.disp + " (\u0627\u0644\u0645\u0631\u062A\u0628\u0629 " + SLOT + " \u0641\u064A \u0627\u0644\u0631\u0627\u062F\u0627\u0631)");
