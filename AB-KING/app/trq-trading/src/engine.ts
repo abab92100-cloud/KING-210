@@ -3366,20 +3366,24 @@ export async function stopBot(){ if(R()){ await remoteCmd('stop'); await remoteS
   pushLog('info','إيقاف — أُغلقت كل الصفقات عند السعر الحالي');
   toast('تم إيقاف البوت'); emit(); saveAll(); }
 export function newCycle(){ if(R()){ remoteCmd('newCycle').then(()=>remoteSync()); return; } // الرصيد يحمل الأرباح المجناة أصلًا (تُضاف لحظة الجني) — لا جمع مزدوج
+  // ─── حادثة 1 نوفمبر: زر «دورة» كان يغلق المركز بسعر السوق (خسارة -0.76 CRV)
+  // ويمسح سجل الصفقات بالكامل — أغلق هذا المسار نهائياً في الواقع الحقيقي:
+  // لا دورة جديدة والمركز مفتوح، ولا مسح للسجل أبداً (قاعدة المالك) ───
+  if(S.config.mode==='live'&&S.keys&&(S.position||!S._flatConfirmed)){
+    pushLog('server','⛔ لا دورة جديدة والمركز '+(S.position?'مفتوح':'غير مؤكد الإغلاق')+' — الصمود حتى الجني الكامل ثم الدورة الجديدة');
+    return; }
   const rolled=Math.max(0.01,Math.round(S.config.cycleBalance*100)/100);
   const keep=S.status==='running'||S.status==='paused';
   if(S.config.mode==='live'&&S.keys){ exCancelAll(S.config.symbol).catch(()=>{});
-    exCancelStops(S.config.symbol).catch(()=>{}); S._guardId=null;
-    // لا تيتيم لمراكز حقيقية: دورة جديدة بمركز مفتوح تُغلقه على المنصة أولًا
-    if(S.position) exCloseQty(S.config.symbol,S.position.side,S.position.size)
-      .catch(e=>pushLog('error','إغلاق مركز الدورة السابقة فشل: '+(e.message||e))); }
+    exCancelStops(S.config.symbol).catch(()=>{}); S._guardId=null; } // لا إغلاق مراكز هنا إطلاقاً
   // نافذة تجاهل 12 ثانية: لا تستعد المركز المغلق للتو كـ«شبح» قبل أن تسوّيه المنصة
   S.ignoreExchangeUntil=Date.now()+12000;
   // قبل المسح: تُحسب حصيلة الدورة الجديدة
   const cfg={...S.config,cycleBalance:rolled};
   const keys=S.keys, snd=S.sound, tone=S.soundTone;
   // مسح كامل: سجل الصفقات + الأرشيف + سجل السيرفر — بداية نظيفة كل دورة
-  Object.assign(S,{grid:[],position:null,journal:[],history:[],logs:[],realizedPnl:0,feesPaid:0,
+  const keepJournal=(S.config.mode==='live')?(S.journal||[]):[]; // سجل الصفقات لا يُمحى في الحقيقي
+  Object.assign(S,{grid:[],position:null,journal:keepJournal,history:[],logs:[],realizedPnl:0,feesPaid:0,
     activeCycle:null,huntCount:0,huntOpen:0,priceTrail:[],emaFast:null,emaSlow:null,
     cvd:0,tape:[],orderBook:{bids:[],asks:[]},status:'idle',startedAt:null,
     huntAnchor:null,gridAnchor:null,liqPrice:null,exLiqPrice:null,_memBlockAt:0,
