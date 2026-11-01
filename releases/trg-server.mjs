@@ -1851,6 +1851,32 @@ async function profitTpPrice(sym, entry, qty, side, x) {
   if (side === "short" && !(price < entry)) return { price: 0, why: "\u0627\u0644\u0633\u0639\u0631 \u0644\u0627 \u064A\u0633\u0628\u0642 \u0627\u0644\u062F\u062E\u0648\u0644" };
   return { price, why: "" };
 }
+async function alignHarvestWithExchange(sym, since) {
+  if (S.config.mode !== "live" || !S.keys) return;
+  try {
+    const r = await kcPrivate("GET", "/api/v1/history-positions?symbol=" + encodeURIComponent(sym));
+    const arr = Array.isArray(r) ? r : r && r.data || [];
+    if (!arr.length) return;
+    const sorted = arr.slice().sort((a, b) => (Number(b.closeTime) || 0) - (Number(a.closeTime) || 0));
+    const last = sorted[0];
+    const ct = Number(last.closeTime) || 0;
+    if (ct && ct < since - 3e5) return;
+    const real = Number(last.withdrawPnl ?? last.realisedPnl ?? last.realizedPnl);
+    if (!isFinite(real)) return;
+    const rows = (S.journal || []).filter((j) => j.status === "closed" && (j.closedAt || 0) >= since - 12e4);
+    if (!rows.length) return;
+    const est = rows.reduce((a, j) => a + (Number(j.pnl) || 0), 0);
+    const diff = real - est;
+    if (Math.abs(diff) < 5e-3) return;
+    rows[0].pnl = Math.round(((Number(rows[0].pnl) || 0) + diff) * 100) / 100;
+    rows[0].exReal = Math.round(real * 100) / 100;
+    S.realizedPnl = Math.round(((S.realizedPnl || 0) + diff) * 100) / 100;
+    S.config.cycleBalance = Math.max(1, Math.round(((S.config.cycleBalance || 0) + diff) * 100) / 100);
+    pushLog("server", "\u{1F4B5} \u062C\u0646\u064A \u0627\u0644\u0645\u0646\u0635\u0629 \u0627\u0644\u0641\u0639\u0644\u064A " + fmtUsd(real) + " (\u0628\u0639\u062F \u0627\u0644\u0631\u0633\u0648\u0645 \u0627\u0644\u062D\u0642\u064A\u0642\u064A\u0629) \u2014 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0643\u0627\u0646 \u064A\u0642\u062F\u0651\u0631 " + fmtUsd(est) + " \u2014 \u0635\u064F\u062D\u0651\u062D\u062A \u0627\u0644\u062F\u0641\u0627\u062A\u0631 \u0644\u064A\u0637\u0627\u0628\u0642\u0627 \u062D\u0631\u0641\u064A\u0627\u064B");
+  } catch (e) {
+    logSwallow("alignHarvest", e);
+  }
+}
 async function repairAccount() {
   if (S.config.mode !== "live" || !S.keys) return { ok: false, error: "\u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0641\u0642\u0637" };
   pushLog("server", "\u{1F527} \u0628\u062F\u0621 \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0627\u0644\u0634\u0627\u0645\u0644 \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639...");
@@ -4448,7 +4474,8 @@ async function liveSync() {
         try {
           if (S.exEquity > 0 && (!S._recAt || Date.now() - S._recAt > 6e5)) {
             S._recAt = Date.now();
-            const books = (S.config.cycleBalance || 0) + (S.realizedPnl || 0) - (S.feesPaid || 0);
+            const fN = typeof FLEET_MODE === "function" && FLEET_MODE() ? 5 : 1;
+            const books = fN * ((S.config.cycleBalance || 0) + (S.realizedPnl || 0) - (S.feesPaid || 0));
             const gap = S.exEquity - books;
             if (Math.abs(gap) > Math.max(3, Math.abs(books) * 0.05))
               pushLog("warn", "\u26A0\uFE0F \u0645\u0637\u0627\u0628\u0642\u0629 \u0627\u0644\u062D\u0633\u0627\u0628: \u062D\u0642\u0648\u0642 \u0627\u0644\u0645\u0646\u0635\u0629 " + fmtUsd(S.exEquity) + " \u0645\u0642\u0627\u0628\u0644 \u062F\u0641\u0627\u062A\u0631 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 " + fmtUsd(books) + " (\u0641\u0627\u0631\u0642 " + fmtUsd(gap) + ") \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639 \u0648\u0627\u0644\u062C\u0646\u064A \u064A\u064F\u062D\u062A\u0633\u0628 \u062A\u0646\u0641\u064A\u0630\u0627\u064B \u0645\u0646\u0635\u064A\u0627\u064B \u0641\u0642\u0637");
@@ -4541,6 +4568,8 @@ async function liveSync() {
             const tb = S._tpBanked;
             _harvestCleanup(l.price);
             pushLog("server", "\u062C\u0646\u064A \u0645\u0643\u062A\u0645\u0644 \u2713 \u2014 \u0646\u064F\u0641\u0651\u0630 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u0628\u0627\u0644\u0643\u0627\u0645\u0644\u060C \u0635\u0627\u0641\u064A \u0627\u0644\u062F\u0648\u0631\u0629 " + fmtUsd(tb));
+            alignHarvestWithExchange(sym, Date.now()).catch(() => {
+            });
             if (S.status === "running") maybeSwitchSymbol().catch(() => {
             });
           }
@@ -4570,6 +4599,8 @@ async function liveSync() {
           const tb = S._tpBanked;
           _harvestCleanup(l.price);
           pushLog("server", "\u062C\u0646\u064A \u0645\u0643\u062A\u0645\u0644 \u2713 \u2014 \u0646\u064F\u0641\u0651\u0630 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u0628\u0627\u0644\u0643\u0627\u0645\u0644\u060C \u0635\u0627\u0641\u064A \u0627\u0644\u062F\u0648\u0631\u0629 " + fmtUsd(tb));
+          alignHarvestWithExchange(sym, Date.now()).catch(() => {
+          });
         }
       }
     }
