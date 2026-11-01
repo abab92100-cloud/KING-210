@@ -4988,6 +4988,10 @@ function newCycle() {
     remoteCmd("newCycle").then(() => remoteSync());
     return;
   }
+  if (S.config.mode === "live" && S.keys && (S.position || !S._flatConfirmed)) {
+    pushLog("server", "\u26D4 \u0644\u0627 \u062F\u0648\u0631\u0629 \u062C\u062F\u064A\u062F\u0629 \u0648\u0627\u0644\u0645\u0631\u0643\u0632 " + (S.position ? "\u0645\u0641\u062A\u0648\u062D" : "\u063A\u064A\u0631 \u0645\u0624\u0643\u062F \u0627\u0644\u0625\u063A\u0644\u0627\u0642") + " \u2014 \u0627\u0644\u0635\u0645\u0648\u062F \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A \u0627\u0644\u0643\u0627\u0645\u0644 \u062B\u0645 \u0627\u0644\u062F\u0648\u0631\u0629 \u0627\u0644\u062C\u062F\u064A\u062F\u0629");
+    return;
+  }
   const rolled = Math.max(0.01, Math.round(S.config.cycleBalance * 100) / 100);
   const keep = S.status === "running" || S.status === "paused";
   if (S.config.mode === "live" && S.keys) {
@@ -4996,15 +5000,15 @@ function newCycle() {
     exCancelStops(S.config.symbol).catch(() => {
     });
     S._guardId = null;
-    if (S.position) exCloseQty(S.config.symbol, S.position.side, S.position.size).catch((e) => pushLog("error", "\u0625\u063A\u0644\u0627\u0642 \u0645\u0631\u0643\u0632 \u0627\u0644\u062F\u0648\u0631\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629 \u0641\u0634\u0644: " + (e.message || e)));
   }
   S.ignoreExchangeUntil = Date.now() + 12e3;
   const cfg = { ...S.config, cycleBalance: rolled };
   const keys = S.keys, snd = S.sound, tone = S.soundTone;
+  const keepJournal = S.config.mode === "live" ? S.journal || [] : [];
   Object.assign(S, {
     grid: [],
     position: null,
-    journal: [],
+    journal: keepJournal,
     history: [],
     logs: [],
     realizedPnl: 0,
