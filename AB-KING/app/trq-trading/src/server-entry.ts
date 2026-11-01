@@ -11,7 +11,7 @@ import {
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
 } from './engine';
 
-const SRV_VER = 'TRQ-TRADING-1.7.4';
+const SRV_VER = 'TRQ-TRADING-1.7.5';
 const FLEET_N = 5;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
@@ -170,7 +170,7 @@ const srv = createServer(async (req, res) => {
         // نفسها (لا عملة العرض في الواجهة المدمجة) — إصلاح الأرقام الخيالية
         const lp=S.lastPrice||0, mult=S.multiplier||1, taker=S.takerFee||0.0006;
         // حمولة أنحف: آخر 30 صفقة و80 سجل سيرفر — يخفف حمل الجوال ويحمي نبض القنوات
-        const st: any={...S, journal:(S.journal||[]).slice(-30).map((r:any)=>{
+        const st: any={...S, journal:(S.journal||[]).slice(-120).map((r:any)=>{
           if(r.status!=='open') return r;
           const feeEst=lp? r.qty*mult*lp*taker:0;
           const f=lp? ((r.side==='short'?1:-1)*(r.entry-lp)*mult*r.qty-(r.fees||0)-feeEst):0;

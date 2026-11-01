@@ -1107,6 +1107,12 @@ async function profitTpPrice(sym:any,entry:any,qty:any,side:any,x:any){
    سجل مراكز المنصة ونصحح صف السجل والدفاتر به — تطابق حرفي ─── */
 async function alignHarvestWithExchange(sym:any,since:any){
   if(S.config.mode!=='live'||!S.keys) return;
+  // سجل المنصة يتأخر ثوانٍ عن الإغلاق — تحقق بعد 3 ث ثم 9 ث (لا مرة واحدة)
+  setTimeout(()=>{ alignHarvestCore(sym,since).catch(()=>{}); },3000);
+  setTimeout(()=>{ alignHarvestCore(sym,since).catch(()=>{}); },9000);
+}
+async function alignHarvestCore(sym:any,since:any){
+  if(S.config.mode!=='live'||!S.keys) return;
   try{
     const r=await kcPrivate('GET','/api/v1/history-positions?symbol='+encodeURIComponent(sym));
     const arr=Array.isArray(r)?r:((r&&(r as any).data)||[]);
@@ -1117,7 +1123,9 @@ async function alignHarvestWithExchange(sym:any,since:any){
     if(ct&&ct<since-300000) return; // ليست صفقتنا (قديمة)
     const real=Number((last as any).withdrawPnl ?? (last as any).realisedPnl ?? (last as any).realizedPnl);
     if(!isFinite(real)) return;
-    const rows=(S.journal||[]).filter((j:any)=>j.status==='closed'&&(j.closedAt||0)>=since-120000);
+    const rows=(S.journal||[]).filter((j:any)=>j.status==='closed'&&(j.closedAt||0)>=since-180000
+      && (!j.exReal) && (!j.symbol||String(j.symbol).replace('USDTM','')===sym.replace('USDTM','')
+        || String(j.symbol)===sym));
     if(!rows.length) return;
     const est=rows.reduce((a:number,j:any)=>a+(Number(j.pnl)||0),0);
     const diff=real-est;
@@ -2840,6 +2848,8 @@ export async function flattenAt(p:any,source:any){ const pos=S.position;
       pushLog('error','⚠️ الإغلاق لم تُؤكده المنصة بعد 5 محاولات — المركز يبقى مُداراً (لا جني وهمي) — يُعاد تلقائياً');
       return; } }
   if(pos&&p>0){ const cs=pos.side==='short'?'buy':'sell';
+    // مواءمة ربح المنصة الفعلي لكل إغلاق حقيقي (الجني المبكر والطارئ أيضاً)
+    if(S.config.mode==='live'&&S.keys) alignHarvestWithExchange(S.config.symbol,Date.now());
     const fee=feeFor(pos.size*(S.multiplier||1)*p,true); S.feesPaid+=fee;
     const d=applyDelta(cs,pos.size,p);
     if(d.closedQty>0){ const of=S.journal.find(j=>j.status==='open')?.fees||0;
