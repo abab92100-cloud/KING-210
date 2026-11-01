@@ -1853,6 +1853,17 @@ async function profitTpPrice(sym, entry, qty, side, x) {
 }
 async function alignHarvestWithExchange(sym, since) {
   if (S.config.mode !== "live" || !S.keys) return;
+  setTimeout(() => {
+    alignHarvestCore(sym, since).catch(() => {
+    });
+  }, 3e3);
+  setTimeout(() => {
+    alignHarvestCore(sym, since).catch(() => {
+    });
+  }, 9e3);
+}
+async function alignHarvestCore(sym, since) {
+  if (S.config.mode !== "live" || !S.keys) return;
   try {
     const r = await kcPrivate("GET", "/api/v1/history-positions?symbol=" + encodeURIComponent(sym));
     const arr = Array.isArray(r) ? r : r && r.data || [];
@@ -1863,7 +1874,7 @@ async function alignHarvestWithExchange(sym, since) {
     if (ct && ct < since - 3e5) return;
     const real = Number(last.withdrawPnl ?? last.realisedPnl ?? last.realizedPnl);
     if (!isFinite(real)) return;
-    const rows = (S.journal || []).filter((j) => j.status === "closed" && (j.closedAt || 0) >= since - 12e4);
+    const rows = (S.journal || []).filter((j) => j.status === "closed" && (j.closedAt || 0) >= since - 18e4 && !j.exReal && (!j.symbol || String(j.symbol).replace("USDTM", "") === sym.replace("USDTM", "") || String(j.symbol) === sym));
     if (!rows.length) return;
     const est = rows.reduce((a, j) => a + (Number(j.pnl) || 0), 0);
     const diff = real - est;
@@ -4125,6 +4136,7 @@ async function flattenAt(p, source) {
   }
   if (pos && p > 0) {
     const cs = pos.side === "short" ? "buy" : "sell";
+    if (S.config.mode === "live" && S.keys) alignHarvestWithExchange(S.config.symbol, Date.now());
     const fee = feeFor(pos.size * (S.multiplier || 1) * p, true);
     S.feesPaid += fee;
     const d = applyDelta(cs, pos.size, p);
@@ -5735,7 +5747,7 @@ var srv = createServer(async (req, res) => {
         const lp = S.lastPrice || 0, mult = S.multiplier || 1, taker = S.takerFee || 6e-4;
         const st = {
           ...S,
-          journal: (S.journal || []).slice(-30).map((r) => {
+          journal: (S.journal || []).slice(-120).map((r) => {
             if (r.status !== "open") return r;
             const feeEst = lp ? r.qty * mult * lp * taker : 0;
             const f = lp ? (r.side === "short" ? 1 : -1) * (r.entry - lp) * mult * r.qty - (r.fees || 0) - feeEst : 0;
