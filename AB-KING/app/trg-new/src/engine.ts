@@ -1101,6 +1101,34 @@ async function profitTpPrice(sym:any,entry:any,qty:any,side:any,x:any){
   if(side==='short'&&!(price<entry)) return {price:0,why:'السعر لا يسبق الدخول'};
   return {price,why:''};
 }
+/* ─── مواءمة الجني مع المنصة (أمر المالك 1 نوفمبر): المنصة تخصم الرسوم
+   الفعلية عن كل أمر منفرد بينما التطبيق يقدّرها تقديراً — فيظهر +0.12 في
+   التطبيق و+0.09 في المنصة. الحل: بعد كل جني نقرأ الربح المحقق الفعلي من
+   سجل مراكز المنصة ونصحح صف السجل والدفاتر به — تطابق حرفي ─── */
+async function alignHarvestWithExchange(sym:any,since:any){
+  if(S.config.mode!=='live'||!S.keys) return;
+  try{
+    const r=await kcPrivate('GET','/api/v1/history-positions?symbol='+encodeURIComponent(sym));
+    const arr=Array.isArray(r)?r:((r&&(r as any).data)||[]);
+    if(!arr.length) return;
+    // آخر صفقة مغلقة على المنصة (الأحدث أولاً حسب وقت الإغلاق)
+    const sorted=arr.slice().sort((a:any,b:any)=>(Number(b.closeTime)||0)-(Number(a.closeTime)||0));
+    const last=sorted[0]; const ct=Number(last.closeTime)||0;
+    if(ct&&ct<since-300000) return; // ليست صفقتنا (قديمة)
+    const real=Number((last as any).withdrawPnl ?? (last as any).realisedPnl ?? (last as any).realizedPnl);
+    if(!isFinite(real)) return;
+    const rows=(S.journal||[]).filter((j:any)=>j.status==='closed'&&(j.closedAt||0)>=since-120000);
+    if(!rows.length) return;
+    const est=rows.reduce((a:number,j:any)=>a+(Number(j.pnl)||0),0);
+    const diff=real-est;
+    if(Math.abs(diff)<0.005) return; // مطابق أصلاً
+    rows[0].pnl=Math.round(((Number(rows[0].pnl)||0)+diff)*100)/100;
+    rows[0].exReal=Math.round(real*100)/100;
+    S.realizedPnl=Math.round(((S.realizedPnl||0)+diff)*100)/100;
+    S.config.cycleBalance=Math.max(1,Math.round(((S.config.cycleBalance||0)+diff)*100)/100);
+    pushLog('server','💵 جني المنصة الفعلي '+fmtUsd(real)+' (بعد الرسوم الحقيقية) — التطبيق كان يقدّر '+fmtUsd(est)+' — صُحّحت الدفاتر ليطابقا حرفياً');
+  }catch(e){ logSwallow('alignHarvest',e); } }
+
 /* ─── إصلاح الحساب الشامل (أمر المالك الصريح): يمسح كل مراكز الحساب، يلغي
    كل الأوامر والستوبات، يثبت لكل مركز هدف جني رابحاً واحداً، ويعيد تقريراً
    كاملاً يُعرض في التطبيق — المنصة هي المرجع الوحيد ─── */
@@ -3043,7 +3071,9 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
         if(!S._noNewEntries&&was){ pushLog('server','✅ رُفع التجميد: المراكز عادت للحد الطبيعي — العودة للعمل'); }
         // مطابقة الدفاتر: حقوق المنصة هي المرجع الحقيقي
         try{ if(S.exEquity>0&&(!S._recAt||Date.now()-S._recAt>600000)){ S._recAt=Date.now();
-          const books=(S.config.cycleBalance||0)+(S.realizedPnl||0)-(S.feesPaid||0);
+          // كل محرك يحمل نصيبه (÷5) — المقارنة مع حقوق الحساب الكلي تتطلب ×5
+          const fN=(typeof FLEET_MODE==='function'&&FLEET_MODE())?5:1;
+          const books=fN*((S.config.cycleBalance||0)+(S.realizedPnl||0)-(S.feesPaid||0));
           const gap=S.exEquity-books;
           if(Math.abs(gap)>Math.max(3,Math.abs(books)*0.05))
             pushLog('warn','⚠️ مطابقة الحساب: حقوق المنصة '+fmtUsd(S.exEquity)+' مقابل دفاتر التطبيق '+fmtUsd(books)+' (فارق '+fmtUsd(gap)+') — المنصة هي المرجع والجني يُحتسب تنفيذاً منصياً فقط'); } }catch{}
@@ -3095,6 +3125,7 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
           l.filledAt=Date.now(); l.filledPrice=l.price;
           if(l.reduceOnly&&!S.position){ const tb=S._tpBanked; _harvestCleanup(l.price);
             pushLog('server','جني مكتمل ✓ — نُفّذ على المنصة بالكامل، صافي الدورة '+fmtUsd(tb));
+            alignHarvestWithExchange(sym,Date.now()).catch(()=>{});
             if(S.status==='running') maybeSwitchSymbol().catch(()=>{}); } } }
       else if(l.status==='open'&&!shouldFill(l,S.lastPrice||0)){
         l.status='armed'; l.exchangeOrderId=null; l.exFilled=0; }
@@ -3109,7 +3140,8 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
         if(rem>0) done=creditExFill(l,rem,l._avgFillPx>0?l._avgFillPx:(l.price>0?l.price:S.lastPrice||0));
         if(l.status!=='filled'){ l.status='filled'; l.filledAt=Date.now(); l.filledPrice=l._avgFillPx>0?l._avgFillPx:l.price; }
         if(!done&&l.reduceOnly&&!S.position){ const tb=S._tpBanked; _harvestCleanup(l.price);
-          pushLog('server','جني مكتمل ✓ — نُفّذ على المنصة بالكامل، صافي الدورة '+fmtUsd(tb)); } } }
+          pushLog('server','جني مكتمل ✓ — نُفّذ على المنصة بالكامل، صافي الدورة '+fmtUsd(tb));
+          alignHarvestWithExchange(sym,Date.now()).catch(()=>{}); } } }
     // ─── تأكيد الجني: أي تنقية جرت الآن تُتحقق من المنصة — إن كان المركز ما
     // زال حياً (جني وهمي) يُعاد فوراً للإدارة ويُقفل عداده على 4 (درس تكرار
     // «جني 3 صفقات» والصفقات المتراكمة) ───
