@@ -1409,7 +1409,8 @@ async function postHarvestReselect() {
     S._nextReady = false;
     S._nextSymbol = null;
     if (!pick) {
-      pushLog("server", "\u{1F50E} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0644\u0627 \u0639\u0645\u0644\u0629 \u0645\u0624\u0647\u0644\u0629 (55+) \u0648\u0644\u0627 \u0628\u062F\u064A\u0644 \u062C\u062F\u064A\u062F \u063A\u064A\u0631 \u0645\u062A\u062F\u0627\u0648\u0644 \u0645\u0624\u062E\u0631\u0627\u064B \u2014 \u0627\u0633\u062A\u0626\u0646\u0627\u0641 \u0639\u0644\u0649 \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u062D\u0627\u0644\u064A\u0629");
+      S._waitFreshUntil = Date.now() + 30 * 6e4;
+      pushLog("server", "\u{1F50E} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0644\u0627 \u0628\u062F\u064A\u0644 \u062C\u062F\u064A\u062F \u0645\u0624\u0647\u0644 \u2014 \u0644\u0627 \u0625\u0639\u0627\u062F\u0629 \u062F\u062E\u0648\u0644 \u0644\u0646\u0641\u0633 \u0627\u0644\u0639\u0645\u0644\u0629 \u2014 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0645\u0631\u0634\u062D \u062C\u062F\u064A\u062F \u0645\u0646 \u0627\u0644\u062F\u0631\u0627\u0633\u0629 \u0627\u0644\u0634\u0627\u0645\u0644\u0629 (\u062D\u062A\u0649 30 \u062F\u0642\u064A\u0642\u0629)");
       return;
     }
     const curSc = cur ? cur.score || 0 : 0;
@@ -1420,6 +1421,7 @@ async function postHarvestReselect() {
     toast("\u{1F504} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: " + pick.disp + " \u2014 " + pick.score);
     nativeNotify("AB-KING \u2014 \u0627\u0646\u062A\u0642\u0627\u0644 \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A", pick.disp + " \u062F\u0631\u062C\u0629 " + pick.score);
     S.recentCoins[pick.symbol] = Date.now();
+    S._waitFreshUntil = 0;
     saveCfg({
       symbol: pick.symbol,
       leverage: S.config.leverage,
@@ -2531,6 +2533,7 @@ function armProgressive() {
   if (S.status !== "running") return;
   if (batchHoldActive()) return;
   if (S._noNewEntries) return;
+  if (S._waitFreshUntil && Date.now() < S._waitFreshUntil) return;
   if (exposureCapped()) {
     if (!S._expCapAt || Date.now() - S._expCapAt > 3e5) {
       S._expCapAt = Date.now();
@@ -3650,6 +3653,7 @@ function huntTrigger(p) {
   if (toxicBlocked(S.config.direction)) return null;
   if (batchHoldActive()) return null;
   if (S._noNewEntries) return null;
+  if (S._waitFreshUntil && Date.now() < S._waitFreshUntil) return null;
   if (S.position && exposureCapped()) return null;
   if (S.position && volBrakeActive()) {
     if (!S._brkVetoAt || Date.now() - S._brkVetoAt > 18e4) {
@@ -5727,7 +5731,11 @@ function mergedState(selIn = 0) {
   const idx = selIn >= 1 && selIn <= FLEET_N && slotStates[selIn] ? selIn : 0;
   const primary = idx ? slotStates[idx] : live.find((x) => x.position) || live[0];
   const st = { ...primary };
-  st.journal = live.flatMap((x, li) => (x.journal || []).map((r) => ({ ...r, _slot: li + 1 }))).sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 150);
+  st.journal = live.flatMap((x, li) => (x.journal || []).map((r) => ({
+    ...r,
+    _slot: li + 1,
+    at: Number(r.closedAt || r.openedAt || r.filledAt || (typeof r.at === "number" ? r.at : 0)) || 0
+  }))).sort((a, b) => b.at - a.at).slice(0, 200);
   st.logs = (primary.logs || []).slice(-150);
   st.realizedPnl = live.reduce((a, x) => a + (x.realizedPnl || 0), 0);
   st.feesPaid = live.reduce((a, x) => a + (x.feesPaid || 0), 0);
