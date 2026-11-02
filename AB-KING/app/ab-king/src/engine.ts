@@ -449,6 +449,7 @@ async function kcPublic(path,timeout){
 }
 async function kcPrivate(method:any,path:any,body?:any){
   if(!S.keys) throw new Error('لا مفاتيح — اربط KuCoin من الإعدادات');
+  if(S._rlUntil&&Date.now()<S._rlUntil) throw new Error('تهدئة حصة المنصة — يُعاد بعد قليل');
   const ts=String(Date.now());
   const raw=body?JSON.stringify(body):'';
   const signStr=ts+method+path+raw;
@@ -462,7 +463,10 @@ async function kcPrivate(method:any,path:any,body?:any){
       'KC-API-KEY-VERSION':'2'},
     body:raw||undefined});
   const j=await res.json().catch(()=>({code:'-1',msg:'bad json'}));
-  if(j.code!=='200000') throw new Error(j.msg||('KuCoin '+res.status));
+  if(j.code!=='200000'){
+    // رفض الحصة (429): تهدئة 15 ثانية لكل المحرك — الطرق المتكرر يفاقم الحظر
+    if(res.status===429||/too many|rate limit/i.test(String(j.msg||''))){ S._rlUntil=Date.now()+15000; }
+    throw new Error(j.msg||('KuCoin '+res.status)); }
   return j.data;
 }
 
@@ -559,8 +563,15 @@ export async function backgroundPipeline(){
       const curL=r.list.find((l:any)=>l.symbol===S.config.symbol);
       const curOk=curL&&Number(curL.score||0)>=68;
       if(!curOk){
-        const best=r.list.filter((l:any)=>l.symbol!==S.config.symbol&&Number(l.score||0)>=68
-          &&(Number(l.turnover)||0)>=3e6&&freshC(l))[0];
+        // ─── منع التصادم (حادثة 7 مراكز): كانت المحركات الخمسة تختار نفس
+        // «أفضل عملة» في اللحظة نفسها → مركز منصّة واحد بعدة محركات.
+        // الآن: تُستبعد عملات المحركات الأخرى (من /fleet)، ويأخذ كل محرك
+        // فرصته حسب رقمه — توزيع حتمي بلا تصادم ───
+        const taken=(S._fleetTaken||[]).map((x:any)=>String(x));
+        const SL=parseInt(String((process as any).env?.ABKING_SLOT||''),10)||1;
+        const qual=r.list.filter((l:any)=>l.symbol!==S.config.symbol&&Number(l.score||0)>=68
+          &&(Number(l.turnover)||0)>=3e6&&freshC(l)&&!taken.includes(String(l.symbol)));
+        const best=qual.length?qual[(SL-1)%qual.length]:null;
         if(best&&(!S._oppPickAt||Date.now()-S._oppPickAt>180000)){ S._oppPickAt=Date.now();
           pushLog('server','🎯 فرصة مؤهلة: '+best.disp+' (درجة '+best.score+' · سيولة '+
             Math.round((Number(best.turnover)||0)/1e6)+'M) — تُدرس ثم تُفتح الصفقة');
@@ -748,8 +759,15 @@ export async function postHarvestReselect(){
       const curL=r.list.find((l:any)=>l.symbol===S.config.symbol);
       const curOk=curL&&Number(curL.score||0)>=68;
       if(!curOk){
-        const best=r.list.filter((l:any)=>l.symbol!==S.config.symbol&&Number(l.score||0)>=68
-          &&(Number(l.turnover)||0)>=3e6&&freshC(l))[0];
+        // ─── منع التصادم (حادثة 7 مراكز): كانت المحركات الخمسة تختار نفس
+        // «أفضل عملة» في اللحظة نفسها → مركز منصّة واحد بعدة محركات.
+        // الآن: تُستبعد عملات المحركات الأخرى (من /fleet)، ويأخذ كل محرك
+        // فرصته حسب رقمه — توزيع حتمي بلا تصادم ───
+        const taken=(S._fleetTaken||[]).map((x:any)=>String(x));
+        const SL=parseInt(String((process as any).env?.ABKING_SLOT||''),10)||1;
+        const qual=r.list.filter((l:any)=>l.symbol!==S.config.symbol&&Number(l.score||0)>=68
+          &&(Number(l.turnover)||0)>=3e6&&freshC(l)&&!taken.includes(String(l.symbol)));
+        const best=qual.length?qual[(SL-1)%qual.length]:null;
         if(best&&(!S._oppPickAt||Date.now()-S._oppPickAt>180000)){ S._oppPickAt=Date.now();
           pushLog('server','🎯 فرصة مؤهلة: '+best.disp+' (درجة '+best.score+' · سيولة '+
             Math.round((Number(best.turnover)||0)/1e6)+'M) — تُدرس ثم تُفتح الصفقة');

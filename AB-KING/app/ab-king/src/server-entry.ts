@@ -11,7 +11,7 @@ import {
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
 } from './engine';
 
-const SRV_VER = 'KING-1.9.1';
+const SRV_VER = 'KING-1.9.2';
 const FLEET_N = 1;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
@@ -132,7 +132,16 @@ function mergedState(selIn = 0) {
   st.journal = live.flatMap((x, li) => (x.journal || []).map((r: any) => ({
       ...r, _slot: li + 1,
       at: Number(r.closedAt || r.openedAt || r.filledAt || (typeof r.at === 'number' ? r.at : 0)) || 0,
-    }))).sort((a, b) => b.at - a.at).slice(0, 200);
+    }))).sort((a, b) => b.at - a.at);
+  // إزالة تكرار الجني المرئي (حادثة «تكرار جني»): محركان أغلقا نفس المركز
+  // المنصّي سجّل كلٌ منهما صفاً — يُعرض صف واحد لكل إغلاق حقيقي
+  const seenKeys = new Set<string>();
+  st.journal = st.journal.filter((r: any) => {
+    if (r.status !== 'closed') return true;
+    const k = String(r.symbol || '') + '|' + String(r.side || '') + '|' + Math.round(Number(r.qty) || 0) + '|' + Math.floor((Number(r.closedAt) || Number(r.at) || 0) / 60000);
+    if (seenKeys.has(k)) return false;
+    seenKeys.add(k); return true;
+  }).slice(0, 200);
   // سجل السيرفر: تفاصيل المحرك المعروض فقط (العملة المختارة)
   st.logs = (primary.logs || []).slice(-150);
   st.realizedPnl = live.reduce((a, x) => a + (x.realizedPnl || 0), 0);
