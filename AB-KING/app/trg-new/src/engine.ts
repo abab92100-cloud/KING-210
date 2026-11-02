@@ -2130,9 +2130,9 @@ function fillLevel(id,fp,taker){ const l=S.grid.find(g=>g.id===id);
   // 6× نصيب المحرك فالقاطع فسد (تعدد محركات) → لا إضافة نهائياً ───
   if(!l.reduceOnly&&S.position&&S.multiplier>0){
     const __notional=(S.position.size||0)*S.multiplier*(S.position.entry||0);
-    if(__notional>(S.config.cycleBalance||0)*6){
+    if(__notional>(S.config.cycleBalance||0)*4.2){
       if(!S._exposureBlkAt||Date.now()-S._exposureBlkAt>120000){ S._exposureBlkAt=Date.now();
-        pushLog('server','🛑 سقف التعرض المنصّي: المركز '+fmtUsd(__notional)+' > 6× نصيب المحرك — أُوقفت الإضافات'); }
+        pushLog('server','🛑 سقف التعرض المنصّي: المركز '+fmtUsd(__notional)+' > 4.2× نصيب المحرك (أربعة أوامر كحد أقصى) — أُوقفت الإضافات'); }
       l.status='cancelled'; l.exchangeOrderId=null; return; } }
   if(!l.reduceOnly&&(batchHoldActive()||S._noNewEntries)){
     l.status='cancelled'; l.exchangeOrderId=null; return; }
