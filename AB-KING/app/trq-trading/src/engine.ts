@@ -350,7 +350,10 @@ function loadAll(){ try{
       if(__c<__g.qty){ __g.qty=__c; __n2++; } }
       if(__n2>0) pushLog('server','🧹 عُقّمت '+__n2+' مستوى محفوظ بحجم زائد — لا أوامر عملاقة بعد اليوم'); }catch{}
     if(S.position){ const __oj=(S.journal||[]).find(j=>j.status==='open');
-      S._batchFills=Math.max(4,(__oj&&__oj.mergedOrders)||4);
+      // من واقع المنصة: قيمة المركز ÷ قيمة الأمر — لا قفل على 4 إن كان غيرها
+      { const __n=(S.position&&S.multiplier>0)?((S.position.size||0)*S.multiplier*(S.position.entry||0)):0;
+        const __per=Math.max(3,Number(S.config.cycleBalance)||3);
+        S._batchFills=Math.min(20,Math.max(1,Math.round(__n/__per))||1); }
       if(!S._batchHoldAt){ S._batchHoldAt=Date.now(); S._batchStudiedAt=true; }
       pushLog('server','🧷 حماية الإقلاع: مركز قائم ('+S._batchFills+' أمر) — القاطع مقفل حتى الجني الكامل'); } }
   // قتل أندرويد للتطبيق في الخلفية ≠ خروج المالك: جلسة كانت تعمل وقُتلت حديثًا
@@ -1461,6 +1464,23 @@ export function priceKick(){ const t=S.priceTrail||[]; if(t.length<12) return {u
 /* ─── القاطع المرحلي (تصميم المالك): دفعات من 4 أوامر بدراسة بينها ───
    نشطه: بعد 4 تعبئات دخول. إطلاقه: هدوء التقلب (لا فرملة) + مرور دقيقتين
    + اكتمال دراسة جديدة بدأت بعد التوقف. عند الإطلاق: دفعة جديدة 4 أوامر */
+/* ─── عدد تعبئات الدخول الحقيقي (أمر المالك 3 نوفمبر): العدّاد المحلي
+   كان يُلصق على 4 عند حماية الإقلاع أو جني غير مؤكد — فيمنع تسليح بقية
+   المجموعة (رأى المالك أمراً واحداً فقط بدل 4). الآن يُحسب من قيمة المركز
+   الفعلية على المنصة ÷ قيمة الأمر الواحد (سقف نصيب المحرك) ─── */
+export function realBatchFills(){
+  const c:any=S.config||{};
+  // 1) الأصدق: عدد تنفيذات الدخول المقروءة من المنصة نفسها
+  if(S._entryFillsN!=null&&Number(S._entryFillsN)>0&&S.position){
+    return Math.max(0,Math.min(20,Number(S._entryFillsN))); }
+  if(S.position&&S.multiplier>0){
+    const notional=(S.position.size||0)*S.multiplier*(S.position.entry||0);
+    const perOrder=Math.max(3,Number(c.cycleBalance)||3);
+    const est=Math.round(notional/perOrder);
+    if(est>0) return Math.max(0,Math.min(20,est));
+  }
+  return Math.max(0,Math.min(20,Number(S._batchFills)||0));
+}
 export function batchHoldActive(){
   // ─── تتبع أقصى انزلاق أثناء التوقف (درس PEPE 18 أمراً): الإطلاق لا يكون
   // بالوقت وحده — بل بعد توقف السقوط فعلياً: لا قاع/قمة جديدة ضد المركز
@@ -1469,7 +1489,8 @@ export function batchHoldActive(){
     const p=S.lastPrice, long=S.position.side==='long';
     const worst=(S._batchWorst==null)?p:(long?Math.min(S._batchWorst,p):Math.max(S._batchWorst,p));
     if(worst!==S._batchWorst){ S._batchWorst=worst; S._batchWorseAt=Date.now(); } }
-  if((S._batchFills||0)<(S._cycleMaxFills||4)) return false;
+  const __real=realBatchFills(); S._batchFills=__real; // تثبيت الحقيقة على الحالة
+  if(__real<(S._cycleMaxFills||4)) return false;
   // ─── قاعدة المالك الزمنية (أمر 2026-10-24): انزلاق بعد 4 أوامر =
   // توقف كامل 3 ساعات، ثم دراسة: استمرار الانزلاق = +ساعة إضافية ودراسة،
   // ولا عودة إلا باستقرار فعلي (لا انزلاق جديد منذ ساعة كاملة) + إشارة
@@ -2087,6 +2108,7 @@ function _harvestCleanup(fp){
   if(S.config.mode==='live'&&S.keys){
     exCancelAll(S.config.symbol).catch(()=>{});
     exCancelStops(S.config.symbol).catch(()=>{}); }
+  S._entryFillsN=0; // تصفير عدّ تعبئات المنصة مع كل دورة/جني
   S._harvestAt=Date.now(); // لحظة اكتمال الدورة — القفز للعملة التالية مسموح بعدها فقط
   // قاعدة التنويع: العملة المجناة تُحظر 24 ساعة، ولا رجوع فوري لها قبل
   // أن تختار الدراسة الشاملة بديلاً جديداً (حتى 10 دقائق ثم استئناف)
@@ -3291,6 +3313,20 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
           e2.size+=f.size; e2.cost+=f.size*f.price; e2.fee+=f.fee; e2.n++; byIdF.set(f.orderId,e2); } }
       const agg=(key,map)=>{ if(!key) return null; const e=map.get(key);
         if(!e||!(e.size>0)) return null; return {avgPx:e.cost/e.size,size:e.size,fee:e.fee}; };
+      // ─── عدّ تعبئات الدخول الحقيقية من المنصة (أمر المالك 3 نوفمبر:
+      // «أمر واحد و3 غير موجودة»): كل تنفيذ غير reduceOnly بعد فتح المركز
+      // = أمر تعبئة واحد — أدق من أي تقدير محلي ───
+      try{
+        const openedAt=(S.position&&S.position.openedAt)||0;
+        const side=S.position? (S.position.side==='long'?'buy':'sell') : null;
+        const uniq=new Set<string>();
+        for(const f of fills){ const tt=Number(f.tradeTime)||0;
+          if(openedAt&&tt<openedAt-120000) continue;
+          if(side&&String(f.side||'').toLowerCase()!==side) continue;
+          if(f.reduceOnly) continue;
+          uniq.add(String(f.orderId||f.clientOid||f.tradeId||Math.random())); }
+        if(uniq.size>0){ S._entryFillsN=uniq.size; }
+      }catch{}
       for(const l of S.grid){ if(l.status==='cancelled'||l.status==='filled') continue;
         const e=agg(l.clientOid,byOidF)||agg(l.exchangeOrderId,byIdF);
         if(!e) continue;
@@ -3338,7 +3374,10 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     if(S._needsFlatCheck&&Date.now()-S._needsFlatCheck<30000){
       try{ const lp=await exPosition(sym);
         if(lp&&lp.size>0){ S._needsFlatCheck=0; S.position=lp;
-          S._batchFills=Math.max(4,S._batchFills||0); if(!S._batchHoldAt) S._batchHoldAt=Date.now();
+          { const __n2=(S.position.size||0)*(S.multiplier||1)*(S.position.entry||0);
+            const __per2=Math.max(3,Number(S.config.cycleBalance)||3);
+            S._batchFills=Math.min(20,Math.max(1,Math.round(__n2/__per2))||1); }
+          if(!S._batchHoldAt) S._batchHoldAt=Date.now();
           pushLog('warn','⚠️ الجني لم تُؤكده المنصة — المركز عاد للإدارة فوراً (القاطع مقفل، لا صفقة جديدة)'); }
         else S._needsFlatCheck=0; }catch{} }
     // أي مستوى أُلغي أو نُفّذ محليًا وله أمر حي على المنصة — ألغِه هناك فورًا
@@ -3361,7 +3400,8 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     if(!S.permDenied) for(const l of want){ if(l.exchangeOrderId) continue;
       if(!l.reduceOnly&&(batchHoldActive()||S._noNewEntries||exposureCapped()
         ||(S._liveAddsCount=(S._liveAddsCount||_liveAdds))>=4)){
-        l.status='cancelled'; l.exchangeOrderId=null;
+        // يبقى مسلحاً (لا يُلغى) حتى يزول المانع — فلا تضيع أوامر المجموعة
+        l.exchangeOrderId=null; l._blockedAt=Date.now();
         if(!S._armedBlkAt||Date.now()-S._armedBlkAt>300000){ S._armedBlkAt=Date.now();
           pushLog('server','🛡️ رفض تسليح '+(l.reduceOnly?'جني':'دخول')+' @ '+fmtPx(l.price)+' — '+
             (batchHoldActive()?'القاطع ماضٍ (4 أوامر ثم توقف)':S._noNewEntries?'تجميد الدخول':'سقف التعرض أو حد 4 أوامر')); }
