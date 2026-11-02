@@ -916,6 +916,20 @@ function loadAll() {
         });
         if (__n > 0) pushLog("server", "\u{1F9FC} \u062A\u0635\u062D\u064A\u062D " + __n + " \u0635\u0641\u0642\u0629 \u0628\u0642\u064A\u0645 \u0634\u0627\u0630\u0629 \u0645\u0646 \u0625\u0635\u062F\u0627\u0631 \u0633\u0627\u0628\u0642 \u2014 \u0635\u064F\u0641\u0651\u0631\u062A \u0642\u064A\u0645\u0647\u0627 \u0627\u0644\u0648\u0647\u0645\u064A\u0629");
       }
+      try {
+        let __n2 = 0;
+        for (const __g of S.grid || []) {
+          if (__g.reduceOnly) continue;
+          if (!(__g.qty > 0)) continue;
+          const __c = capEntryQty(__g.qty, __g.price > 0 ? __g.price : S.lastPrice || 0);
+          if (__c < __g.qty) {
+            __g.qty = __c;
+            __n2++;
+          }
+        }
+        if (__n2 > 0) pushLog("server", "\u{1F9F9} \u0639\u064F\u0642\u0651\u0645\u062A " + __n2 + " \u0645\u0633\u062A\u0648\u0649 \u0645\u062D\u0641\u0648\u0638 \u0628\u062D\u062C\u0645 \u0632\u0627\u0626\u062F \u2014 \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u0639\u0645\u0644\u0627\u0642\u0629 \u0628\u0639\u062F \u0627\u0644\u064A\u0648\u0645");
+      } catch {
+      }
       if (S.position) {
         const __oj = (S.journal || []).find((j) => j.status === "open");
         S._batchFills = Math.max(4, __oj && __oj.mergedOrders || 4);
@@ -1829,6 +1843,10 @@ async function ensureLiveMeta(symbol2) {
     S.multiplier = mul;
     S.tickSize = +ct.tickSize || S.tickSize;
     S._metaSym = symbol2;
+    S._tickMap = S._tickMap || {};
+    S._tickMap[symbol2] = +ct.tickSize || 0;
+    S._multMap = S._multMap || {};
+    S._multMap[symbol2] = mul;
     if (+ct.maxOrderQty > 0) S.maxOrderQty = +ct.maxOrderQty;
     S._metaAt = Date.now();
   } catch (_) {
@@ -2006,6 +2024,18 @@ async function orphanSweep() {
 }
 async function exPlaceLimit(intent) {
   await ensureLiveMeta(intent.symbol);
+  if (!intent.reduceOnly) {
+    const before = Math.floor(Number(intent.qty) || 0);
+    const capped = capEntryQty(before, intent.price);
+    if (capped < before) pushLog("server", "\u{1F4CF} \u0633\u0642\u0641 \u0627\u0644\u0623\u0645\u0631: " + before + " \u2192 " + capped + " \u0648\u062D\u062F\u0629 (\u0646\u0635\u064A\u0628 \u0627\u0644\u0645\u062D\u0631\u0643 " + (S.config.cycleBalance || 0) + "$) \u2014 \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u0639\u0645\u0644\u0627\u0642\u0629");
+    intent.qty = capped;
+  }
+  const tk = S._tickMap && S._tickMap[intent.symbol] || S.tickSize || 0;
+  if (tk > 0) {
+    const px = roundTick(Number(intent.price) || 0, tk);
+    if (px > 0) intent.price = px;
+  }
+  if (!(intent.qty >= 1)) throw new Error("\u062D\u062C\u0645 \u0627\u0644\u0623\u0645\u0631 \u0635\u0641\u0631 \u0628\u0639\u062F \u0627\u0644\u0633\u0642\u0641");
   return placeOrderSmart({
     clientOid: intent.clientOid,
     symbol: intent.symbol,
@@ -5427,6 +5457,9 @@ var init_engine = __esm({
       _flatConfirmed: false,
       recentCoins: {},
       // آخر تداول لكل عملة — قاعدة التنويع 24 ساعة
+      _tickMap: {},
+      _multMap: {},
+      // مواصفات كل رمز (tick ومضاعف)
       multiplier: 1,
       tickSize: 0.1,
       makerFee: 2e-4,
