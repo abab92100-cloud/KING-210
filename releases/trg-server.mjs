@@ -2139,6 +2139,37 @@ async function alignHarvestCore(sym, since) {
     logSwallow("alignHarvest", e);
   }
 }
+var STRATEGY_VER = "TRQ-GROUPS-v1";
+function strategyFingerprint() {
+  const c = S.config || {};
+  return [
+    STRATEGY_VER,
+    "step:" + Number(c.gridStepPct || 0),
+    "lev:" + Number(c.leverage || 0),
+    "lvls:" + Number(c.levels || 0),
+    "tp:" + (Number(c.tpUsd) > 0 ? "usd" + Number(c.tpUsd) : "net" + Number(c.tpNet || 0)),
+    "maxOrd:4",
+    "grp:4",
+    "hold:3h",
+    "ladder:0.15/0.22/0.45/0.66/0.90"
+  ].join("|");
+}
+function alignStrategy(cfg) {
+  const c = S.config;
+  if (!cfg) return false;
+  const fields = ["gridStepPct", "levels", "leverage", "tpUsd", "tpNet", "huntPct", "directionMode", "hfMode"];
+  let changed = 0;
+  for (const f of fields) {
+    if (cfg[f] != null && c[f] !== cfg[f]) {
+      c[f] = cfg[f];
+      changed++;
+    }
+  }
+  if (changed > 0) {
+    pushLog("server", "\u{1F9EC} \u0645\u0648\u0627\u0621\u0645\u0629 \u0627\u0644\u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A\u0629: \u0639\u064F\u062F\u0651\u0644\u062A " + changed + " \u0642\u064A\u0645\u0629 \u0644\u062A\u0637\u0627\u0628\u0642 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 \u2014 " + strategyFingerprint());
+  }
+  return changed > 0;
+}
 async function repairAccount() {
   if (S.config.mode !== "live" || !S.keys) return { ok: false, error: "\u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0641\u0642\u0637" };
   pushLog("server", "\u{1F527} \u0628\u062F\u0621 \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0627\u0644\u0634\u0627\u0645\u0644 \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639...");
@@ -5216,6 +5247,10 @@ async function botTick() {
 }
 function startBot() {
   try {
+    pushLog("server", "\u{1F9EC} \u0628\u0635\u0645\u0629 \u0627\u0644\u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A\u0629: " + strategyFingerprint());
+  } catch {
+  }
+  try {
     pushLog("server", "\u2699\uFE0F \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0641\u0639\u0651\u0627\u0644\u0629: " + (S.config.mode === "live" ? "\u062D\u0642\u064A\u0642\u064A" : "\u0648\u0631\u0642\u064A") + " \xB7 " + S.config.displaySymbol + " \xB7 \u0631\u0627\u0641\u0639\u0629 " + S.config.leverage + "\xD7 \xB7 \u0645\u0633\u062A\u0648\u064A\u0627\u062A " + S.config.levels + " \xB7 \u062E\u0637\u0648\u0629 " + S.config.gridStepPct + "% \xB7 \u0635\u064A\u062F " + S.config.huntPct + "% \xB7 \u062C\u0646\u064A " + (Number(S.config.tpUsd) > 0 ? "\u062B\u0627\u0628\u062A " + S.config.tpUsd + "$" : "\u0645\u062F\u0631\u0648\u0633 " + S.config.tpNet + "$") + " \xB7 \u0631\u0635\u064A\u062F \u0627\u0644\u062F\u0648\u0631\u0629 " + S.config.cycleBalance + "$ \xB7 \u062D\u062F \u0627\u0644\u0623\u0648\u0627\u0645\u0631 " + (S._cycleMaxFills || 4));
   } catch {
   }
@@ -5773,6 +5808,32 @@ async function pollSlots() {
   }
 }
 setInterval(pollSlots, 1e4).unref?.();
+var STRAT_FIELDS = ["gridStepPct", "levels", "leverage", "tpUsd", "tpNet", "huntPct", "directionMode", "hfMode"];
+var alignFleetStrategy = async () => {
+  const base = {};
+  let ref = null;
+  for (let i = 1; i <= FLEET_N; i++) if (slotStates[i] && slotStates[i].config) {
+    ref = slotStates[i].config;
+    break;
+  }
+  if (!ref) return;
+  for (const f of STRAT_FIELDS) if (ref[f] != null) base[f] = ref[f];
+  for (let i = 1; i <= FLEET_N; i++) {
+    const st = slotStates[i];
+    if (!st || !st.config) continue;
+    const diff = STRAT_FIELDS.some((f) => base[f] != null && st.config[f] !== base[f]);
+    if (diff) {
+      try {
+        await jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 8e3, { action: "alignStrategy", cfg: base });
+      } catch {
+      }
+    }
+  }
+};
+setInterval(() => {
+  alignFleetStrategy().catch(() => {
+  });
+}, 3e5).unref?.();
 function mergedState(selIn = 0) {
   const live = [];
   for (let i = 1; i <= FLEET_N; i++) if (slotStates[i]) live.push(slotStates[i]);
@@ -5879,6 +5940,12 @@ var srv = createServer(async (req, res) => {
             const rr = await repairAccount();
             return send(res, 200, rr);
           }
+          case "alignStrategy": {
+            const ch = alignStrategy(j.cfg || {});
+            return send(res, 200, { ok: true, changed: !!ch, fp: strategyFingerprint() });
+          }
+          case "fingerprint":
+            return send(res, 200, { ok: true, fp: strategyFingerprint(), slot: SLOT });
           default:
             return send(res, 400, { ok: false, error: "\u0625\u062C\u0631\u0627\u0621 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641: " + a });
         }
@@ -5911,6 +5978,11 @@ var srv = createServer(async (req, res) => {
       } catch {
       }
       const a = String(j.action || "");
+      if (a === "alignFleet") {
+        const base = j.cfg || {};
+        const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 8e3, { action: "alignStrategy", cfg: base })));
+        return send(res, 200, { ok: true, applied: rs.map((r) => !!(r && r.ok)) });
+      }
       if (a === "repair") {
         const r1 = await jfetch("http://127.0.0.1:" + (BASE_PORT + 1) + "/cmd", 45e3, j);
         return send(res, 200, r1 || { ok: false, error: "\u0644\u0645 \u064A\u0631\u062F \u0627\u0644\u0645\u062D\u0631\u0643" });
