@@ -550,6 +550,26 @@ export async function backgroundPipeline(){
     const __radarAge=S.radar&&S.radar.at?(Date.now()-S.radar.at):1e12;
     const r=(S.radar&&S.radar.list&&S.radar.list.length&&__radarAge<600000)?S.radar:(await scanRadar());
     if(!r||!r.list||!r.list.length) return;
+    // ─── منتقي الفرص (أمر المالك 2 نوفمبر): المحرك الخامل (بلا مركز ولا
+    // أثناء دراسة) يبحث عن أفضل فرصة مؤهلة: درجة ≥68 + سيولة ≥3M +
+    // غير متداولة 24 ساعة. لا يجد؟ ينتظر بصمت — لا دخول إجباري ───
+    if(!S.position&&!studying()&&S.status==='running'){
+      S.recentCoins=S.recentCoins||{};
+      const freshC=(l:any)=>(Date.now()-(S.recentCoins[l.symbol]||0))>24*3600*1000;
+      const curL=r.list.find((l:any)=>l.symbol===S.config.symbol);
+      const curOk=curL&&Number(curL.score||0)>=68;
+      if(!curOk){
+        const best=r.list.filter((l:any)=>l.symbol!==S.config.symbol&&Number(l.score||0)>=68
+          &&(Number(l.turnover)||0)>=3e6&&freshC(l))[0];
+        if(best&&(!S._oppPickAt||Date.now()-S._oppPickAt>180000)){ S._oppPickAt=Date.now();
+          pushLog('server','🎯 فرصة مؤهلة: '+best.disp+' (درجة '+best.score+' · سيولة '+
+            Math.round((Number(best.turnover)||0)/1e6)+'M) — تُدرس ثم تُفتح الصفقة');
+          try{ saveCfg({symbol:best.symbol,leverage:S.config.leverage,levels:S.config.levels,
+            gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,tpUsd:S.config.tpUsd,
+            cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,mode:S.config.mode}); }catch{}
+          return; }
+        if(!best&&(!S._noOppAt||Date.now()-S._noOppAt>600000)){ S._noOppAt=Date.now();
+          pushLog('server','🕐 لا فرصة مؤهلة الآن (درجة 68+ وسيولة 3M+) — انتظار بلا دخول إجباري'); } } }
     const cands=r.list.filter(l=>l.symbol!==S.config.symbol&&(l.score||0)>=55);
     if(!cands.length) return;
     const nxt=cands[0];
@@ -719,6 +739,26 @@ export async function postHarvestReselect(){
     S.recentCoins[S.config.symbol]=Date.now();
     const fresh=(l:any)=>{ const t=S.recentCoins[l.symbol]||0; return Date.now()-t>24*3600*1000; };
     const cur=r.list.find(l=>l.symbol===S.config.symbol);
+    // ─── منتقي الفرص (أمر المالك 2 نوفمبر): المحرك الخامل (بلا مركز ولا
+    // أثناء دراسة) يبحث عن أفضل فرصة مؤهلة: درجة ≥68 + سيولة ≥3M +
+    // غير متداولة 24 ساعة. لا يجد؟ ينتظر بصمت — لا دخول إجباري ───
+    if(!S.position&&!studying()&&S.status==='running'){
+      S.recentCoins=S.recentCoins||{};
+      const freshC=(l:any)=>(Date.now()-(S.recentCoins[l.symbol]||0))>24*3600*1000;
+      const curL=r.list.find((l:any)=>l.symbol===S.config.symbol);
+      const curOk=curL&&Number(curL.score||0)>=68;
+      if(!curOk){
+        const best=r.list.filter((l:any)=>l.symbol!==S.config.symbol&&Number(l.score||0)>=68
+          &&(Number(l.turnover)||0)>=3e6&&freshC(l))[0];
+        if(best&&(!S._oppPickAt||Date.now()-S._oppPickAt>180000)){ S._oppPickAt=Date.now();
+          pushLog('server','🎯 فرصة مؤهلة: '+best.disp+' (درجة '+best.score+' · سيولة '+
+            Math.round((Number(best.turnover)||0)/1e6)+'M) — تُدرس ثم تُفتح الصفقة');
+          try{ saveCfg({symbol:best.symbol,leverage:S.config.leverage,levels:S.config.levels,
+            gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,tpUsd:S.config.tpUsd,
+            cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,mode:S.config.mode}); }catch{}
+          return; }
+        if(!best&&(!S._noOppAt||Date.now()-S._noOppAt>600000)){ S._noOppAt=Date.now();
+          pushLog('server','🕐 لا فرصة مؤهلة الآن (درجة 68+ وسيولة 3M+) — انتظار بلا دخول إجباري'); } } }
     const cands=r.list.filter(l=>l.symbol!==S.config.symbol&&(l.score||0)>=55);
     const bestOther=cands.find(l=>fresh(l))||cands[0];
     const freshBest=r.list.filter(l=>fresh(l)&&l.symbol!==S.config.symbol).find(l=>(l.score||0)>=45);
@@ -2464,6 +2504,15 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   // بعد الجني: إعادة اختيار إلزامية قبل أي دخول — لا إعادة دخول فورية على نفس العملة
   if(!S.position&&S._harvestAt&&!S._reselectDone&&Date.now()-S._harvestAt<15*60*1000) return null;
   if(studying()) return null; // العملة قيد الدراسة — لا دخول قبل اكتمال بصمتها
+  // ─── قاعدة الفرصة (أمر المالك 2 نوفمبر): لا دخول مركزي جديد إلا لعملة
+  // درجتها من الدراسة الشاملة ≥68 (أو لا يوجد رادار بعد). لا دخول إجباري:
+  // المحرك ينتظر بصمت حتى تتوفر فرصة حقيقية — وليس 5 صفقات دائماً ───
+  if(!S.position){
+    const rl=(S.radar&&Array.isArray(S.radar.list))?S.radar.list.find((x:any)=>x.symbol===S.config.symbol):null;
+    if(rl&&Number(rl.score||0)<68){
+      if(!S._waitOppAt||Date.now()-S._waitOppAt>300000){ S._waitOppAt=Date.now();
+        pushLog('server','⏳ لا فرصة مؤهلة على '+S.config.displaySymbol+' (درجة '+rl.score+'<68) — انتظار فرصة أفضل بلا دخول إجباري'); }
+      return null; } }
   // هدنة الخسارة المخففة: خسارتان متتاليتان بنفس الاتجاه خلال دقيقتين فقط — لا شلل 5 دقائق لخسارة واحدة
   if(!S.position&&S._lossStreak&&S._lossStreak.side===S.config.direction&&
     S._lossStreak.n>=2&&Date.now()-S._lossStreak.at<120000) return null;

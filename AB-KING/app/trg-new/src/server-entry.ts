@@ -70,7 +70,7 @@ if (SLOT > 0) {
           }
         }
       }
-      if (!bootPickDone && !S.position && S.config.symbol === 'XBTUSDTM' &&
+      if (false && !bootPickDone && !S.position && S.config.symbol === 'XBTUSDTM' &&
           S.radar && Array.isArray(S.radar.list) && S.radar.list.length) {
         // ─── دراسة الإقلاع (أمر المالك: لا اختيار عشوائي): لا دخول إلا لعملة
         // درجتها 75+ وسيولتها اليومية قوية، وإقلاع متدرج 15ث لكل محرك ───

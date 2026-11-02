@@ -11,7 +11,7 @@ import {
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
 } from './engine';
 
-const SRV_VER = 'TRQ-TRADING-1.7.6';
+const SRV_VER = 'TRQ-TRADING-1.7.7';
 const FLEET_N = 5;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
@@ -70,7 +70,7 @@ if (SLOT > 0) {
           }
         }
       }
-      if (!bootPickDone && !S.position && S.config.symbol === 'XBTUSDTM' &&
+      if (false && !bootPickDone && !S.position && S.config.symbol === 'XBTUSDTM' &&
           S.radar && Array.isArray(S.radar.list) && S.radar.list.length) {
         // ─── دراسة الإقلاع (أمر المالك: لا اختيار عشوائي): لا دخول إلا لعملة
         // درجتها 75+ وسيولتها اليومية قوية، وإقلاع متدرج 15ث لكل محرك ───
