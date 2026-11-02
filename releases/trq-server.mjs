@@ -1164,7 +1164,8 @@ async function backgroundPipeline() {
   if (Date.now() - _bgPipeAt < 3e4) return;
   _bgPipeAt = Date.now();
   try {
-    const r = S.radar && S.radar.list && S.radar.list.length ? S.radar : await scanRadar();
+    const __radarAge = S.radar && S.radar.at ? Date.now() - S.radar.at : 1e12;
+    const r = S.radar && S.radar.list && S.radar.list.length && __radarAge < 6e5 ? S.radar : await scanRadar();
     if (!r || !r.list || !r.list.length) return;
     const cands = r.list.filter((l) => l.symbol !== S.config.symbol && (l.score || 0) >= 55);
     if (!cands.length) return;
@@ -3073,6 +3074,12 @@ function _harvestCleanup(fp) {
     });
   }
   S._harvestAt = Date.now();
+  try {
+    S.recentCoins = S.recentCoins || {};
+    S.recentCoins[S.config.symbol] = Date.now();
+  } catch {
+  }
+  S._waitFreshUntil = Date.now() + 10 * 6e4;
   S._reselectDone = false;
   S._posPeakNet = null;
   S._batchFills = 0;
@@ -5167,10 +5174,10 @@ function saveCfg(v) {
   S.sound = !!v.sound;
   if (v.soundTone) S.soundTone = v.soundTone;
   if (sym !== old) {
-    if (S.config.mode === "live" && S.keys && (S.position || S._exOpenCount > 0 || !S._flatConfirmed)) {
+    if (S.config.mode === "live" && S.keys && (S.position || !S._flatConfirmed)) {
       S.config.symbol = old;
       S.config.displaySymbol = old.replace(/USDTM$/i, "").replace(/^XBT$/i, "BTC");
-      pushLog("server", "\u26D4 \u0644\u0627 \u062A\u0628\u062F\u064A\u0644 \u0625\u0644\u0649 " + sym + " \u2014 " + (S.position ? "\u0648\u0627\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u062D\u0627\u0644\u064A \u0645\u0641\u062A\u0648\u062D" : !S._flatConfirmed ? "\u0628\u0644\u0627 \u062A\u0623\u0643\u064A\u062F \u0635\u0641\u0631\u064A\u0629 \u0645\u0646 \u0627\u0644\u0645\u0646\u0635\u0629 \u0628\u0639\u062F" : "\u0645\u0631\u0627\u0643\u0632 \u0623\u062E\u0631\u0649 \u062D\u064A\u0629") + " \u2014 \u0627\u0644\u0635\u0645\u0648\u062F \u062D\u062A\u0649 \u062A\u062A\u0623\u0643\u062F \u0627\u0644\u0645\u0646\u0635\u0629 \u062B\u0645 \u064A\u064F\u0633\u0645\u062D \u0628\u0627\u0644\u0627\u0646\u062A\u0642\u0627\u0644");
+      pushLog("server", "\u26D4 \u0644\u0627 \u062A\u0628\u062F\u064A\u0644 \u0625\u0644\u0649 " + sym + " \u2014 " + (S.position ? "\u0648\u0627\u0644\u0645\u0631\u0643\u0632 \u0627\u0644\u062D\u0627\u0644\u064A \u0645\u0641\u062A\u0648\u062D" : "\u0628\u0644\u0627 \u062A\u0623\u0643\u064A\u062F \u0635\u0641\u0631\u064A\u0629 \u0645\u0646 \u0627\u0644\u0645\u0646\u0635\u0629 \u0628\u0639\u062F") + " \u2014 \u0627\u0644\u0635\u0645\u0648\u062F \u062D\u062A\u0649 \u062A\u062A\u0623\u0643\u062F \u0627\u0644\u0645\u0646\u0635\u0629 \u062B\u0645 \u064A\u064F\u0633\u0645\u062D \u0628\u0627\u0644\u0627\u0646\u062A\u0642\u0627\u0644");
       return;
     }
     if (S.config.mode === "live" && S.keys) {
