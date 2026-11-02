@@ -2796,6 +2796,7 @@ function armProgressive() {
   if (batchHoldActive()) return;
   if (S._noNewEntries) return;
   if (S._waitFreshUntil && Date.now() < S._waitFreshUntil) return;
+  if (!S.position && (S._fleetTaken || []).map(String).includes(String(S.config.symbol))) return;
   if (exposureCapped()) {
     if (!S._expCapAt || Date.now() - S._expCapAt > 3e5) {
       S._expCapAt = Date.now();
@@ -3415,6 +3416,18 @@ function creditExFillReal(l, delta, fp, realFee) {
 function fillLevel(id, fp, taker) {
   const l = S.grid.find((g) => g.id === id);
   if (!l || l.status === "filled") return;
+  if (!l.reduceOnly && S.position && S.multiplier > 0) {
+    const __notional = (S.position.size || 0) * S.multiplier * (S.position.entry || 0);
+    if (__notional > (S.config.cycleBalance || 0) * 6) {
+      if (!S._exposureBlkAt || Date.now() - S._exposureBlkAt > 12e4) {
+        S._exposureBlkAt = Date.now();
+        pushLog("server", "\u{1F6D1} \u0633\u0642\u0641 \u0627\u0644\u062A\u0639\u0631\u0636 \u0627\u0644\u0645\u0646\u0635\u0651\u064A: \u0627\u0644\u0645\u0631\u0643\u0632 " + fmtUsd(__notional) + " > 6\xD7 \u0646\u0635\u064A\u0628 \u0627\u0644\u0645\u062D\u0631\u0643 \u2014 \u0623\u064F\u0648\u0642\u0641\u062A \u0627\u0644\u0625\u0636\u0627\u0641\u0627\u062A");
+      }
+      l.status = "cancelled";
+      l.exchangeOrderId = null;
+      return;
+    }
+  }
   if (!l.reduceOnly && (batchHoldActive() || S._noNewEntries)) {
     l.status = "cancelled";
     l.exchangeOrderId = null;
@@ -3931,6 +3944,13 @@ function huntTrigger(p) {
   if (toxicBlocked(S.config.direction)) return null;
   if (batchHoldActive()) return null;
   if (S._noNewEntries) return null;
+  if (!S.position && (S._fleetTaken || []).map(String).includes(String(S.config.symbol))) {
+    if (!S._ownerBlkAt || Date.now() - S._ownerBlkAt > 12e4) {
+      S._ownerBlkAt = Date.now();
+      pushLog("server", "\u{1F6AB} " + S.config.displaySymbol + " \u0645\u0645\u0644\u0648\u0643\u0629 \u0644\u0645\u062D\u0631\u0643 \u0622\u062E\u0631 \u0641\u064A \u0627\u0644\u0623\u0633\u0637\u0648\u0644 \u2014 \u0644\u0627 \u0623\u0645\u0631 \u0645\u0631\u0643\u0632\u064A \u0639\u0644\u064A\u0647\u0627 (\u0645\u0646\u0639 \u0645\u0636\u0627\u0639\u0641\u0629 \u0627\u0644\u0642\u0627\u0637\u0639)");
+    }
+    return null;
+  }
   if (S._waitFreshUntil && Date.now() < S._waitFreshUntil) return null;
   if (S.position && exposureCapped()) return null;
   if (S.position && volBrakeActive()) {
