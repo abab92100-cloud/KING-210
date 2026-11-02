@@ -1015,7 +1015,11 @@ function loadAll() {
       }
       if (S.position) {
         const __oj = (S.journal || []).find((j) => j.status === "open");
-        S._batchFills = Math.max(4, __oj && __oj.mergedOrders || 4);
+        {
+          const __n = S.position && S.multiplier > 0 ? (S.position.size || 0) * S.multiplier * (S.position.entry || 0) : 0;
+          const __per = Math.max(3, Number(S.config.cycleBalance) || 3);
+          S._batchFills = Math.min(20, Math.max(1, Math.round(__n / __per)) || 1);
+        }
         if (!S._batchHoldAt) {
           S._batchHoldAt = Date.now();
           S._batchStudiedAt = true;
@@ -2476,6 +2480,19 @@ function priceKick() {
   const chg = (p1 - p0) / p0 * 100;
   return { up: chg > 0 ? chg : 0, down: chg < 0 ? -chg : 0 };
 }
+function realBatchFills() {
+  const c = S.config || {};
+  if (S._entryFillsN != null && Number(S._entryFillsN) > 0 && S.position) {
+    return Math.max(0, Math.min(20, Number(S._entryFillsN)));
+  }
+  if (S.position && S.multiplier > 0) {
+    const notional = (S.position.size || 0) * S.multiplier * (S.position.entry || 0);
+    const perOrder = Math.max(3, Number(c.cycleBalance) || 3);
+    const est = Math.round(notional / perOrder);
+    if (est > 0) return Math.max(0, Math.min(20, est));
+  }
+  return Math.max(0, Math.min(20, Number(S._batchFills) || 0));
+}
 function batchHoldActive() {
   if (S.position && S._batchHoldAt && S.lastPrice > 0) {
     const p = S.lastPrice, long = S.position.side === "long";
@@ -2485,7 +2502,9 @@ function batchHoldActive() {
       S._batchWorseAt = Date.now();
     }
   }
-  if ((S._batchFills || 0) < (S._cycleMaxFills || 4)) return false;
+  const __real = realBatchFills();
+  S._batchFills = __real;
+  if (__real < (S._cycleMaxFills || 4)) return false;
   const H = 36e5;
   if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 18e5)) {
     S._batchHoldLogAt = Date.now();
@@ -3346,6 +3365,7 @@ function _harvestCleanup(fp) {
     exCancelStops(S.config.symbol).catch(() => {
     });
   }
+  S._entryFillsN = 0;
   S._harvestAt = Date.now();
   try {
     S.recentCoins = S.recentCoins || {};
@@ -4909,6 +4929,22 @@ async function liveSync() {
         if (!e || !(e.size > 0)) return null;
         return { avgPx: e.cost / e.size, size: e.size, fee: e.fee };
       };
+      try {
+        const openedAt = S.position && S.position.openedAt || 0;
+        const side = S.position ? S.position.side === "long" ? "buy" : "sell" : null;
+        const uniq = /* @__PURE__ */ new Set();
+        for (const f of fills) {
+          const tt = Number(f.tradeTime) || 0;
+          if (openedAt && tt < openedAt - 12e4) continue;
+          if (side && String(f.side || "").toLowerCase() !== side) continue;
+          if (f.reduceOnly) continue;
+          uniq.add(String(f.orderId || f.clientOid || f.tradeId || Math.random()));
+        }
+        if (uniq.size > 0) {
+          S._entryFillsN = uniq.size;
+        }
+      } catch {
+      }
       for (const l of S.grid) {
         if (l.status === "cancelled" || l.status === "filled") continue;
         const e = agg(l.clientOid, byOidF) || agg(l.exchangeOrderId, byIdF);
@@ -4989,7 +5025,11 @@ async function liveSync() {
         if (lp && lp.size > 0) {
           S._needsFlatCheck = 0;
           S.position = lp;
-          S._batchFills = Math.max(4, S._batchFills || 0);
+          {
+            const __n2 = (S.position.size || 0) * (S.multiplier || 1) * (S.position.entry || 0);
+            const __per2 = Math.max(3, Number(S.config.cycleBalance) || 3);
+            S._batchFills = Math.min(20, Math.max(1, Math.round(__n2 / __per2)) || 1);
+          }
           if (!S._batchHoldAt) S._batchHoldAt = Date.now();
           pushLog("warn", "\u26A0\uFE0F \u0627\u0644\u062C\u0646\u064A \u0644\u0645 \u062A\u064F\u0624\u0643\u062F\u0647 \u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u0627\u0644\u0645\u0631\u0643\u0632 \u0639\u0627\u062F \u0644\u0644\u0625\u062F\u0627\u0631\u0629 \u0641\u0648\u0631\u0627\u064B (\u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0642\u0641\u0644\u060C \u0644\u0627 \u0635\u0641\u0642\u0629 \u062C\u062F\u064A\u062F\u0629)");
         } else S._needsFlatCheck = 0;
@@ -5024,8 +5064,8 @@ async function liveSync() {
     if (!S.permDenied) for (const l of want) {
       if (l.exchangeOrderId) continue;
       if (!l.reduceOnly && (batchHoldActive() || S._noNewEntries || exposureCapped() || (S._liveAddsCount = S._liveAddsCount || _liveAdds) >= 4)) {
-        l.status = "cancelled";
         l.exchangeOrderId = null;
+        l._blockedAt = Date.now();
         if (!S._armedBlkAt || Date.now() - S._armedBlkAt > 3e5) {
           S._armedBlkAt = Date.now();
           pushLog("server", "\u{1F6E1}\uFE0F \u0631\u0641\u0636 \u062A\u0633\u0644\u064A\u062D " + (l.reduceOnly ? "\u062C\u0646\u064A" : "\u062F\u062E\u0648\u0644") + " @ " + fmtPx(l.price) + " \u2014 " + (batchHoldActive() ? "\u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D (4 \u0623\u0648\u0627\u0645\u0631 \u062B\u0645 \u062A\u0648\u0642\u0641)" : S._noNewEntries ? "\u062A\u062C\u0645\u064A\u062F \u0627\u0644\u062F\u062E\u0648\u0644" : "\u0633\u0642\u0641 \u0627\u0644\u062A\u0639\u0631\u0636 \u0623\u0648 \u062D\u062F 4 \u0623\u0648\u0627\u0645\u0631"));
