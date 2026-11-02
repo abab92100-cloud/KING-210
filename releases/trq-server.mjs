@@ -847,6 +847,7 @@ function saveAll() {
       status: S.status,
       history: S.history,
       logs: S.logs,
+      recentCoins: S.recentCoins || {},
       savedAt: Date.now(),
       // أعلام دورة الجني (قاعدة المالك: إعادة الاختيار بعد الجني) — تُحفظ حتى لا
       // تضيع إعادة الاختيار عند إعادة تشغيل السيرفر/الجوال بعد الجني مباشرة
@@ -1393,23 +1394,34 @@ async function postHarvestReselect() {
   try {
     const r = await scanRadar();
     if (!r || !r.list || !r.list.length) return;
+    S.recentCoins = S.recentCoins || {};
+    S.recentCoins[S.config.symbol] = Date.now();
+    const fresh = (l) => {
+      const t = S.recentCoins[l.symbol] || 0;
+      return Date.now() - t > 24 * 3600 * 1e3;
+    };
     const cur = r.list.find((l) => l.symbol === S.config.symbol);
-    const bestOther = r.list.filter((l) => l.symbol !== S.config.symbol).find((l) => (l.score || 0) >= 55);
+    const cands = r.list.filter((l) => l.symbol !== S.config.symbol && (l.score || 0) >= 55);
+    const bestOther = cands.find((l) => fresh(l)) || cands[0];
+    const freshBest = r.list.filter((l) => fresh(l) && l.symbol !== S.config.symbol).find((l) => (l.score || 0) >= 45);
+    const pick = bestOther || freshBest;
     S._reselectDone = true;
     S._nextReady = false;
     S._nextSymbol = null;
-    if (!bestOther) {
-      pushLog("server", "\u{1F50E} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0644\u0627 \u0639\u0645\u0644\u0629 \u0623\u0642\u0648\u0649 \u0645\u0646 " + (cur ? cur.disp : S.config.displaySymbol) + " \u0641\u064A \u0627\u0644\u0631\u0627\u062F\u0627\u0631 \u2014 \u0627\u0633\u062A\u0626\u0646\u0627\u0641 \u0627\u0644\u0635\u064A\u062F \u0639\u0644\u0649 \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u062D\u0627\u0644\u064A\u0629");
+    if (!pick) {
+      pushLog("server", "\u{1F50E} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0644\u0627 \u0639\u0645\u0644\u0629 \u0645\u0624\u0647\u0644\u0629 (55+) \u0648\u0644\u0627 \u0628\u062F\u064A\u0644 \u062C\u062F\u064A\u062F \u063A\u064A\u0631 \u0645\u062A\u062F\u0627\u0648\u0644 \u0645\u0624\u062E\u0631\u0627\u064B \u2014 \u0627\u0633\u062A\u0626\u0646\u0627\u0641 \u0639\u0644\u0649 \u0627\u0644\u0639\u0645\u0644\u0629 \u0627\u0644\u062D\u0627\u0644\u064A\u0629");
       return;
     }
     const curSc = cur ? cur.score || 0 : 0;
     _lastSwitchAt = Date.now();
     const curDisp = cur ? cur.disp : S.config.displaySymbol;
-    pushLog("server", "\u{1F504} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0646\u062A\u0642\u0627\u0644 \u0645\u0628\u0627\u0634\u0631 \u0645\u0646 " + curDisp + " (" + curSc + ") \u0625\u0644\u0649 " + bestOther.disp + " (" + bestOther.score + ") \u2014 \u0645\u0646\u0637\u0642\u0629 \u0623\u0642\u0648\u0649 \u2014 \u062A\u064F\u062F\u0631\u0633 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
-    toast("\u{1F504} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: " + bestOther.disp + " \u2014 " + bestOther.score);
-    nativeNotify("AB-KING \u2014 \u0627\u0646\u062A\u0642\u0627\u0644 \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A", bestOther.disp + " \u062F\u0631\u062C\u0629 " + bestOther.score);
+    const freshTag = fresh(pick) ? " \xB7 \u0639\u0645\u0644\u0629 \u062C\u062F\u064A\u062F\u0629 (\u062A\u0646\u0648\u064A\u0639)" : " \xB7 \u0628\u062F\u064A\u0644 \u0645\u0624\u0647\u0644";
+    pushLog("server", "\u{1F504} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: \u0627\u0646\u062A\u0642\u0627\u0644 \u0645\u0646 " + curDisp + " (" + curSc + ") \u0625\u0644\u0649 " + pick.disp + " (" + pick.score + ")" + freshTag + " \u2014 \u0645\u0646\u0637\u0642\u0629 \u0623\u0642\u0648\u0649 \u2014 \u062A\u064F\u062F\u0631\u0633 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
+    toast("\u{1F504} \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A: " + pick.disp + " \u2014 " + pick.score);
+    nativeNotify("AB-KING \u2014 \u0627\u0646\u062A\u0642\u0627\u0644 \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A", pick.disp + " \u062F\u0631\u062C\u0629 " + pick.score);
+    S.recentCoins[pick.symbol] = Date.now();
     saveCfg({
-      symbol: bestOther.symbol,
+      symbol: pick.symbol,
       leverage: S.config.leverage,
       levels: S.config.levels,
       gridStepPct: S.config.gridStepPct,
@@ -5401,6 +5413,8 @@ var init_engine = __esm({
       exPositions: [],
       _flatStrikes: 0,
       _flatConfirmed: false,
+      recentCoins: {},
+      // آخر تداول لكل عملة — قاعدة التنويع 24 ساعة
       multiplier: 1,
       tickSize: 0.1,
       makerFee: 2e-4,
