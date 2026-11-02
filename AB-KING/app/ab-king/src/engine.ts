@@ -257,6 +257,7 @@ export const S: any = {
   _exOpenCount:0, _noNewEntries:false, _cycleMaxFills:4, _nextCycleMax:0,
   exPositions:[] as any[], _flatStrikes:0, _flatConfirmed:false,
   recentCoins:{} as any, // آخر تداول لكل عملة — قاعدة التنويع 24 ساعة
+  _tickMap:{} as any, _multMap:{} as any, // مواصفات كل رمز (tick ومضاعف)
   multiplier:1, tickSize:0.1, makerFee:0.0002, takerFee:0.0006, funding:0,
   _metaSym:null, maxOrderQty:0, exAvail:null, exLeverage:null, // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
   grid:[], position:null, journal:[], logs:[],
@@ -341,6 +342,13 @@ function loadAll(){ try{
       if(__n>0) pushLog('server','🧼 تصحيح '+__n+' صفقة بقيم شاذة من إصدار سابق — صُفّرت قيمها الوهمية'); }
     // ─── حماية الإقلاع (أمر المالك): أي مركز قائم عند التشغيل = دخلت أوامره —
     // القاطع مقفل عليه فوراً (لا إضافات لصفقات معلقة قديمة مثل 11× و14×) ───
+    // تعقيم أحجام المستويات المحفوظة من إصدارات سابقة (درس UNI 30 وحدة):
+    // أي مستوى دخول غير reduceOnly يتجاوز سقف الأمر يُقتطع فوراً
+    try{ let __n2=0; for(const __g of (S.grid||[])){
+      if(__g.reduceOnly) continue; if(!(__g.qty>0)) continue;
+      const __c=capEntryQty(__g.qty,__g.price>0?__g.price:S.lastPrice||0);
+      if(__c<__g.qty){ __g.qty=__c; __n2++; } }
+      if(__n2>0) pushLog('server','🧹 عُقّمت '+__n2+' مستوى محفوظ بحجم زائد — لا أوامر عملاقة بعد اليوم'); }catch{}
     if(S.position){ const __oj=(S.journal||[]).find(j=>j.status==='open');
       S._batchFills=Math.max(4,(__oj&&__oj.mergedOrders)||4);
       if(!S._batchHoldAt){ S._batchHoldAt=Date.now(); S._batchStudiedAt=true; }
@@ -1077,6 +1085,10 @@ async function ensureLiveMeta(symbol){ if(S._metaSym===symbol&&S.multiplier>0) r
   try{ const ct=await fetchContract(symbol); const mul=+ct.multiplier;
     if(!(mul>0)) throw new Error('no multiplier');
     S.multiplier=mul; S.tickSize=+ct.tickSize||S.tickSize; S._metaSym=symbol;
+    // خريطة مواصفات لكل رمز — تمنع استخدام tick عملة أخرى (خطأ UNI:
+    // "Price parameter invalid. Must be a multiple of 0.001" من tick بيبي)
+    S._tickMap=S._tickMap||{}; S._tickMap[symbol]=+ct.tickSize||0;
+    S._multMap=S._multMap||{}; S._multMap[symbol]=mul;
     if(+ct.maxOrderQty>0) S.maxOrderQty=+ct.maxOrderQty; S._metaAt=Date.now();
   }catch(_){ throw new Error('بيانات العقد غير جاهزة — أُجّل الأمر لحين توثيق المضاعف'); } }
 /* ─── سرب إنقاذ المراكز اليتيمة (كارثة 8 مراكز): الانتقال بين العملات مع
@@ -1211,6 +1223,19 @@ async function orphanSweep(){
 
 async function exPlaceLimit(intent){
   await ensureLiveMeta(intent.symbol);
+  // ─── بوابة الإرسال النهائية (درس UNI: مستوى محفوظ بحجم 30 وحدة من إصدار
+  // قديم أُعيد إرساله!): السقف يُطبق هنا حتماً مهما كان المحفوظ، والتقريب
+  // يستخدم tick الرمز نفسه من خريطة المواصفات لا tick العملة السابقة ───
+  if(!intent.reduceOnly){
+    const before=Math.floor(Number(intent.qty)||0);
+    const capped=capEntryQty(before,intent.price);
+    if(capped<before) pushLog('server','📏 سقف الأمر: '+(before)+' → '+capped+' وحدة (نصيب المحرك '+(S.config.cycleBalance||0)+'$) — لا أوامر عملاقة');
+    intent.qty=capped;
+  }
+  const tk=(S._tickMap&&S._tickMap[intent.symbol])||S.tickSize||0;
+  if(tk>0){ const px=roundTick(Number(intent.price)||0,tk);
+    if(px>0) intent.price=px; }
+  if(!(intent.qty>=1)) throw new Error('حجم الأمر صفر بعد السقف');
   return placeOrderSmart({clientOid:intent.clientOid,symbol:intent.symbol,
     side:intent.side,type:'limit',price:String(intent.price),size:intent.qty,
     leverage:Number(intent.leverage)||Number(S.config.leverage)||1,timeInForce:'GTC',reduceOnly:!!intent.reduceOnly,
