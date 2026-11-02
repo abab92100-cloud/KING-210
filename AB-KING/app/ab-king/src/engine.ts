@@ -545,7 +545,10 @@ export async function backgroundPipeline(){
   if(Date.now()-_bgPipeAt<30000) return;
   _bgPipeAt=Date.now();
   try{
-    const r=S.radar&&S.radar.list&&S.radar.list.length?S.radar:(await scanRadar());
+    // فحص شامل مستمر لكل عملات المنصة: نسخة الرادار تُجدد كل 10 دقائق
+    // (كان يستخدم نسخة محفوظة لساعات — فالمفاضلة على بيانات قديمة)
+    const __radarAge=S.radar&&S.radar.at?(Date.now()-S.radar.at):1e12;
+    const r=(S.radar&&S.radar.list&&S.radar.list.length&&__radarAge<600000)?S.radar:(await scanRadar());
     if(!r||!r.list||!r.list.length) return;
     const cands=r.list.filter(l=>l.symbol!==S.config.symbol&&(l.score||0)>=55);
     if(!cands.length) return;
@@ -737,7 +740,7 @@ export async function postHarvestReselect(){
     toast('🔄 بعد الجني: '+pick.disp+' — '+pick.score);
     nativeNotify('AB-KING — انتقال بعد الجني',pick.disp+' درجة '+pick.score);
     S.recentCoins[pick.symbol]=Date.now();
-    S._waitFreshUntil=0;
+    S._waitFreshUntil=0; // عُثر على بديل جديد — يُفتح بعد الدراسة
     saveCfg({symbol:pick.symbol,leverage:S.config.leverage,levels:S.config.levels,
       gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,tpUsd:S.config.tpUsd,
       cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
@@ -1985,6 +1988,10 @@ function _harvestCleanup(fp){
     exCancelAll(S.config.symbol).catch(()=>{});
     exCancelStops(S.config.symbol).catch(()=>{}); }
   S._harvestAt=Date.now(); // لحظة اكتمال الدورة — القفز للعملة التالية مسموح بعدها فقط
+  // قاعدة التنويع: العملة المجناة تُحظر 24 ساعة، ولا رجوع فوري لها قبل
+  // أن تختار الدراسة الشاملة بديلاً جديداً (حتى 10 دقائق ثم استئناف)
+  try{ S.recentCoins=S.recentCoins||{}; S.recentCoins[S.config.symbol]=Date.now(); }catch{}
+  S._waitFreshUntil=Date.now()+10*60000;
   S._reselectDone=false; // إعادة الاختيار الإجباري بعد كل جني (قاعدة المالك)
   S._posPeakNet=null; // ذروة جديدة لكل دورة — قفل الذروة لا يتسرب بين الصفقات
   S._batchFills=0; S._batchHoldAt=0; S._batchStudiedAt=false; // القاطع المرحلي: دفعة جديدة لكل دورة
@@ -3484,10 +3491,13 @@ export function saveCfg(v){
     // ─── قاعدة المالك (مصدر المراكز الثمانية): لا انتقال بين العملات والمركز
     // مفتوح. كان الانتقال يطلق إغلاقاً بلا انتظار تأكيد → فشل الإغلاق (429/هامش)
     // يترك مركزاً حقيقياً يتيماً على المنصة. الآن: التبديل مرفوض حتى تُجنى ───
-    if(S.config.mode==='live'&&S.keys&&(S.position||S._exOpenCount>0||!S._flatConfirmed)){
+    // ─── الخلل الحلقي (2 نوفمبر): كانت البوابة تفحص كل مراكز الحساب —
+    // وفي أسطول 5 محركات توجد مراكز دائماً فالتبديل مرفوض أبداً → يعود
+    // المحرك لنفس العملة بعد كل جني. الصحيح: مركز العملة الحالية فقط ───
+    if(S.config.mode==='live'&&S.keys&&(S.position||!S._flatConfirmed)){
       S.config.symbol=old;
       S.config.displaySymbol=old.replace(/USDTM$/i,'').replace(/^XBT$/i,'BTC');
-      pushLog('server','⛔ لا تبديل إلى '+sym+' — '+(S.position?'والمركز الحالي مفتوح':(!S._flatConfirmed?'بلا تأكيد صفرية من المنصة بعد':'مراكز أخرى حية'))+' — الصمود حتى تتأكد المنصة ثم يُسمح بالانتقال');
+      pushLog('server','⛔ لا تبديل إلى '+sym+' — '+(S.position?'والمركز الحالي مفتوح':'بلا تأكيد صفرية من المنصة بعد')+' — الصمود حتى تتأكد المنصة ثم يُسمح بالانتقال');
       return; }
     // الوضع الحقيقي: ألغِ أوامر الزوج السابق وأوقفه وأغلق مركزه قبل الانتقال — لا أوامر يتيمة بلا رقيب
     if(S.config.mode==='live'&&S.keys){ exCancelAll(old).catch(()=>{});
