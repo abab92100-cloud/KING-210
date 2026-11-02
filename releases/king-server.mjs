@@ -3418,10 +3418,10 @@ function fillLevel(id, fp, taker) {
   if (!l || l.status === "filled") return;
   if (!l.reduceOnly && S.position && S.multiplier > 0) {
     const __notional = (S.position.size || 0) * S.multiplier * (S.position.entry || 0);
-    if (__notional > (S.config.cycleBalance || 0) * 6) {
+    if (__notional > (S.config.cycleBalance || 0) * 4.2) {
       if (!S._exposureBlkAt || Date.now() - S._exposureBlkAt > 12e4) {
         S._exposureBlkAt = Date.now();
-        pushLog("server", "\u{1F6D1} \u0633\u0642\u0641 \u0627\u0644\u062A\u0639\u0631\u0636 \u0627\u0644\u0645\u0646\u0635\u0651\u064A: \u0627\u0644\u0645\u0631\u0643\u0632 " + fmtUsd(__notional) + " > 6\xD7 \u0646\u0635\u064A\u0628 \u0627\u0644\u0645\u062D\u0631\u0643 \u2014 \u0623\u064F\u0648\u0642\u0641\u062A \u0627\u0644\u0625\u0636\u0627\u0641\u0627\u062A");
+        pushLog("server", "\u{1F6D1} \u0633\u0642\u0641 \u0627\u0644\u062A\u0639\u0631\u0636 \u0627\u0644\u0645\u0646\u0635\u0651\u064A: \u0627\u0644\u0645\u0631\u0643\u0632 " + fmtUsd(__notional) + " > 4.2\xD7 \u0646\u0635\u064A\u0628 \u0627\u0644\u0645\u062D\u0631\u0643 (\u0623\u0631\u0628\u0639\u0629 \u0623\u0648\u0627\u0645\u0631 \u0643\u062D\u062F \u0623\u0642\u0635\u0649) \u2014 \u0623\u064F\u0648\u0642\u0641\u062A \u0627\u0644\u0625\u0636\u0627\u0641\u0627\u062A");
       }
       l.status = "cancelled";
       l.exchangeOrderId = null;
