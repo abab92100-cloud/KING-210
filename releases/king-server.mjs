@@ -367,6 +367,7 @@ __export(engine_exports, {
   bgRadarTick: () => bgRadarTick,
   botTick: () => botTick,
   buildGrid: () => buildGrid,
+  capEntryQty: () => capEntryQty,
   clearKeys: () => clearKeys,
   contractsForLevel: () => contractsForLevel,
   desk: () => desk,
@@ -2401,7 +2402,7 @@ function resolveDirection(now) {
 }
 function contractsForLevel(p) {
   const q = levelQtys(p, effLevels());
-  return q.length ? q[0] : 1;
+  return capEntryQty(q.length ? q[0] : 1, p);
 }
 function effLevels() {
   const c = S.config;
@@ -2426,6 +2427,13 @@ function addStepPct() {
 }
 function tooClose(a, b, st) {
   return a > 0 && b > 0 && Math.abs(a - b) / Math.max(a, b) * 100 < st * 0.55;
+}
+function capEntryQty(q, price) {
+  const cv = Math.max(1e-12, (S.multiplier || 1) * (price > 0 ? price : 1));
+  const maxNotional = Math.max(3, S.config.cycleBalance || 0);
+  let cap = Math.floor(maxNotional / cv);
+  if (!(cap >= 1)) cap = 1;
+  return Math.max(1, Math.min(Math.floor(q) || 1, cap));
 }
 function levelQtys(center, n) {
   const c = S.config;
@@ -2460,7 +2468,7 @@ function buildGrid(center, wide, initialCount) {
   const step = c.gridStepPct / 100 * (wide ? 4 : memStepMult() * (S.regime ? S.regime.stepMult : 1) * volF) * liveWide;
   const stepPct = wide ? Math.max(0.12, c.gridStepPct) * 4 : addStepPct();
   const n = effLevels();
-  const qtys = levelQtys(center, n);
+  const qtys = levelQtys(center, n).map((q) => capEntryQty(q, center));
   if (initialCount && initialCount > 1) {
     for (let i = 0; i < Math.min(initialCount, qtys.length); i++) qtys[i] = qtys[0];
   }
