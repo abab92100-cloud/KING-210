@@ -1719,7 +1719,8 @@ function armProgressive(){ if(S.status!=='running') return;
   // القاطع المرحلي: لا تسليح جديد أثناءه — الدفعة القادمة بعد الدراسة
   if(batchHoldActive()) return;
   if(S._noNewEntries) return; // تجميد الدخول حتى تُغلق المراكز الزائدة بربح
-  if(S._waitFreshUntil&&Date.now()<S._waitFreshUntil) return; // انتظار مرشح جديد (تنويع)
+  if(S._waitFreshUntil&&Date.now()<S._waitFreshUntil) return; // انتظار مرشح (تنويع)
+  if(!S.position&&(S._fleetTaken||[]).map(String).includes(String(S.config.symbol))) return; // ملكية محرك آخر
   // سقف التعرّض: لا مزيد من المستويات عند بلوغه — حماية من التصفية بلا وقف خسارة
   if(exposureCapped()){
     if(!S._expCapAt||Date.now()-S._expCapAt>300000){ S._expCapAt=Date.now();
@@ -2125,6 +2126,14 @@ function fillLevel(id,fp,taker){ const l=S.grid.find(g=>g.id===id);
   // ─── البوابة الحديدية (قاعدة المالك، أمر 2026-10-25): أثناء توقف القاطع
   // لا تنفَّذ أي تعبئة دخول مهما كان مسارها (شبكة/صيد/تعويض جني جزئي —
   // ثقوب 8× و9× كلها من هنا). الجني reduceOnly وحده يعمل ───
+  // ─── سقف التعرض المنصّي (حقيقة المنصة لا عدّادنا): إن تجاوزت قيمة المركز
+  // 6× نصيب المحرك فالقاطع فسد (تعدد محركات) → لا إضافة نهائياً ───
+  if(!l.reduceOnly&&S.position&&S.multiplier>0){
+    const __notional=(S.position.size||0)*S.multiplier*(S.position.entry||0);
+    if(__notional>(S.config.cycleBalance||0)*6){
+      if(!S._exposureBlkAt||Date.now()-S._exposureBlkAt>120000){ S._exposureBlkAt=Date.now();
+        pushLog('server','🛑 سقف التعرض المنصّي: المركز '+fmtUsd(__notional)+' > 6× نصيب المحرك — أُوقفت الإضافات'); }
+      l.status='cancelled'; l.exchangeOrderId=null; return; } }
   if(!l.reduceOnly&&(batchHoldActive()||S._noNewEntries)){
     l.status='cancelled'; l.exchangeOrderId=null; return; }
   if(!l.reduceOnly&&coveringLoser(l,fp)) return;
@@ -2546,6 +2555,12 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   // القاطع المرحلي: لا إضافات صيد أثناءه
   if(batchHoldActive()) return null;
   if(S._noNewEntries) return null; // تجميد كامل: مراكز منصة زائدة لم تُغلق بربح بعد
+  // ─── ملكية العملة (حادثة JASMY: 8 أوامر = محركان × قاطع 4 لكل منهما):
+  // لا مركز جديد على عملة يحملها محرك آخر — تُقرأ من /fleet كل 10ث ───
+  if(!S.position&&(S._fleetTaken||[]).map(String).includes(String(S.config.symbol))){
+    if(!S._ownerBlkAt||Date.now()-S._ownerBlkAt>120000){ S._ownerBlkAt=Date.now();
+      pushLog('server','🚫 '+S.config.displaySymbol+' مملوكة لمحرك آخر في الأسطول — لا أمر مركزي عليها (منع مضاعفة القاطع)'); }
+    return null; }
   if(S._waitFreshUntil&&Date.now()<S._waitFreshUntil) return null; // انتظار مرشح جديد (تنويع)
   // سقف التعرّض: لا إضافات جديدة عنده — الحجم الكلي محكوم رياضياً
   if(S.position&&exposureCapped()) return null;
