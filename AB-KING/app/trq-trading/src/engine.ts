@@ -256,6 +256,7 @@ export const S: any = {
   // قاعدة المالك: تجميد الدخول عند وجود مراكز منصة غير مغلقة + حد أوامر الدورة
   _exOpenCount:0, _noNewEntries:false, _cycleMaxFills:4, _nextCycleMax:0,
   exPositions:[] as any[], _flatStrikes:0, _flatConfirmed:false,
+  recentCoins:{} as any, // آخر تداول لكل عملة — قاعدة التنويع 24 ساعة
   multiplier:1, tickSize:0.1, makerFee:0.0002, takerFee:0.0006, funding:0,
   _metaSym:null, maxOrderQty:0, exAvail:null, exLeverage:null, // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
   grid:[], position:null, journal:[], logs:[],
@@ -309,7 +310,7 @@ function saveAll(){ try{
   const rt={grid:S.grid,position:S.position,journal:S.journal,realizedPnl:S.realizedPnl,
     feesPaid:S.feesPaid,fundingPaid:S.fundingPaid||0,cycleHarvested:S.cycleHarvested||0,priceTrail:S.priceTrail,cvd:S.cvd,huntCount:S.huntCount,
     lastPrice:S.lastPrice,markPrice:S.markPrice,activeCycle:S.activeCycle,status:S.status,
-    history:S.history,logs:S.logs,savedAt:Date.now(),
+    history:S.history,logs:S.logs,recentCoins:S.recentCoins||{},savedAt:Date.now(),
     // أعلام دورة الجني (قاعدة المالك: إعادة الاختيار بعد الجني) — تُحفظ حتى لا
     // تضيع إعادة الاختيار عند إعادة تشغيل السيرفر/الجوال بعد الجني مباشرة
     _harvestAt:S._harvestAt||0,_reselectDone:!!S._reselectDone,
@@ -700,12 +701,20 @@ export async function postHarvestReselect(){
     return; }
   try{
     const r=await scanRadar(); if(!r||!r.list||!r.list.length) return;
+    // ─── قاعدة التنويع (ملاحظة المالك 2 نوفمبر: عالقون على نفس 5-6 عملات
+    // ليومين = خطر تركيز): لا يُعاد تداول عملة خلال 24 ساعة إن وُجد بديل
+    // مؤهل (55+) — التنويع إجباري بعد كل جني، والاستثناء فقط عند انعدام البديل ───
+    S.recentCoins=S.recentCoins||{};
+    S.recentCoins[S.config.symbol]=Date.now();
+    const fresh=(l:any)=>{ const t=S.recentCoins[l.symbol]||0; return Date.now()-t>24*3600*1000; };
     const cur=r.list.find(l=>l.symbol===S.config.symbol);
-    const bestOther=r.list.filter(l=>l.symbol!==S.config.symbol).find(l=>(l.score||0)>=55);
+    const cands=r.list.filter(l=>l.symbol!==S.config.symbol&&(l.score||0)>=55);
+    const bestOther=cands.find(l=>fresh(l))||cands[0];
+    const freshBest=r.list.filter(l=>fresh(l)&&l.symbol!==S.config.symbol).find(l=>(l.score||0)>=45);
+    const pick=bestOther||freshBest;
     S._reselectDone=true; S._nextReady=false; S._nextSymbol=null; // القرار اتخذ — لا قفز مزدوج
-    if(!bestOther){
-      pushLog('server','🔎 بعد الجني: لا عملة أقوى من '+
-        (cur?cur.disp:S.config.displaySymbol)+' في الرادار — استئناف الصيد على العملة الحالية');
+    if(!pick){
+      pushLog('server','🔎 بعد الجني: لا عملة مؤهلة (55+) ولا بديل جديد غير متداول مؤخراً — استئناف على العملة الحالية');
       return; }
     const curSc=cur?(cur.score||0):0;
     // قاعدة المالك النهائية: بعد الجني يوجد بديل مؤهل (55+)؟ انتقال مباشر إليه.
@@ -713,11 +722,13 @@ export async function postHarvestReselect(){
     // عملة أخرى أفضل أو منافسة → انتقال مباشر ثم دراسة ثم دخول
     _lastSwitchAt=Date.now();
     const curDisp=cur?cur.disp:S.config.displaySymbol;
-    pushLog('server','🔄 بعد الجني: انتقال مباشر من '+curDisp+' ('+curSc+') إلى '+
-      bestOther.disp+' ('+bestOther.score+') — منطقة أقوى — تُدرس ثم تُفتح الصفقة');
-    toast('🔄 بعد الجني: '+bestOther.disp+' — '+bestOther.score);
-    nativeNotify('AB-KING — انتقال بعد الجني',bestOther.disp+' درجة '+bestOther.score);
-    saveCfg({symbol:bestOther.symbol,leverage:S.config.leverage,levels:S.config.levels,
+    const freshTag=fresh(pick)?' · عملة جديدة (تنويع)':' · بديل مؤهل';
+    pushLog('server','🔄 بعد الجني: انتقال من '+curDisp+' ('+curSc+') إلى '+
+      pick.disp+' ('+pick.score+')'+freshTag+' — منطقة أقوى — تُدرس ثم تُفتح الصفقة');
+    toast('🔄 بعد الجني: '+pick.disp+' — '+pick.score);
+    nativeNotify('AB-KING — انتقال بعد الجني',pick.disp+' درجة '+pick.score);
+    S.recentCoins[pick.symbol]=Date.now();
+    saveCfg({symbol:pick.symbol,leverage:S.config.leverage,levels:S.config.levels,
       gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,tpUsd:S.config.tpUsd,
       cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
       mode:S.config.mode,sound:S.sound,soundTone:S.soundTone});
