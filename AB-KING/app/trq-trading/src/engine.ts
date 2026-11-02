@@ -1223,6 +1223,31 @@ async function alignHarvestCore(sym:any,since:any){
     pushLog('server','💵 جني المنصة الفعلي '+fmtUsd(real)+' (بعد الرسوم الحقيقية) — التطبيق كان يقدّر '+fmtUsd(est)+' — صُحّحت الدفاتر ليطابقا حرفياً');
   }catch(e){ logSwallow('alignHarvest',e); } }
 
+/* ─── بصمة الاستراتيجية الموحدة (أمر المالك 2 نوفمبر 23:59): الأسطول
+   الخمسة يجب أن يعملوا بنفس الاستراتيجية حرفياً — بصمة واحدة تُطبع في
+   السجل وتُقارن بين المحركات، وأي انحراف يظهر فوراً ─── */
+export const STRATEGY_VER='TRQ-GROUPS-v1';
+export function strategyFingerprint(){
+  const c:any=S.config||{};
+  return [STRATEGY_VER,
+    'step:'+Number(c.gridStepPct||0),
+    'lev:'+Number(c.leverage||0),
+    'lvls:'+Number(c.levels||0),
+    'tp:'+(Number(c.tpUsd)>0?('usd'+Number(c.tpUsd)):('net'+Number(c.tpNet||0))),
+    'maxOrd:4','grp:4','hold:3h','ladder:0.15/0.22/0.45/0.66/0.90'
+  ].join('|');
+}
+/* مواءمة حقول الاستراتيجية فقط (لا العملة ولا نصيب الرصيد — لكل محرك
+   عملته ونصيبه) — تُطبّق من المنسق على كل المحركات كل 5 دقائق */
+export function alignStrategy(cfg:any){
+  const c:any=S.config; if(!cfg) return false;
+  const fields=['gridStepPct','levels','leverage','tpUsd','tpNet','huntPct','directionMode','hfMode'];
+  let changed=0;
+  for(const f of fields){ if(cfg[f]!=null&&c[f]!==cfg[f]){ c[f]=cfg[f]; changed++; } }
+  if(changed>0){ pushLog('server','🧬 مواءمة الاستراتيجية: عُدّلت '+changed+' قيمة لتطابق الأسطول — '+
+    strategyFingerprint()); }
+  return changed>0;
+}
 /* ─── إصلاح الحساب الشامل (أمر المالك الصريح): يمسح كل مراكز الحساب، يلغي
    كل الأوامر والستوبات، يثبت لكل مركز هدف جني رابحاً واحداً، ويعيد تقريراً
    كاملاً يُعرض في التطبيق — المنصة هي المرجع الوحيد ─── */
@@ -3478,6 +3503,7 @@ export async function botTick(){
 
 /* ---------- أوامر التشغيل ---------- */
 export function startBot(){
+  try{ pushLog('server','🧬 بصمة الاستراتيجية: '+strategyFingerprint()); }catch{}
   try{ pushLog('server','⚙️ الإعدادات الفعّالة: '+(S.config.mode==='live'?'حقيقي':'ورقي')+' · '+S.config.displaySymbol+
     ' · رافعة '+S.config.leverage+'× · مستويات '+S.config.levels+' · خطوة '+S.config.gridStepPct+'%'+
     ' · صيد '+S.config.huntPct+'% · جني '+(Number(S.config.tpUsd)>0?('ثابت '+S.config.tpUsd+'$'):('مدروس '+S.config.tpNet+'$'))+

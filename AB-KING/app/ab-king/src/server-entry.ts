@@ -9,9 +9,10 @@ import './server-shims'; // أولًا دائمًا: يثبّت البيئة ق�
 import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
+  strategyFingerprint, alignStrategy,
 } from './engine';
 
-const SRV_VER = 'KING-1.9.2';
+const SRV_VER = 'KING-1.9.3';
 const FLEET_N = 1;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
@@ -117,6 +118,22 @@ async function pollSlots() {
   }
 }
 setInterval(pollSlots, 10000).unref?.();
+// ─── مواءمة دورية للاستراتيجية (أمر المالك: الخمسة بنفس الاستراتيجية):
+// تُقارن حقول الاستراتيجية للمحركات كل 5 دقائق، وأي انحراف يُصحّح من
+// المحرك الأول تلقائياً — العملة والرصيد يبقيان لكل محرك ───
+const STRAT_FIELDS = ['gridStepPct', 'levels', 'leverage', 'tpUsd', 'tpNet', 'huntPct', 'directionMode', 'hfMode'];
+const alignFleetStrategy = async () => {
+  const base: any = {}; let ref: any = null;
+  for (let i = 1; i <= FLEET_N; i++) if (slotStates[i] && slotStates[i].config) { ref = slotStates[i].config; break; }
+  if (!ref) return;
+  for (const f of STRAT_FIELDS) if (ref[f] != null) base[f] = ref[f];
+  for (let i = 1; i <= FLEET_N; i++) {
+    const st = slotStates[i]; if (!st || !st.config) continue;
+    const diff = STRAT_FIELDS.some(f => base[f] != null && st.config[f] !== base[f]);
+    if (diff) { try { await jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 8000, { action: 'alignStrategy', cfg: base }); } catch { } }
+  }
+};
+setInterval(() => { alignFleetStrategy().catch(() => { }); }, 300000).unref?.();
 
 function mergedState(selIn = 0) {
   const live: any[] = [];
@@ -208,6 +225,8 @@ const srv = createServer(async (req, res) => {
           case 'clearKeys': clearKeys(); return send(res, 200, { ok: true });
           case 'scanRadar': await scanRadar(); return send(res, 200, { ok: true, radar: S.radar || null });
           case 'repair': { const rr = await repairAccount(); return send(res, 200, rr); }
+          case 'alignStrategy': { const ch = alignStrategy(j.cfg||{}); return send(res, 200, { ok:true, changed:!!ch, fp:strategyFingerprint() }); }
+          case 'fingerprint': return send(res, 200, { ok:true, fp:strategyFingerprint(), slot:SLOT });
           default: return send(res, 400, { ok: false, error: 'إجراء غير معروف: ' + a });
         }
       }
@@ -242,6 +261,14 @@ const srv = createServer(async (req, res) => {
       const a = String(j.action || '');
       // saveCfg يُبث بلا رمز عملة — كل محرك يحتفظ بعملته (التنويع) — والرصيد
       // الكلي يقسمه المنسق مرة واحدة: كل محرك يستلم نصيبه (÷5) فوراً
+      // ─── مواءمة الاستراتيجية (أمر المالك): كل المحركات بنفس الاستراتيجية
+      // تُطبّق من المحرك الأول على الباقي — العملة والرصيد يبقيان خاصين ───
+      if (a === 'alignFleet') {
+        const base = j.cfg || {};
+        const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) =>
+          jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 8000, { action: 'alignStrategy', cfg: base })));
+        return send(res, 200, { ok: true, applied: rs.map(r => !!(r && r.ok)) });
+      }
       // repair: محرك واحد فقط (نفس المفاتيح والحساب — التكرار يكرر الأوامر)
       if (a === 'repair') {
         const r1 = await jfetch('http://127.0.0.1:' + (BASE_PORT + 1) + '/cmd', 45000, j);
