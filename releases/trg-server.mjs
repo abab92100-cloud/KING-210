@@ -2459,21 +2459,37 @@ function batchHoldActive() {
   if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 18e5)) {
     S._batchHoldLogAt = Date.now();
     const el = Math.floor((Date.now() - S._batchHoldAt) / H), min = Math.floor((Date.now() - S._batchHoldAt) % H / 6e4);
-    const calm = S._batchWorseAt ? Math.floor((Date.now() - S._batchWorseAt) / H) : 0;
-    pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D: " + S._batchFills + " \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u0645\u0636\u0649 " + el + "\u0633" + min + "\u062F \u0645\u0646 \u0648\u062C\u0648\u0628 \u0627\u0644\u06403 \u0633\u0627\u0639\u0627\u062A" + (S._batchWorseAt ? Date.now() - S._batchWorseAt > H ? " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u062A\u0648\u0642\u0641 \u0645\u0646\u0630 " + calm + " \u0633\u0627\u0639\u0629" : " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u0627 \u0632\u0627\u0644 \u0646\u0634\u0637\u0627\u064B" : " \u2014 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629"));
+    const calm2 = S._batchWorseAt ? Math.floor((Date.now() - S._batchWorseAt) / H) : 0;
+    pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D: " + S._batchFills + " \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u0645\u0636\u0649 " + el + "\u0633" + min + "\u062F \u0645\u0646 \u0648\u062C\u0648\u0628 \u0627\u0644\u06403 \u0633\u0627\u0639\u0627\u062A" + (S._batchWorseAt ? Date.now() - S._batchWorseAt > H ? " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u062A\u0648\u0642\u0641 \u0645\u0646\u0630 " + calm2 + " \u0633\u0627\u0639\u0629" : " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u0627 \u0632\u0627\u0644 \u0646\u0634\u0637\u0627\u064B" : " \u2014 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629"));
   }
-  if (S._batchHoldAt && !S._batchStudiedAt) {
-    S._batchStudiedAt = true;
-    startStudy(false);
-    pushLog("server", "\u{1F50D} \u0628\u062F\u0623\u062A \u062F\u0631\u0627\u0633\u0629 \u0645\u0627 \u0628\u0639\u062F \u0627\u0644\u0642\u0627\u0637\u0639 \u2014 \u0644\u0627 \u0641\u062A\u062D \u0623\u0648\u0627\u0645\u0631 \u062D\u062A\u0649 \u064A\u0643\u062A\u0645\u0644 \u062A\u0642\u064A\u064A\u0645 \u0627\u0644\u0648\u0636\u0639");
+  const held = Date.now() - (S._batchHoldAt || 0);
+  const calm = S._batchWorseAt ? Date.now() - S._batchWorseAt : 0;
+  if (held < 3 * 36e5) return true;
+  if (!(calm >= 30 * 6e4)) {
+    if (!S._batchStudiedAt || Date.now() - S._batchStudiedAt > 18e5) {
+      S._batchStudiedAt = Date.now();
+      pushLog("server", "\u{1F9F7} 3 \u0633\u0627\u0639\u0627\u062A \u0645\u0636\u062A \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0644\u0645 \u064A\u0633\u062A\u0642\u0631 \u0628\u0639\u062F (\u0642\u0627\u0639/\u0642\u0645\u0629 \u062C\u062F\u064A\u062F\u0629 \u0642\u0628\u0644 " + Math.floor(calm / 6e4) + " \u062F\u0642\u064A\u0642\u0629) \u2014 \u0627\u0633\u062A\u0645\u0631\u0627\u0631 \u0627\u0644\u062A\u0648\u0642\u0641");
+    }
+    return true;
   }
-  return true;
+  S._batchHoldAt = 0;
+  S._batchFills = 0;
+  S._batchWorst = null;
+  S._batchWorseAt = 0;
+  S._batchStudiedAt = false;
+  S._groupN = (S._groupN || 1) + 1;
+  S._cycleMaxFills = 4;
+  pushLog("server", "\u2705 \u0627\u0633\u062A\u0642\u0631\u0627\u0631 \u0645\u0624\u0643\u062F \u0628\u0639\u062F 3 \u0633\u0627\u0639\u0627\u062A \u2014 \u0641\u062A\u062D \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0629 " + S._groupN + " (4 \u0623\u0648\u0627\u0645\u0631 \u0628\u062A\u0628\u0627\u0639\u062F\u0647\u0627 \u0627\u0644\u062E\u0627\u0635)");
+  startStudy(false);
+  return false;
 }
 function exposureCapped() {
   const pos = S.position;
   if (!pos) return false;
   const notional = pos.size * (S.multiplier || 1) * (pos.entry || 0);
-  return notional > Math.max(20, (S.config.cycleBalance || 0) * 4);
+  const lev = Math.max(1, S.config.leverage);
+  const marginUsed = notional / lev;
+  return marginUsed > Math.max(20, (S.config.cycleBalance || 0) * 4);
 }
 function volBrakeActive() {
   if (!S.position) return false;
@@ -2745,14 +2761,16 @@ function buildGrid(center, wide, initialCount) {
   const reach = Math.max(spanMin, Math.min(step * n * 2, 0.12));
   if (span > reach) span = reach;
   const pctA = Math.max(0.12, Math.min(0.3, (S.config.gridStepPct || 0.3) * 0.5)) / 100;
-  const pctB = 0.22 / 100, pctC = 0.66 / 100;
+  const GSP = [0, pctA, 0.22 / 100, 0.45 / 100, 0.66 / 100, 0.9 / 100];
+  const grpStep = (idx) => GSP[Math.min(5, Math.max(1, Math.ceil(idx / 4)))];
   const ownerLadderDist = (idx) => {
     let d = 0;
     for (let j = 1; j <= idx; j++) {
-      d += j <= 4 ? pctA : j <= 8 ? pctB : pctC;
+      d += grpStep(j);
     }
     return d;
   };
+  const pctB = 0.22 / 100, pctC = 0.66 / 100;
   let prevDist = 0;
   for (let i = 1; i <= n; i++) {
     let dist = wide ? Math.min(step * i, 0.05) : ownerLadderDist(i);
@@ -4970,9 +4988,19 @@ async function liveSync() {
         origin: "grid"
       });
     }
-    const want = S.grid.filter((l) => l.status === "armed");
+    const _liveAdds = S.grid.filter((l) => !l.reduceOnly && (l.status === "open" || l.status === "armed")).length;
+    const want = S.grid.filter((l) => l.status === "armed").sort((a, b) => Math.abs((a.price || 0) - (S.lastPrice || 0)) - Math.abs((b.price || 0) - (S.lastPrice || 0)));
     if (!S.permDenied) for (const l of want) {
       if (l.exchangeOrderId) continue;
+      if (!l.reduceOnly && (batchHoldActive() || S._noNewEntries || exposureCapped() || (S._liveAddsCount = S._liveAddsCount || _liveAdds) >= 4)) {
+        l.status = "cancelled";
+        l.exchangeOrderId = null;
+        if (!S._armedBlkAt || Date.now() - S._armedBlkAt > 3e5) {
+          S._armedBlkAt = Date.now();
+          pushLog("server", "\u{1F6E1}\uFE0F \u0631\u0641\u0636 \u062A\u0633\u0644\u064A\u062D " + (l.reduceOnly ? "\u062C\u0646\u064A" : "\u062F\u062E\u0648\u0644") + " @ " + fmtPx(l.price) + " \u2014 " + (batchHoldActive() ? "\u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D (4 \u0623\u0648\u0627\u0645\u0631 \u062B\u0645 \u062A\u0648\u0642\u0641)" : S._noNewEntries ? "\u062A\u062C\u0645\u064A\u062F \u0627\u0644\u062F\u062E\u0648\u0644" : "\u0633\u0642\u0641 \u0627\u0644\u062A\u0639\u0631\u0636 \u0623\u0648 \u062D\u062F 4 \u0623\u0648\u0627\u0645\u0631"));
+        }
+        continue;
+      }
       try {
         const r = await exPlaceLimit({
           clientOid: l.clientOid,
