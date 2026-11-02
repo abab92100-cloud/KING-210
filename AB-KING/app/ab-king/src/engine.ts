@@ -1476,7 +1476,7 @@ function resolveDirection(now){ const mode=S.config.directionMode;
   return S.config.direction;
 }
 // حجم صفقة الصيد = الدرجة الأولى من سلّم التدرج الحسابي (أصغر أمر)
-export function contractsForLevel(p){ const q=levelQtys(p,effLevels()); return q.length?q[0]:1; }
+export function contractsForLevel(p){ const q=levelQtys(p,effLevels()); return capEntryQty(q.length?q[0]:1,p); }
 // المستويات الفعّالة: رأس المال الصغير يُركَّز لا يُفتَّت —
 // عدد يضمن أن يغطي جني كل مستوى هدف الصافي $0.12 بخطوة شبكة واحدة بعد الرسوم
 export function effLevels(){ const c=S.config;
@@ -1505,6 +1505,16 @@ function tooClose(a,b,st){ return a>0&&b>0&&Math.abs(a-b)/Math.max(a,b)*100<st*0
 // 20% من رصيد الدورة احتياطي هامش لا يُتداول أبدًا، والباقي (80%) يُقسم على
 // مجموع النسب، فيخرج أول أمر = وحدة واحدة وكل لاحق يزيد نصف وحدة بالنسبة.
 // رصيد 100 → وحدة صغيرة · رصيد 186 → وحدة أكبر · ويتدرج تلقائيًا مع أي مبلغ
+/* ─── سقف الأمر المنفرد (أمر المالك 2 نوفمبر بعد أمر 10000REKT الضخم
+   790,000 وحدة ≈ 527$): لا أمر دخول واحد يتجاوز نصيب المحرك كاملاً —
+   كل أمر صغير متساوٍ، والتراكم يتوزع على السلم لا على أمر عملاق ─── */
+export function capEntryQty(q:any, price:any){
+  const cv=Math.max(1e-12,(S.multiplier||1)*(price>0?price:1));
+  const maxNotional=Math.max(3,(S.config.cycleBalance||0)); // نصيب المحرك كحد أقصى للأمر الواحد
+  let cap=Math.floor(maxNotional/cv);
+  if(!(cap>=1)) cap=1;
+  return Math.max(1,Math.min(Math.floor(q)||1,cap));
+}
 export function levelQtys(center,n){ const c=S.config;
   // ─── بوابة المواصفات (درس DOGE: 81 لوت حُسبت بمضاعف PENGU القديم =
   // تضخم 9× = 621$ على محرك رصيده 34$): لا حساب حجم أبداً قبل توثيق
@@ -1549,7 +1559,7 @@ export function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.con
   const step=c.gridStepPct/100*(wide?4:memStepMult()*(S.regime?S.regime.stepMult:1)*volF)*liveWide;
   const stepPct=wide?Math.max(0.12,c.gridStepPct)*4:addStepPct();
   const n=effLevels(); // تركيز يناسب رأس المال — لا تفتيت على 25 مستوى تافهًا
-  const qtys=levelQtys(center,n);
+  const qtys=levelQtys(center,n).map((q:any)=>capEntryQty(q,center)); // سقف الأمر المنفرد
   // أحجام متساوية للدفعة الأولى (أمر المالك: «حجم الأوامر المختلف» عيب) —
   // الأربعة الأولى بنفس حجم المستوى الأول، التصاعد يبدأ بعدها فقط
   if(initialCount&&initialCount>1){ for(let i=0;i<Math.min(initialCount,qtys.length);i++) qtys[i]=qtys[0]; }
