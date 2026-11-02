@@ -1456,19 +1456,30 @@ export function batchHoldActive(){
     const calm=S._batchWorseAt?Math.floor((Date.now()-S._batchWorseAt)/H):0;
     pushLog('server','🧷 القاطع ماضٍ: '+S._batchFills+' أوامر دخول — مضى '+el+'س'+min+'د من وجوب الـ3 ساعات'+
       (S._batchWorseAt?(Date.now()-S._batchWorseAt>H?' — الانزلاق متوقف منذ '+calm+' ساعة':' — الانزلاق ما زال نشطاً'):' — بانتظار القراءة')); }
-  // ─── القاطع المطلق (أمر المالك 2026-10-30، بعد تكرار 11× و14×): لا إطلاق
-  // أبداً ما دامت الصفقة مفتوحة. جهاز الـ3+1 ساعات كان يفتح دفعة جديدة عند
-  // كل هدوء مؤقت في انزلاق بسيط متدرج فيتراكم 4+4+4... القاعدة النهائية:
-  // 4 أوامر دخول للصفقة الواحدة ثم توقف مطلق حتى تُجنى كاملة — والعودة
-  // للدخول بدورة جديدة نظيفة فقط بعد اكتمال الجني (يصفّر العداد تلقائياً) ───
-  if(S._batchHoldAt&&!S._batchStudiedAt){ S._batchStudiedAt=true;
-    startStudy(false); // دراسة جيدة جديدة قبل أي عودة — بصمة محدثة للوضع الحالي
-    pushLog('server','🔍 بدأت دراسة ما بعد القاطع — لا فتح أوامر حتى يكتمل تقييم الوضع'); }
-  return true; }
+  // ─── قاعدة المجموعات (أمر المالك 2 نوفمبر، الأحدث ويلغي ما قبله):
+  // 4 أوامر لكل مجموعة → توقف 3 ساعات → تحقق استقرار فعلي (لا قاع/قمة
+  // جديدة منذ 30 دقيقة) → فتح المجموعة التالية (4 أوامر بتباعد خاص) ───
+  const held=(Date.now()-(S._batchHoldAt||0));
+  const calm=S._batchWorseAt?(Date.now()-S._batchWorseAt):0;
+  if(held<3*3600000) return true;                      // 3 ساعات كاملة
+  if(!(calm>=30*60000)){                               // استقرار مطلوب
+    if(!S._batchStudiedAt||Date.now()-S._batchStudiedAt>1800000){ S._batchStudiedAt=Date.now();
+      pushLog('server','🧷 3 ساعات مضت — الانزلاق لم يستقر بعد (قاع/قمة جديدة قبل '+Math.floor(calm/60000)+' دقيقة) — استمرار التوقف'); }
+    return true; }
+  // استقرار مؤكد → مجموعة جديدة
+  S._batchHoldAt=0; S._batchFills=0; S._batchWorst=null; S._batchWorseAt=0; S._batchStudiedAt=false;
+  S._groupN=(S._groupN||1)+1;
+  S._cycleMaxFills=4;
+  pushLog('server','✅ استقرار مؤكد بعد 3 ساعات — فتح المجموعة '+(S._groupN)+' (4 أوامر بتباعدها الخاص)');
+  startStudy(false); // دراسة محدثة قبل المجموعة الجديدة
+  return false; }
 
 export function exposureCapped(){ const pos=S.position; if(!pos) return false;
   const notional=pos.size*(S.multiplier||1)*(pos.entry||0);
-  return notional>Math.max(20,(S.config.cycleBalance||0)*4); }
+  // قاعدتا المالك: هامش مستخدم ≤ 4× نصيب المحرك، ولا مركز يزيد عن 4 مجموعات
+  const lev=Math.max(1,S.config.leverage);
+  const marginUsed=notional/lev;
+  return marginUsed>Math.max(20,(S.config.cycleBalance||0)*4); }
 
 export function volBrakeActive(){
   if(!S.position) return false;
@@ -1680,10 +1691,15 @@ export function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.con
   // ─── سلم المالك (31 أكتوبر، بدقة): أول 4 أوامر في مناطق قريبة جيدة جداً
   // (تباعد 0.15% قابل للتقلب — يلتقط الارتدادات المبكرة)، الأربعة التالية
   // بتباعد 0.22%، وما بعدها بتباعد 0.66% — لا تكدس ولا تشتت بعيد ───
+  // ─── سلم المجموعات (أمر المالك 2 نوفمبر NMR): كل مجموعة = 4 أوامر
+  // بتباعدها الخاص، وبين المجموعات توقف 3 ساعات + تحقق استقرار:
+  // م1 0.15% · م2 0.22% · م3 0.45% · م4 0.66% · م5 0.90% ───
   const pctA=Math.max(0.12,Math.min(0.30,(S.config.gridStepPct||0.3)*0.5))/100;
-  const pctB=0.22/100, pctC=0.66/100;
+  const GSP=[0,pctA,0.22/100,0.45/100,0.66/100,0.90/100];
+  const grpStep=(idx:any)=>GSP[Math.min(5,Math.max(1,Math.ceil(idx/4)))];
   const ownerLadderDist=(idx:any)=>{ let d=0;
-    for(let j=1;j<=idx;j++){ d+= j<=4?pctA:(j<=8?pctB:pctC); } return d; };
+    for(let j=1;j<=idx;j++){ d+=grpStep(j); } return d; };
+  const pctB=0.22/100, pctC=0.66/100;
   let prevDist=0;
   for(let i=1;i<=n;i++){
     // الشبكة الواسعة أيضًا لها سقف (5%) — الامتداد المفتوح كان يسلّح مستويات على بعد 30%
@@ -3312,8 +3328,19 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
       S.grid.push({id:uid('ex'),clientOid:o.clientOid||uid('oid'),side:o.side,
         price:o.price,qty:o.size,status:'open',reduceOnly:o.reduceOnly,
         exchangeOrderId:o.orderId,filledAt:null,origin:'grid'}); }
-    const want=S.grid.filter(l=>(l.status==='armed'));
+    // ─── نقطة الإرسال الوحيدة (الثقب الحقيقي: كانت ترسل أي مستوى armed
+    // بلا فحص!): لا أمر دخول أثناء القاطع، ولا أثناء التجميد، ولا فوق
+    // سقف التعرض، وبحد أقصى 4 أوامر دخول حية في أي لحظة ───
+    const _liveAdds=S.grid.filter(l=>!l.reduceOnly&&(l.status==='open'||l.status==='armed')).length;
+    const want=S.grid.filter(l=>(l.status==='armed')).sort((a,b)=>Math.abs((a.price||0)-(S.lastPrice||0))-Math.abs((b.price||0)-(S.lastPrice||0)));
     if(!S.permDenied) for(const l of want){ if(l.exchangeOrderId) continue;
+      if(!l.reduceOnly&&(batchHoldActive()||S._noNewEntries||exposureCapped()
+        ||(S._liveAddsCount=(S._liveAddsCount||_liveAdds))>=4)){
+        l.status='cancelled'; l.exchangeOrderId=null;
+        if(!S._armedBlkAt||Date.now()-S._armedBlkAt>300000){ S._armedBlkAt=Date.now();
+          pushLog('server','🛡️ رفض تسليح '+(l.reduceOnly?'جني':'دخول')+' @ '+fmtPx(l.price)+' — '+
+            (batchHoldActive()?'القاطع ماضٍ (4 أوامر ثم توقف)':S._noNewEntries?'تجميد الدخول':'سقف التعرض أو حد 4 أوامر')); }
+        continue; }
       try{ const r=await exPlaceLimit({clientOid:l.clientOid,symbol:sym,side:l.side,
         price:l.price,qty:l.qty,reduceOnly:l.reduceOnly,leverage:S.config.leverage});
         l.status='open'; l.exchangeOrderId=r.orderId;
