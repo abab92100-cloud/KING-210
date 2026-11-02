@@ -1,25 +1,73 @@
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-};
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+// src/server-shims.ts
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+process.env.ABKING_SERVER = "1";
+var dir = join(homedir(), ".ab-king");
+try {
+  mkdirSync(dir, { recursive: true });
+} catch {
+}
+var __slot = process.env.ABKING_SLOT || "";
+var file = join(dir, __slot ? `trg-slot-${__slot}-store.json` : "trg-server-store.json");
+var data = {};
+try {
+  if (existsSync(file)) data = JSON.parse(readFileSync(file, "utf8") || "{}");
+} catch (e) {
+  data = {};
+}
+var timer = null;
+function persist() {
+  if (timer) return;
+  timer = setTimeout(() => {
+    timer = null;
+    try {
+      writeFileSync(file, JSON.stringify(data));
+    } catch {
+    }
+  }, 300);
+}
+globalThis.localStorage = {
+  getItem: (k) => k in data ? data[k] : null,
+  setItem: (k, v) => {
+    data[k] = String(v);
+    persist();
+  },
+  removeItem: (k) => {
+    delete data[k];
+    persist();
+  },
+  clear: () => {
+    data = {};
+    persist();
   }
-  return to;
 };
-var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u0629: " + file);
 
 // src/ws.ts
+var DIRECT = "https://api-futures.kucoin.com";
+var REST = typeof window !== "undefined" && (window.Capacitor || location.protocol === "capacitor:") ? DIRECT : "/kucoin";
+var streamState = {
+  connected: false,
+  connecting: false,
+  lastMsgAt: 0,
+  bookAt: 0,
+  tradeAt: 0,
+  msgs: 0,
+  reconnects: 0,
+  error: null
+};
+var ws = null;
+var pingTimer = null;
+var watchTimer = null;
+var retryTimer = null;
+var symbol = null;
+var onMessage = null;
+var onStatus = null;
+var stopped = true;
+var attempts = 0;
+var connectSeq = 0;
+var offline = false;
 function forceReconnect(reason) {
   if (stopped) return;
   if (retryTimer) {
@@ -202,6 +250,40 @@ function scheduleRetry() {
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = setTimeout(connect, wait);
 }
+if (typeof window !== "undefined" && window.Capacitor) {
+  const KN = (window.Capacitor.Plugins || {}).KingNative;
+  if (KN && KN.addListener) {
+    try {
+      const sub = KN.addListener("netChange", (d) => {
+        const online = !!(d && d.online);
+        if (online) {
+          offline = false;
+          if (stopped) return;
+          forceReconnect("\u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A: \u0639\u0627\u062F \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0648\u0635\u0644 \u0641\u0648\u0631\u064A");
+        } else {
+          offline = true;
+          if (retryTimer) {
+            clearTimeout(retryTimer);
+            retryTimer = null;
+          }
+          streamState.connected = false;
+          streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A \u064A\u0646\u062A\u0638\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
+          if (onStatus) onStatus({ ...streamState });
+        }
+      });
+      if (sub && typeof sub.catch === "function") sub.catch(() => {
+      });
+    } catch {
+    }
+    try {
+      if (KN.isOnline) KN.isOnline().then((r) => {
+        offline = !(r && r.online);
+      }).catch(() => {
+      });
+    } catch {
+    }
+  }
+}
 function startStream(sym, handlers) {
   stopStream();
   stopped = false;
@@ -243,179 +325,67 @@ function stopStream() {
   streamState.connected = false;
   streamState.connecting = false;
 }
-var DIRECT, REST, streamState, ws, pingTimer, watchTimer, retryTimer, symbol, onMessage, onStatus, stopped, attempts, connectSeq, offline;
-var init_ws = __esm({
-  "src/ws.ts"() {
-    DIRECT = "https://api-futures.kucoin.com";
-    REST = typeof window !== "undefined" && (window.Capacitor || location.protocol === "capacitor:") ? DIRECT : "/kucoin";
-    streamState = {
-      connected: false,
-      connecting: false,
-      lastMsgAt: 0,
-      bookAt: 0,
-      tradeAt: 0,
-      msgs: 0,
-      reconnects: 0,
-      error: null
-    };
-    ws = null;
-    pingTimer = null;
-    watchTimer = null;
-    retryTimer = null;
-    symbol = null;
-    onMessage = null;
-    onStatus = null;
-    stopped = true;
-    attempts = 0;
-    connectSeq = 0;
-    offline = false;
-    if (typeof window !== "undefined" && window.Capacitor) {
-      const KN = (window.Capacitor.Plugins || {}).KingNative;
-      if (KN && KN.addListener) {
-        try {
-          const sub = KN.addListener("netChange", (d) => {
-            const online = !!(d && d.online);
-            if (online) {
-              offline = false;
-              if (stopped) return;
-              forceReconnect("\u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A: \u0639\u0627\u062F \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0648\u0635\u0644 \u0641\u0648\u0631\u064A");
-            } else {
-              offline = true;
-              if (retryTimer) {
-                clearTimeout(retryTimer);
-                retryTimer = null;
-              }
-              streamState.connected = false;
-              streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0627\u0644\u0645\u0631\u0627\u0642\u0628 \u0627\u0644\u0623\u0635\u0644\u064A \u064A\u0646\u062A\u0638\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
-              if (onStatus) onStatus({ ...streamState });
-            }
-          });
-          if (sub && typeof sub.catch === "function") sub.catch(() => {
-          });
-        } catch {
-        }
-        try {
-          if (KN.isOnline) KN.isOnline().then((r) => {
-            offline = !(r && r.online);
-          }).catch(() => {
-          });
-        } catch {
-        }
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !stopped) {
+      const silent = Date.now() - streamState.lastMsgAt;
+      if (!ws || ws.readyState !== 1 || silent > 3e4) {
+        forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0644\u0644\u0648\u0627\u062C\u0647\u0629 \u0648\u0627\u0644\u0642\u0646\u0627\u0629 \u0635\u0627\u0645\u062A\u0629");
       }
     }
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", () => {
-        if (!document.hidden && !stopped) {
-          const silent = Date.now() - streamState.lastMsgAt;
-          if (!ws || ws.readyState !== 1 || silent > 3e4) {
-            forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u062A\u0637\u0628\u064A\u0642 \u0644\u0644\u0648\u0627\u062C\u0647\u0629 \u0648\u0627\u0644\u0642\u0646\u0627\u0629 \u0635\u0627\u0645\u062A\u0629");
-          }
-        }
-      });
+  });
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("online", () => {
+    offline = false;
+    if (stopped) return;
+    forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0625\u0639\u0627\u062F\u0629 \u0648\u0635\u0644 \u0627\u0644\u0642\u0646\u0627\u0629 \u0641\u0648\u0631\u064B\u0627");
+  });
+  window.addEventListener("offline", () => {
+    offline = true;
+    streamState.connected = false;
+    streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0641\u064A \u0627\u0646\u062A\u0638\u0627\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
+    if (onStatus) onStatus({ ...streamState });
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
     }
-    if (typeof window !== "undefined") {
-      window.addEventListener("online", () => {
-        offline = false;
-        if (stopped) return;
-        forceReconnect("\u0639\u0648\u062F\u0629 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0625\u0639\u0627\u062F\u0629 \u0648\u0635\u0644 \u0627\u0644\u0642\u0646\u0627\u0629 \u0641\u0648\u0631\u064B\u0627");
-      });
-      window.addEventListener("offline", () => {
-        offline = true;
-        streamState.connected = false;
-        streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A \u2014 \u0641\u064A \u0627\u0646\u062A\u0638\u0627\u0631 \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629";
-        if (onStatus) onStatus({ ...streamState });
-        if (retryTimer) {
-          clearTimeout(retryTimer);
-          retryTimer = null;
-        }
-      });
+  });
+}
+if (typeof navigator !== "undefined" && navigator.onLine !== void 0) {
+  setInterval(() => {
+    if (stopped) return;
+    const online = typeof navigator.onLine === "boolean" ? navigator.onLine : true;
+    if (online && offline) {
+      offline = false;
+      forceReconnect("\u0634\u064F\u0648\u0647\u062F\u062A \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629 (\u0641\u062D\u0635 \u062F\u0648\u0631\u064A)");
     }
-    if (typeof navigator !== "undefined" && navigator.onLine !== void 0) {
-      setInterval(() => {
-        if (stopped) return;
-        const online = typeof navigator.onLine === "boolean" ? navigator.onLine : true;
-        if (online && offline) {
-          offline = false;
-          forceReconnect("\u0634\u064F\u0648\u0647\u062F\u062A \u0639\u0648\u062F\u0629 \u0627\u0644\u0634\u0628\u0643\u0629 (\u0641\u062D\u0635 \u062F\u0648\u0631\u064A)");
-        }
-        if (!online && !offline) {
-          offline = true;
-          if (retryTimer) {
-            clearTimeout(retryTimer);
-            retryTimer = null;
-          }
-          streamState.connected = false;
-          streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A";
-          if (onStatus) onStatus({ ...streamState });
-        }
-        if (online && !offline && ws && ws.readyState === 1) {
-          const silent = Date.now() - streamState.lastMsgAt;
-          if (silent > 45e3) forceReconnect("\u0635\u0645\u062A \u0627\u0644\u0642\u0646\u0627\u0629 \u0623\u0643\u062B\u0631 \u0645\u0646 45 \u062B\u0627\u0646\u064A\u0629 \u0623\u062B\u0646\u0627\u0621 \u0627\u0644\u0639\u0645\u0644 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629");
-        }
-      }, 1e4);
+    if (!online && !offline) {
+      offline = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      streamState.connected = false;
+      streamState.error = "\u0627\u0646\u0642\u0637\u0639 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062A\u0631\u0646\u062A";
+      if (onStatus) onStatus({ ...streamState });
     }
-  }
-});
+    if (online && !offline && ws && ws.readyState === 1) {
+      const silent = Date.now() - streamState.lastMsgAt;
+      if (silent > 45e3) forceReconnect("\u0635\u0645\u062A \u0627\u0644\u0642\u0646\u0627\u0629 \u0623\u0643\u062B\u0631 \u0645\u0646 45 \u062B\u0627\u0646\u064A\u0629 \u0623\u062B\u0646\u0627\u0621 \u0627\u0644\u0639\u0645\u0644 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629");
+    }
+  }, 1e4);
+}
 
 // src/engine.ts
-var engine_exports = {};
-__export(engine_exports, {
-  FLEET_MODE: () => FLEET_MODE,
-  S: () => S,
-  backgroundPipeline: () => backgroundPipeline,
-  batchHoldActive: () => batchHoldActive,
-  bgRadarTick: () => bgRadarTick,
-  botTick: () => botTick,
-  buildGrid: () => buildGrid,
-  capEntryQty: () => capEntryQty,
-  clearKeys: () => clearKeys,
-  contractsForLevel: () => contractsForLevel,
-  desk: () => desk,
-  detectRemoteServer: () => detectRemoteServer,
-  dynamicTpNet: () => dynamicTpNet,
-  effLevels: () => effLevels,
-  emit: () => emit,
-  equity: () => equity,
-  exposureCapped: () => exposureCapped,
-  fetchKlines: () => fetchKlines,
-  flattenAt: () => flattenAt,
-  fmtPx: () => fmtPx,
-  fmtTime: () => fmtTime,
-  fmtUsd: () => fmtUsd,
-  gapHunterTick: () => gapHunterTick,
-  gapScan: () => gapScan,
-  gapSignal: () => gapSignal,
-  initEngine: () => initEngine,
-  levelQtys: () => levelQtys,
-  listContracts: () => listContracts,
-  liveSync: () => liveSync,
-  maybeSwitchSymbol: () => maybeSwitchSymbol,
-  memStats: () => memStats,
-  memStepMult: () => memStepMult,
-  netAlivePing: () => netAlivePing,
-  netDownSince: () => netDownSince,
-  netIsDown: () => netIsDown,
-  newCycle: () => newCycle,
-  onStreamTick: () => onStreamTick,
-  openNextReady: () => openNextReady,
-  pauseBot: () => pauseBot,
-  postHarvestReselect: () => postHarvestReselect,
-  priceKick: () => priceKick,
-  pulseAge: () => pulseAge,
-  pushLog: () => pushLog,
-  remoteSync: () => remoteSync,
-  repairAccount: () => repairAccount,
-  saveCfg: () => saveCfg,
-  saveKeys: () => saveKeys,
-  scanRadar: () => scanRadar,
-  startBot: () => startBot,
-  startSilentKeepAlive: () => startSilentKeepAlive,
-  stopBot: () => stopBot,
-  studiedEarlyExit: () => studiedEarlyExit,
-  studiedTpZone: () => studiedTpZone,
-  subscribe: () => subscribe2,
-  volBrakeActive: () => volBrakeActive
-});
+var TICK_MS = 1e3;
+var MAX_HUNT_OPEN = 3;
+var HUNT_COOLDOWN = 1e4;
+var ADD_COOLDOWN = 15e3;
+var SCOUT_MS = 9e4;
+var MIN_HUNT_GAP = 0.08;
+var TP_BASE_NET = 0.12;
+var LOSS_STOP_USD = 16;
 function dynamicTpNet() {
   const hf = S && S.config && S.config.hfMode;
   const posN = S.position ? Math.max(0, (S.position.size || 0) * (S.multiplier || 1) * (S.position.entry || 0)) : 0;
@@ -435,6 +405,22 @@ function tpBase() {
   if (fix > 0) return fix;
   return dynamicTpNet();
 }
+var clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+var uid = (p) => p + "_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+var fmtPx = (n) => {
+  n = Number(n);
+  if (!n || !isFinite(n) || n <= 0) return "\u2014";
+  if (n >= 1e3) return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (n >= 1) return n.toFixed(2);
+  const d = Math.min(12, Math.max(4, -Math.floor(Math.log10(n)) + 4));
+  return n.toFixed(d);
+};
+var fmtUsd = (n, d = 2) => {
+  const s = n < 0 ? "-" : n > 0 ? "+" : "";
+  return s + Math.abs(n).toFixed(d);
+};
+var nextEma = (p, x, k) => p == null ? x : x * k + p * (1 - k);
+var volSum = (l) => (l || []).reduce((a, b) => a + (b.size || 0), 0);
 function roundTick(p, t) {
   if (!t || t <= 0) return p;
   const n = Math.round(p / t) * t, d = Math.max(0, Math.ceil(-Math.log10(t)));
@@ -495,6 +481,7 @@ function lnPlugin() {
     return null;
   }
 }
+var _channelsReady = false;
 function ensureChannels(LN) {
   if (_channelsReady || !LN.createChannel) return;
   _channelsReady = true;
@@ -536,6 +523,7 @@ function nativeNotify(title, body, ongoing) {
   }).catch(() => {
   });
 }
+var _kaCtx = null;
 function startSilentKeepAlive() {
   if (_kaCtx || !(typeof window !== "undefined" && window.Capacitor)) return;
   try {
@@ -555,6 +543,7 @@ function startSilentKeepAlive() {
     logSwallow("silent-catch", e);
   }
 }
+var _fsTimer = null;
 function fsStart() {
   if (!(typeof window !== "undefined" && window.Capacitor)) return;
   try {
@@ -683,10 +672,8 @@ function notify(txt, kind) {
   pushLog(kind === "warn" ? "error" : "fill", txt);
   nativeNotify("AB-KING", txt);
 }
-function subscribe2(fn) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
-}
+var listeners = /* @__PURE__ */ new Set();
+var emitTimer = null;
 function emit() {
   for (const fn of [...listeners]) fn();
 }
@@ -702,6 +689,7 @@ function toast(m) {
   S.toastMsg = { text: m, at: Date.now() };
   emit();
 }
+var R = () => typeof window !== "undefined" && window.__ABKING_REMOTE ? String(window.__ABKING_REMOTE) : null;
 async function remoteCmd(action, payload) {
   const base = R();
   if (!base) return { ok: false, error: "no server" };
@@ -716,6 +704,10 @@ async function remoteCmd(action, payload) {
     return { ok: false, error: String(e?.message || e) };
   }
 }
+var _remoteFails = 0;
+var _remoteLogSeen = null;
+var _relayText = "";
+var _relayAt = 0;
 function relayServerLogs() {
   const logs = S.logs || [];
   if (_remoteLogSeen == null) {
@@ -796,12 +788,102 @@ async function detectRemoteServer() {
   }
   return false;
 }
-function netIsDown() {
-  return _netDownAt > 0;
-}
-function netDownSince() {
-  return _netDownAt > 0 ? Math.round((Date.now() - _wasDownStart) / 1e3) : 0;
-}
+var S = {
+  keys: null,
+  config: {
+    symbol: "XBTUSDTM",
+    displaySymbol: "BTC",
+    leverage: 3,
+    gridStepPct: 0.3,
+    huntPct: 0.15,
+    levels: 12,
+    direction: "short",
+    directionMode: "auto",
+    cycleBalance: 100,
+    mode: "paper",
+    tpNet: 0.12,
+    tpUsd: 1,
+    patienceHrs: 24,
+    patienceUsd: 0,
+    gapMode: false
+  },
+  status: "idle",
+  heartbeat: 0,
+  lastPrice: null,
+  markPrice: null,
+  // قاعدة المالك: تجميد الدخول عند وجود مراكز منصة غير مغلقة + حد أوامر الدورة
+  _exOpenCount: 0,
+  _noNewEntries: false,
+  _cycleMaxFills: 4,
+  _nextCycleMax: 0,
+  exPositions: [],
+  _flatStrikes: 0,
+  _flatConfirmed: false,
+  recentCoins: {},
+  // آخر تداول لكل عملة — قاعدة التنويع 24 ساعة
+  _tickMap: {},
+  _multMap: {},
+  // مواصفات كل رمز (tick ومضاعف)
+  multiplier: 1,
+  tickSize: 0.1,
+  makerFee: 2e-4,
+  takerFee: 6e-4,
+  funding: 0,
+  _metaSym: null,
+  maxOrderQty: 0,
+  exAvail: null,
+  exLeverage: null,
+  // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
+  grid: [],
+  position: null,
+  journal: [],
+  logs: [],
+  history: [],
+  linkOk: false,
+  intel: null,
+  exEquity: null,
+  realizedPnl: 0,
+  feesPaid: 0,
+  fundingPaid: 0,
+  cycleHarvested: 0,
+  slipCost: 0,
+  priceTrail: [],
+  emaFast: null,
+  emaSlow: null,
+  cvd: 0,
+  tape: [],
+  biasScore: 0,
+  biasReasons: [],
+  regime: null,
+  confluence: null,
+  huntAnchor: null,
+  gridAnchor: null,
+  lastHuntAt: 0,
+  lastAddAt: 0,
+  lastWorkAt: 0,
+  huntCount: 0,
+  liqPrice: null,
+  exLiqPrice: null,
+  mmr: 4e-3,
+  orderBook: { bids: [], asks: [] },
+  startedAt: null,
+  activeCycle: null,
+  studyUntil: 0,
+  studyAcc: null,
+  // دراسة العملة الجديدة قبل أي دخول
+  ignoreExchangeUntil: 0,
+  lastTickAt: null,
+  sound: true,
+  soundTone: "soft",
+  permDenied: false,
+  toastMsg: null,
+  _metaAt: 0,
+  _lastTrailAt: 0,
+  memory: { pairs: {}, cycles: 0, totalPnl: 0 }
+  // الذاكرة القوية — تبقى عبر الدورات ولا تُمسح أبدًا
+};
+var _netFailStreak = 0;
+var _netDownAt = 0;
 function netAlivePing(ok) {
   if (ok) {
     const wasDown = _netDownAt > 0;
@@ -825,6 +907,7 @@ function netAlivePing(ok) {
     }
   }
 }
+var _wasDownStart = 0;
 function saveAll() {
   try {
     localStorage.setItem("abking:cfg", JSON.stringify(S.config));
@@ -958,6 +1041,7 @@ function loadAll() {
 function pushLog(kind, text) {
   S.logs = [{ id: uid("l"), at: Date.now(), kind, text }, ...S.logs].slice(0, 80);
 }
+var _swallowAt = {};
 function logSwallow(where, err) {
   try {
     const msg = String(err && err.message || err || "unknown");
@@ -977,6 +1061,10 @@ function pushJr(row) {
   row.symbol = row.symbol || S.config.displaySymbol;
   S.journal = [row, ...S.journal].slice(0, 120);
 }
+var DIRECT_BASE = "https://api-futures.kucoin.com";
+var IS_SERVER = typeof process !== "undefined" && !!(process && process.env && process.env.ABKING_SERVER);
+var IS_NATIVE = IS_SERVER || typeof window !== "undefined" && (window.Capacitor || location.protocol === "capacitor:");
+var API_BASE = IS_NATIVE ? DIRECT_BASE : "/kucoin";
 function sig(ms) {
   const c = new AbortController();
   setTimeout(() => c.abort(), ms);
@@ -1073,24 +1161,33 @@ async function kcPrivate(method, path, body) {
   if (j.code !== "200000") throw new Error(j.msg || "KuCoin " + res.status);
   return j.data;
 }
+var fetchTicker = (s) => kcPublic("/api/v1/ticker?symbol=" + encodeURIComponent(s), 2500);
+var fetchContract = (s) => kcPublic("/api/v1/contracts/" + encodeURIComponent(s), 3500);
+var _bookFailsAt = 0;
+var _tapeFailsAt = 0;
+var fetchBook = (s) => kcPublic("/api/v1/level2/depth20?symbol=" + encodeURIComponent(s), 2500).then((d) => {
+  _bookFailsAt = 0;
+  return {
+    bids: (d.bids || []).map((r) => ({ price: +r[0], size: +r[1] })).filter((r) => r.price > 0),
+    asks: (d.asks || []).map((r) => ({ price: +r[0], size: +r[1] })).filter((r) => r.price > 0)
+  };
+}).catch((e) => {
+  _bookFailsAt = Date.now();
+  throw e;
+});
+var fetchTape = (s) => kcPublic("/api/v1/trade/history?symbol=" + encodeURIComponent(s), 2500).then((a) => {
+  _tapeFailsAt = 0;
+  return (a || []).slice(0, 32).map((t) => ({ side: String(t.side || ""), size: +t.size || 0, price: +t.price || 0 }));
+}).catch((e) => {
+  _tapeFailsAt = Date.now();
+  throw e;
+});
 function fetchKlines(symbol2, gran) {
   return kcPublic("/api/v1/kline/query?symbol=" + encodeURIComponent(symbol2) + "&granularity=" + gran, 6e3).then((a) => (a || []).map((r) => {
     let t = +r[0];
     if (t < 1e12) t *= 1e3;
     return { t, o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] || 0 };
   }).filter((k) => k.t > 0 && k.o > 0).sort((x, y) => x.t - y.t));
-}
-function listContracts() {
-  if (contractsCache && Date.now() - contractsCache.at < 3e5) return Promise.resolve(contractsCache.items);
-  return kcPublic("/api/v1/contracts/active", 6e3).then((d) => {
-    const items = (d || []).map((c) => ({
-      symbol: c.symbol,
-      base: String(c.baseCurrency || c.symbol.replace(/USDTM?$/i, "")),
-      name: String(c.baseCurrency || "")
-    }));
-    contractsCache = { at: Date.now(), items };
-    return items;
-  });
 }
 function radarScore(x) {
   let sc = 50;
@@ -1159,6 +1256,9 @@ function radarScore(x) {
   }
   return { score: clamp(Math.round(sc), 0, 100), why };
 }
+S._nextSymbol = null;
+S._nextReady = false;
+var _bgPipeAt = 0;
 async function backgroundPipeline() {
   if (S.status !== "running") return;
   if (Date.now() - _bgPipeAt < 3e4) return;
@@ -1167,6 +1267,39 @@ async function backgroundPipeline() {
     const __radarAge = S.radar && S.radar.at ? Date.now() - S.radar.at : 1e12;
     const r = S.radar && S.radar.list && S.radar.list.length && __radarAge < 6e5 ? S.radar : await scanRadar();
     if (!r || !r.list || !r.list.length) return;
+    if (!S.position && !studying() && S.status === "running") {
+      S.recentCoins = S.recentCoins || {};
+      const freshC = (l) => Date.now() - (S.recentCoins[l.symbol] || 0) > 24 * 3600 * 1e3;
+      const curL = r.list.find((l) => l.symbol === S.config.symbol);
+      const curOk = curL && Number(curL.score || 0) >= 68;
+      if (!curOk) {
+        const best = r.list.filter((l) => l.symbol !== S.config.symbol && Number(l.score || 0) >= 68 && (Number(l.turnover) || 0) >= 3e6 && freshC(l))[0];
+        if (best && (!S._oppPickAt || Date.now() - S._oppPickAt > 18e4)) {
+          S._oppPickAt = Date.now();
+          pushLog("server", "\u{1F3AF} \u0641\u0631\u0635\u0629 \u0645\u0624\u0647\u0644\u0629: " + best.disp + " (\u062F\u0631\u062C\u0629 " + best.score + " \xB7 \u0633\u064A\u0648\u0644\u0629 " + Math.round((Number(best.turnover) || 0) / 1e6) + "M) \u2014 \u062A\u064F\u062F\u0631\u0633 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
+          try {
+            saveCfg({
+              symbol: best.symbol,
+              leverage: S.config.leverage,
+              levels: S.config.levels,
+              gridStepPct: S.config.gridStepPct,
+              huntPct: S.config.huntPct,
+              tpNet: S.config.tpNet,
+              tpUsd: S.config.tpUsd,
+              cycleBalance: S.config.cycleBalance,
+              directionMode: S.config.directionMode,
+              mode: S.config.mode
+            });
+          } catch {
+          }
+          return;
+        }
+        if (!best && (!S._noOppAt || Date.now() - S._noOppAt > 6e5)) {
+          S._noOppAt = Date.now();
+          pushLog("server", "\u{1F550} \u0644\u0627 \u0641\u0631\u0635\u0629 \u0645\u0624\u0647\u0644\u0629 \u0627\u0644\u0622\u0646 (\u062F\u0631\u062C\u0629 68+ \u0648\u0633\u064A\u0648\u0644\u0629 3M+) \u2014 \u0627\u0646\u062A\u0638\u0627\u0631 \u0628\u0644\u0627 \u062F\u062E\u0648\u0644 \u0625\u062C\u0628\u0627\u0631\u064A");
+        }
+      }
+    }
     const cands = r.list.filter((l) => l.symbol !== S.config.symbol && (l.score || 0) >= 55);
     if (!cands.length) return;
     const nxt = cands[0];
@@ -1221,6 +1354,7 @@ function openNextReady() {
   });
   return true;
 }
+var FLEET_MODE = () => !!(typeof process !== "undefined" && process.env && process.env.ABKING_SLOT);
 async function scanRadar() {
   if (S._radarBusy) return S.radar;
   S._radarBusy = true;
@@ -1417,6 +1551,39 @@ async function postHarvestReselect() {
       return Date.now() - t > 24 * 3600 * 1e3;
     };
     const cur = r.list.find((l) => l.symbol === S.config.symbol);
+    if (!S.position && !studying() && S.status === "running") {
+      S.recentCoins = S.recentCoins || {};
+      const freshC = (l) => Date.now() - (S.recentCoins[l.symbol] || 0) > 24 * 3600 * 1e3;
+      const curL = r.list.find((l) => l.symbol === S.config.symbol);
+      const curOk = curL && Number(curL.score || 0) >= 68;
+      if (!curOk) {
+        const best = r.list.filter((l) => l.symbol !== S.config.symbol && Number(l.score || 0) >= 68 && (Number(l.turnover) || 0) >= 3e6 && freshC(l))[0];
+        if (best && (!S._oppPickAt || Date.now() - S._oppPickAt > 18e4)) {
+          S._oppPickAt = Date.now();
+          pushLog("server", "\u{1F3AF} \u0641\u0631\u0635\u0629 \u0645\u0624\u0647\u0644\u0629: " + best.disp + " (\u062F\u0631\u062C\u0629 " + best.score + " \xB7 \u0633\u064A\u0648\u0644\u0629 " + Math.round((Number(best.turnover) || 0) / 1e6) + "M) \u2014 \u062A\u064F\u062F\u0631\u0633 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
+          try {
+            saveCfg({
+              symbol: best.symbol,
+              leverage: S.config.leverage,
+              levels: S.config.levels,
+              gridStepPct: S.config.gridStepPct,
+              huntPct: S.config.huntPct,
+              tpNet: S.config.tpNet,
+              tpUsd: S.config.tpUsd,
+              cycleBalance: S.config.cycleBalance,
+              directionMode: S.config.directionMode,
+              mode: S.config.mode
+            });
+          } catch {
+          }
+          return;
+        }
+        if (!best && (!S._noOppAt || Date.now() - S._noOppAt > 6e5)) {
+          S._noOppAt = Date.now();
+          pushLog("server", "\u{1F550} \u0644\u0627 \u0641\u0631\u0635\u0629 \u0645\u0624\u0647\u0644\u0629 \u0627\u0644\u0622\u0646 (\u062F\u0631\u062C\u0629 68+ \u0648\u0633\u064A\u0648\u0644\u0629 3M+) \u2014 \u0627\u0646\u062A\u0638\u0627\u0631 \u0628\u0644\u0627 \u062F\u062E\u0648\u0644 \u0625\u062C\u0628\u0627\u0631\u064A");
+        }
+      }
+    }
     const cands = r.list.filter((l) => l.symbol !== S.config.symbol && (l.score || 0) >= 55);
     const bestOther = cands.find((l) => fresh(l)) || cands[0];
     const freshBest = r.list.filter((l) => fresh(l) && l.symbol !== S.config.symbol).find((l) => (l.score || 0) >= 45);
@@ -1456,6 +1623,7 @@ async function postHarvestReselect() {
     logSwallow("silent-catch", e);
   }
 }
+var _bgScanAt = 0;
 function bgRadarTick() {
   if (!R()) {
     if (Date.now() - _bgScanAt < 5 * 60 * 1e3) return;
@@ -1464,6 +1632,10 @@ function bgRadarTick() {
     });
   }
 }
+var _lastSwitchAt = 0;
+var GAP_MODE_ON = () => !!S.config.gapMode;
+var _gapScanAt = 0;
+var _gapStats = null;
 async function gapScan() {
   if (!GAP_MODE_ON()) return null;
   if (Date.now() - _gapScanAt < 60 * 1e3) return _gapStats;
@@ -1571,6 +1743,7 @@ function inPeakWindow() {
   const h = (/* @__PURE__ */ new Date()).getUTCHours();
   return h >= 13 && h <= 19;
 }
+var _btcLead = null;
 async function btcLead() {
   try {
     const now = Date.now();
@@ -1760,6 +1933,38 @@ async function exPosition(symbol2) {
     openedAt: Date.now()
   };
 }
+var exOrders = (symbol2) => kcPrivate("GET", "/api/v1/orders?status=active&symbol=" + encodeURIComponent(symbol2)).then((d) => {
+  const a = Array.isArray(d) ? d : d.items || [];
+  return a.map((o) => ({
+    orderId: o.id,
+    clientOid: o.clientOid || null,
+    side: o.side === "sell" ? "sell" : "buy",
+    price: +o.price,
+    size: +o.size,
+    filledSize: +(o.filledSize ?? o.dealSize ?? 0) || 0,
+    reduceOnly: !!o.reduceOnly
+  }));
+}).catch(() => null);
+var exFills = (symbol2) => kcPrivate("GET", "/api/v1/fills?symbol=" + encodeURIComponent(symbol2) + "&pageSize=100").then((d) => {
+  const a = Array.isArray(d) ? d : d.items || [];
+  return a.map((f) => ({
+    orderId: f.orderId || "",
+    clientOid: f.clientOid || null,
+    side: f.side === "sell" ? "sell" : "buy",
+    price: +f.price || 0,
+    size: +f.size || 0,
+    fee: Math.abs(+f.fee || 0),
+    feeCurrency: f.feeCurrency || "",
+    at: +f.createdAt || 0,
+    ts: f.tradeId || ""
+  }));
+}).catch(() => null);
+var exStops = (symbol2) => kcPrivate("GET", "/api/v1/stopOrders?symbol=" + encodeURIComponent(symbol2)).then((d) => {
+  const a = Array.isArray(d) ? d : d.items || [];
+  return a.map((o) => ({ id: o.id || o.orderId || "", stopPrice: +(o.stopPrice ?? o.price ?? 0) || 0 }));
+}).catch(() => null);
+var mmTried = {};
+var mmCache = {};
 function _mmFromPos(pos) {
   if (!pos) return null;
   if (typeof pos.marginMode === "string" && pos.marginMode) return pos.marginMode.toUpperCase();
@@ -2064,6 +2269,12 @@ async function exPlaceMarket(symbol2, side, qty) {
     marginMode: "CROSS"
   });
 }
+var exCancelAll = (symbol2) => kcPrivate("DELETE", "/api/v1/orders?symbol=" + encodeURIComponent(symbol2)).catch(() => {
+});
+var exCancelOne = (id) => kcPrivate("DELETE", "/api/v1/orders/" + id).catch(() => {
+});
+var exCancelStops = (symbol2) => kcPrivate("DELETE", "/api/v1/stopOrders?symbol=" + encodeURIComponent(symbol2)).catch(() => {
+});
 function exCloseQty(symbol2, side, qty) {
   return placeOrderSmart({
     clientOid: "cls_" + Date.now().toString(36) + Math.floor(Math.random() * 1e3),
@@ -3685,6 +3896,16 @@ function huntTrigger(p) {
   }
   if (!S.position && S._harvestAt && !S._reselectDone && Date.now() - S._harvestAt < 15 * 60 * 1e3) return null;
   if (studying()) return null;
+  if (!S.position) {
+    const rl = S.radar && Array.isArray(S.radar.list) ? S.radar.list.find((x) => x.symbol === S.config.symbol) : null;
+    if (rl && Number(rl.score || 0) < 68) {
+      if (!S._waitOppAt || Date.now() - S._waitOppAt > 3e5) {
+        S._waitOppAt = Date.now();
+        pushLog("server", "\u23F3 \u0644\u0627 \u0641\u0631\u0635\u0629 \u0645\u0624\u0647\u0644\u0629 \u0639\u0644\u0649 " + S.config.displaySymbol + " (\u062F\u0631\u062C\u0629 " + rl.score + "<68) \u2014 \u0627\u0646\u062A\u0638\u0627\u0631 \u0641\u0631\u0635\u0629 \u0623\u0641\u0636\u0644 \u0628\u0644\u0627 \u062F\u062E\u0648\u0644 \u0625\u062C\u0628\u0627\u0631\u064A");
+      }
+      return null;
+    }
+  }
   if (!S.position && S._lossStreak && S._lossStreak.side === S.config.direction && S._lossStreak.n >= 2 && Date.now() - S._lossStreak.at < 12e4) return null;
   const flipping = !!(S.position && S.config.direction !== S.position.side);
   if (addsBlocked() && !flipping) return null;
@@ -4406,6 +4627,10 @@ async function loadMarket(full) {
   }
   return m;
 }
+var _ordErrAt = 0;
+var _syncErrAt = 0;
+var _syncErrMsg = "";
+var _huntErrAt = 0;
 async function liveSync() {
   if (R()) return;
   if (S.config.mode !== "live" || !S.keys) return;
@@ -5279,26 +5504,7 @@ function saveCfg(v) {
   emit();
   toast("\u062A\u0645 \u062D\u0641\u0638 \u0627\u0644\u0645\u0639\u0627\u0645\u0644\u0627\u062A");
 }
-function equity() {
-  return S.config.cycleBalance + (S.position ? S.position.unrealized : 0);
-}
-function desk() {
-  const j = S.journal;
-  const closed = j.filter((r) => r.status !== "open"), open = j.filter((r) => r.status === "open");
-  return {
-    win: closed.filter((r) => r.pnl > 0),
-    lose: closed.filter((r) => r.pnl < 0),
-    open,
-    winPnl: closed.filter((r) => r.pnl > 0).reduce((a, r) => a + r.pnl, 0),
-    losePnl: closed.filter((r) => r.pnl < 0).reduce((a, r) => a + r.pnl, 0),
-    fees: S.feesPaid
-  };
-}
-function pulseAge() {
-  if (!S.lastTickAt) return "\u0644\u0627 \u0646\u0628\u0636";
-  const s = Math.max(0, Math.round((Date.now() - S.lastTickAt) / 1e3));
-  return s < 5 ? "\u0627\u0644\u0622\u0646" : s < 60 ? s + " \u062B" : "\u0642\u0628\u0644 " + Math.floor(s / 60) + " \u062F";
-}
+var booted = false;
 function initEngine() {
   if (booted) return;
   booted = true;
@@ -5392,273 +5598,8 @@ function initEngine() {
   });
   emit();
 }
-var TICK_MS, MAX_HUNT_OPEN, HUNT_COOLDOWN, ADD_COOLDOWN, SCOUT_MS, MIN_HUNT_GAP, TP_BASE_NET, LOSS_STOP_USD, clamp, uid, fmtPx, fmtUsd, fmtTime, nextEma, volSum, _channelsReady, _kaCtx, _fsTimer, listeners, emitTimer, R, _remoteFails, _remoteLogSeen, _relayText, _relayAt, S, _netFailStreak, _netDownAt, _wasDownStart, _swallowAt, DIRECT_BASE, IS_SERVER, IS_NATIVE, API_BASE, fetchTicker, fetchContract, _bookFailsAt, _tapeFailsAt, fetchBook, fetchTape, contractsCache, _bgPipeAt, FLEET_MODE, _bgScanAt, _lastSwitchAt, GAP_MODE_ON, _gapScanAt, _gapStats, _btcLead, exOrders, exFills, exStops, mmTried, mmCache, exCancelAll, exCancelOne, exCancelStops, _ordErrAt, _syncErrAt, _syncErrMsg, _huntErrAt, booted;
-var init_engine = __esm({
-  "src/engine.ts"() {
-    init_ws();
-    TICK_MS = 1e3;
-    MAX_HUNT_OPEN = 3;
-    HUNT_COOLDOWN = 1e4;
-    ADD_COOLDOWN = 15e3;
-    SCOUT_MS = 9e4;
-    MIN_HUNT_GAP = 0.08;
-    TP_BASE_NET = 0.12;
-    LOSS_STOP_USD = 16;
-    clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-    uid = (p) => p + "_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-    fmtPx = (n) => {
-      n = Number(n);
-      if (!n || !isFinite(n) || n <= 0) return "\u2014";
-      if (n >= 1e3) return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
-      if (n >= 1) return n.toFixed(2);
-      const d = Math.min(12, Math.max(4, -Math.floor(Math.log10(n)) + 4));
-      return n.toFixed(d);
-    };
-    fmtUsd = (n, d = 2) => {
-      const s = n < 0 ? "-" : n > 0 ? "+" : "";
-      return s + Math.abs(n).toFixed(d);
-    };
-    fmtTime = (t) => new Date(t).toLocaleTimeString("en-GB", { hour12: false });
-    nextEma = (p, x, k) => p == null ? x : x * k + p * (1 - k);
-    volSum = (l) => (l || []).reduce((a, b) => a + (b.size || 0), 0);
-    _channelsReady = false;
-    _kaCtx = null;
-    _fsTimer = null;
-    listeners = /* @__PURE__ */ new Set();
-    emitTimer = null;
-    R = () => typeof window !== "undefined" && window.__ABKING_REMOTE ? String(window.__ABKING_REMOTE) : null;
-    _remoteFails = 0;
-    _remoteLogSeen = null;
-    _relayText = "";
-    _relayAt = 0;
-    S = {
-      keys: null,
-      config: {
-        symbol: "XBTUSDTM",
-        displaySymbol: "BTC",
-        leverage: 3,
-        gridStepPct: 0.3,
-        huntPct: 0.15,
-        levels: 12,
-        direction: "short",
-        directionMode: "auto",
-        cycleBalance: 100,
-        mode: "paper",
-        tpNet: 0.12,
-        tpUsd: 1,
-        patienceHrs: 24,
-        patienceUsd: 0,
-        gapMode: false
-      },
-      status: "idle",
-      heartbeat: 0,
-      lastPrice: null,
-      markPrice: null,
-      // قاعدة المالك: تجميد الدخول عند وجود مراكز منصة غير مغلقة + حد أوامر الدورة
-      _exOpenCount: 0,
-      _noNewEntries: false,
-      _cycleMaxFills: 4,
-      _nextCycleMax: 0,
-      exPositions: [],
-      _flatStrikes: 0,
-      _flatConfirmed: false,
-      recentCoins: {},
-      // آخر تداول لكل عملة — قاعدة التنويع 24 ساعة
-      _tickMap: {},
-      _multMap: {},
-      // مواصفات كل رمز (tick ومضاعف)
-      multiplier: 1,
-      tickSize: 0.1,
-      makerFee: 2e-4,
-      takerFee: 6e-4,
-      funding: 0,
-      _metaSym: null,
-      maxOrderQty: 0,
-      exAvail: null,
-      exLeverage: null,
-      // _metaSym: الرمز الذي وُثّقت مواصفات عقده — لا أمر حقيقي بدونها
-      grid: [],
-      position: null,
-      journal: [],
-      logs: [],
-      history: [],
-      linkOk: false,
-      intel: null,
-      exEquity: null,
-      realizedPnl: 0,
-      feesPaid: 0,
-      fundingPaid: 0,
-      cycleHarvested: 0,
-      slipCost: 0,
-      priceTrail: [],
-      emaFast: null,
-      emaSlow: null,
-      cvd: 0,
-      tape: [],
-      biasScore: 0,
-      biasReasons: [],
-      regime: null,
-      confluence: null,
-      huntAnchor: null,
-      gridAnchor: null,
-      lastHuntAt: 0,
-      lastAddAt: 0,
-      lastWorkAt: 0,
-      huntCount: 0,
-      liqPrice: null,
-      exLiqPrice: null,
-      mmr: 4e-3,
-      orderBook: { bids: [], asks: [] },
-      startedAt: null,
-      activeCycle: null,
-      studyUntil: 0,
-      studyAcc: null,
-      // دراسة العملة الجديدة قبل أي دخول
-      ignoreExchangeUntil: 0,
-      lastTickAt: null,
-      sound: true,
-      soundTone: "soft",
-      permDenied: false,
-      toastMsg: null,
-      _metaAt: 0,
-      _lastTrailAt: 0,
-      memory: { pairs: {}, cycles: 0, totalPnl: 0 }
-      // الذاكرة القوية — تبقى عبر الدورات ولا تُمسح أبدًا
-    };
-    _netFailStreak = 0;
-    _netDownAt = 0;
-    _wasDownStart = 0;
-    _swallowAt = {};
-    DIRECT_BASE = "https://api-futures.kucoin.com";
-    IS_SERVER = typeof process !== "undefined" && !!(process && process.env && process.env.ABKING_SERVER);
-    IS_NATIVE = IS_SERVER || typeof window !== "undefined" && (window.Capacitor || location.protocol === "capacitor:");
-    API_BASE = IS_NATIVE ? DIRECT_BASE : "/kucoin";
-    fetchTicker = (s) => kcPublic("/api/v1/ticker?symbol=" + encodeURIComponent(s), 2500);
-    fetchContract = (s) => kcPublic("/api/v1/contracts/" + encodeURIComponent(s), 3500);
-    _bookFailsAt = 0;
-    _tapeFailsAt = 0;
-    fetchBook = (s) => kcPublic("/api/v1/level2/depth20?symbol=" + encodeURIComponent(s), 2500).then((d) => {
-      _bookFailsAt = 0;
-      return {
-        bids: (d.bids || []).map((r) => ({ price: +r[0], size: +r[1] })).filter((r) => r.price > 0),
-        asks: (d.asks || []).map((r) => ({ price: +r[0], size: +r[1] })).filter((r) => r.price > 0)
-      };
-    }).catch((e) => {
-      _bookFailsAt = Date.now();
-      throw e;
-    });
-    fetchTape = (s) => kcPublic("/api/v1/trade/history?symbol=" + encodeURIComponent(s), 2500).then((a) => {
-      _tapeFailsAt = 0;
-      return (a || []).slice(0, 32).map((t) => ({ side: String(t.side || ""), size: +t.size || 0, price: +t.price || 0 }));
-    }).catch((e) => {
-      _tapeFailsAt = Date.now();
-      throw e;
-    });
-    contractsCache = null;
-    S._nextSymbol = null;
-    S._nextReady = false;
-    _bgPipeAt = 0;
-    FLEET_MODE = () => !!(typeof process !== "undefined" && process.env && process.env.ABKING_SLOT);
-    _bgScanAt = 0;
-    _lastSwitchAt = 0;
-    GAP_MODE_ON = () => !!S.config.gapMode;
-    _gapScanAt = 0;
-    _gapStats = null;
-    _btcLead = null;
-    exOrders = (symbol2) => kcPrivate("GET", "/api/v1/orders?status=active&symbol=" + encodeURIComponent(symbol2)).then((d) => {
-      const a = Array.isArray(d) ? d : d.items || [];
-      return a.map((o) => ({
-        orderId: o.id,
-        clientOid: o.clientOid || null,
-        side: o.side === "sell" ? "sell" : "buy",
-        price: +o.price,
-        size: +o.size,
-        filledSize: +(o.filledSize ?? o.dealSize ?? 0) || 0,
-        reduceOnly: !!o.reduceOnly
-      }));
-    }).catch(() => null);
-    exFills = (symbol2) => kcPrivate("GET", "/api/v1/fills?symbol=" + encodeURIComponent(symbol2) + "&pageSize=100").then((d) => {
-      const a = Array.isArray(d) ? d : d.items || [];
-      return a.map((f) => ({
-        orderId: f.orderId || "",
-        clientOid: f.clientOid || null,
-        side: f.side === "sell" ? "sell" : "buy",
-        price: +f.price || 0,
-        size: +f.size || 0,
-        fee: Math.abs(+f.fee || 0),
-        feeCurrency: f.feeCurrency || "",
-        at: +f.createdAt || 0,
-        ts: f.tradeId || ""
-      }));
-    }).catch(() => null);
-    exStops = (symbol2) => kcPrivate("GET", "/api/v1/stopOrders?symbol=" + encodeURIComponent(symbol2)).then((d) => {
-      const a = Array.isArray(d) ? d : d.items || [];
-      return a.map((o) => ({ id: o.id || o.orderId || "", stopPrice: +(o.stopPrice ?? o.price ?? 0) || 0 }));
-    }).catch(() => null);
-    mmTried = {};
-    mmCache = {};
-    exCancelAll = (symbol2) => kcPrivate("DELETE", "/api/v1/orders?symbol=" + encodeURIComponent(symbol2)).catch(() => {
-    });
-    exCancelOne = (id) => kcPrivate("DELETE", "/api/v1/orders/" + id).catch(() => {
-    });
-    exCancelStops = (symbol2) => kcPrivate("DELETE", "/api/v1/stopOrders?symbol=" + encodeURIComponent(symbol2)).catch(() => {
-    });
-    _ordErrAt = 0;
-    _syncErrAt = 0;
-    _syncErrMsg = "";
-    _huntErrAt = 0;
-    booted = false;
-  }
-});
-
-// src/server-shims.ts
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-process.env.ABKING_SERVER = "1";
-var dir = join(homedir(), ".ab-king");
-try {
-  mkdirSync(dir, { recursive: true });
-} catch {
-}
-var __slot = process.env.ABKING_SLOT || "";
-var file = join(dir, __slot ? `trg-slot-${__slot}-store.json` : "trg-server-store.json");
-var data = {};
-try {
-  if (existsSync(file)) data = JSON.parse(readFileSync(file, "utf8") || "{}");
-} catch (e) {
-  data = {};
-}
-var timer = null;
-function persist() {
-  if (timer) return;
-  timer = setTimeout(() => {
-    timer = null;
-    try {
-      writeFileSync(file, JSON.stringify(data));
-    } catch {
-    }
-  }, 300);
-}
-globalThis.localStorage = {
-  getItem: (k) => k in data ? data[k] : null,
-  setItem: (k, v) => {
-    data[k] = String(v);
-    persist();
-  },
-  removeItem: (k) => {
-    delete data[k];
-    persist();
-  },
-  clear: () => {
-    data = {};
-    persist();
-  }
-};
-console.log("[AB-KING] \u0645\u062E\u0632\u0646 \u0627\u0644\u062D\u0627\u0644\u0629: " + file);
 
 // src/server-entry.ts
-init_engine();
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 var SRV_VER = "TRG-NEW-1.0.0";
@@ -5722,7 +5663,7 @@ if (SLOT > 0) {
           }
         }
       }
-      if (!bootPickDone && !S.position && S.config.symbol === "XBTUSDTM" && S.radar && Array.isArray(S.radar.list) && S.radar.list.length) {
+      if (false) {
         const bootStarted = S._bootAt || (S._bootAt = Date.now());
         if (Date.now() - bootStarted < (SLOT - 1) * 15e3) return;
         const qual = S.radar.list.filter((x) => x && x.symbol && x.symbol !== "XBTUSDTM" && (Number(x.score) || 0) >= 75 && (Number(x.vol24h) || Number(x.turnover) || Number(x.volume) || 1e18) >= 3e6);
@@ -5731,7 +5672,7 @@ if (SLOT > 0) {
           bootPickDone = true;
           pushLog("server", "\u{1F3AF} \u062A\u0639\u064A\u064A\u0646 \u0627\u0644\u0625\u0642\u0644\u0627\u0639: \u0627\u0644\u0645\u062D\u0631\u0643 " + SLOT + " \u064A\u0628\u062F\u0623 \u0639\u0644\u0649 " + pick.disp + " (\u0627\u0644\u0645\u0631\u062A\u0628\u0629 " + SLOT + " \u0641\u064A \u0627\u0644\u0631\u0627\u062F\u0627\u0631)");
           try {
-            (init_engine(), __toCommonJS(engine_exports)).saveCfg({
+            null.saveCfg({
               symbol: pick.symbol,
               leverage: S.config.leverage,
               levels: S.config.levels,
