@@ -1140,6 +1140,7 @@ async function kcPublic(path, timeout) {
 }
 async function kcPrivate(method, path, body) {
   if (!S.keys) throw new Error("\u0644\u0627 \u0645\u0641\u0627\u062A\u064A\u062D \u2014 \u0627\u0631\u0628\u0637 KuCoin \u0645\u0646 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A");
+  if (S._rlUntil && Date.now() < S._rlUntil) throw new Error("\u062A\u0647\u062F\u0626\u0629 \u062D\u0635\u0629 \u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u064A\u064F\u0639\u0627\u062F \u0628\u0639\u062F \u0642\u0644\u064A\u0644");
   const ts = String(Date.now());
   const raw = body ? JSON.stringify(body) : "";
   const signStr = ts + method + path + raw;
@@ -1158,7 +1159,12 @@ async function kcPrivate(method, path, body) {
     body: raw || void 0
   });
   const j = await res.json().catch(() => ({ code: "-1", msg: "bad json" }));
-  if (j.code !== "200000") throw new Error(j.msg || "KuCoin " + res.status);
+  if (j.code !== "200000") {
+    if (res.status === 429 || /too many|rate limit/i.test(String(j.msg || ""))) {
+      S._rlUntil = Date.now() + 15e3;
+    }
+    throw new Error(j.msg || "KuCoin " + res.status);
+  }
   return j.data;
 }
 var fetchTicker = (s) => kcPublic("/api/v1/ticker?symbol=" + encodeURIComponent(s), 2500);
@@ -1273,7 +1279,10 @@ async function backgroundPipeline() {
       const curL = r.list.find((l) => l.symbol === S.config.symbol);
       const curOk = curL && Number(curL.score || 0) >= 68;
       if (!curOk) {
-        const best = r.list.filter((l) => l.symbol !== S.config.symbol && Number(l.score || 0) >= 68 && (Number(l.turnover) || 0) >= 3e6 && freshC(l))[0];
+        const taken = (S._fleetTaken || []).map((x) => String(x));
+        const SL = parseInt(String(process.env?.ABKING_SLOT || ""), 10) || 1;
+        const qual = r.list.filter((l) => l.symbol !== S.config.symbol && Number(l.score || 0) >= 68 && (Number(l.turnover) || 0) >= 3e6 && freshC(l) && !taken.includes(String(l.symbol)));
+        const best = qual.length ? qual[(SL - 1) % qual.length] : null;
         if (best && (!S._oppPickAt || Date.now() - S._oppPickAt > 18e4)) {
           S._oppPickAt = Date.now();
           pushLog("server", "\u{1F3AF} \u0641\u0631\u0635\u0629 \u0645\u0624\u0647\u0644\u0629: " + best.disp + " (\u062F\u0631\u062C\u0629 " + best.score + " \xB7 \u0633\u064A\u0648\u0644\u0629 " + Math.round((Number(best.turnover) || 0) / 1e6) + "M) \u2014 \u062A\u064F\u062F\u0631\u0633 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
@@ -1557,7 +1566,10 @@ async function postHarvestReselect() {
       const curL = r.list.find((l) => l.symbol === S.config.symbol);
       const curOk = curL && Number(curL.score || 0) >= 68;
       if (!curOk) {
-        const best = r.list.filter((l) => l.symbol !== S.config.symbol && Number(l.score || 0) >= 68 && (Number(l.turnover) || 0) >= 3e6 && freshC(l))[0];
+        const taken = (S._fleetTaken || []).map((x) => String(x));
+        const SL = parseInt(String(process.env?.ABKING_SLOT || ""), 10) || 1;
+        const qual = r.list.filter((l) => l.symbol !== S.config.symbol && Number(l.score || 0) >= 68 && (Number(l.turnover) || 0) >= 3e6 && freshC(l) && !taken.includes(String(l.symbol)));
+        const best = qual.length ? qual[(SL - 1) % qual.length] : null;
         if (best && (!S._oppPickAt || Date.now() - S._oppPickAt > 18e4)) {
           S._oppPickAt = Date.now();
           pushLog("server", "\u{1F3AF} \u0641\u0631\u0635\u0629 \u0645\u0624\u0647\u0644\u0629: " + best.disp + " (\u062F\u0631\u062C\u0629 " + best.score + " \xB7 \u0633\u064A\u0648\u0644\u0629 " + Math.round((Number(best.turnover) || 0) / 1e6) + "M) \u2014 \u062A\u064F\u062F\u0631\u0633 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0627\u0644\u0635\u0641\u0642\u0629");
@@ -5724,7 +5736,15 @@ function mergedState(selIn = 0) {
     ...r,
     _slot: li + 1,
     at: Number(r.closedAt || r.openedAt || r.filledAt || (typeof r.at === "number" ? r.at : 0)) || 0
-  }))).sort((a, b) => b.at - a.at).slice(0, 200);
+  }))).sort((a, b) => b.at - a.at);
+  const seenKeys = /* @__PURE__ */ new Set();
+  st.journal = st.journal.filter((r) => {
+    if (r.status !== "closed") return true;
+    const k = String(r.symbol || "") + "|" + String(r.side || "") + "|" + Math.round(Number(r.qty) || 0) + "|" + Math.floor((Number(r.closedAt) || Number(r.at) || 0) / 6e4);
+    if (seenKeys.has(k)) return false;
+    seenKeys.add(k);
+    return true;
+  }).slice(0, 200);
   st.logs = (primary.logs || []).slice(-150);
   st.realizedPnl = live.reduce((a, x) => a + (x.realizedPnl || 0), 0);
   st.feesPaid = live.reduce((a, x) => a + (x.feesPaid || 0), 0);
