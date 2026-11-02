@@ -128,8 +128,11 @@ function mergedState(selIn = 0) {
   const primary = idx ? slotStates[idx] : (live.find(x => x.position) || live[0]);
   const st: any = { ...primary };
   // سجل الصفقات لكل الأسطول (مع رمز العملة في كل صف) — والعدادات تُحسب منه أسطولياً
-  st.journal = live.flatMap((x, li) => (x.journal || []).map((r: any) => ({ ...r, _slot: li + 1 })))
-    .sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 150);
+  // ترتيب موثوق بالأحدث: طابع رقمي موحّد لكل صف (at قد يكون نصاً في صفوف قديمة)
+  st.journal = live.flatMap((x, li) => (x.journal || []).map((r: any) => ({
+      ...r, _slot: li + 1,
+      at: Number(r.closedAt || r.openedAt || r.filledAt || (typeof r.at === 'number' ? r.at : 0)) || 0,
+    }))).sort((a, b) => b.at - a.at).slice(0, 200);
   // سجل السيرفر: تفاصيل المحرك المعروض فقط (العملة المختارة)
   st.logs = (primary.logs || []).slice(-150);
   st.realizedPnl = live.reduce((a, x) => a + (x.realizedPnl || 0), 0);

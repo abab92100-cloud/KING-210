@@ -714,7 +714,8 @@ export async function postHarvestReselect(){
     const pick=bestOther||freshBest;
     S._reselectDone=true; S._nextReady=false; S._nextSymbol=null; // القرار اتخذ — لا قفز مزدوج
     if(!pick){
-      pushLog('server','🔎 بعد الجني: لا عملة مؤهلة (55+) ولا بديل جديد غير متداول مؤخراً — استئناف على العملة الحالية');
+      S._waitFreshUntil=Date.now()+30*60000;
+      pushLog('server','🔎 بعد الجني: لا بديل جديد مؤهل — لا إعادة دخول لنفس العملة — بانتظار مرشح جديد من الدراسة الشاملة (حتى 30 دقيقة)');
       return; }
     const curSc=cur?(cur.score||0):0;
     // قاعدة المالك النهائية: بعد الجني يوجد بديل مؤهل (55+)؟ انتقال مباشر إليه.
@@ -728,6 +729,7 @@ export async function postHarvestReselect(){
     toast('🔄 بعد الجني: '+pick.disp+' — '+pick.score);
     nativeNotify('AB-KING — انتقال بعد الجني',pick.disp+' درجة '+pick.score);
     S.recentCoins[pick.symbol]=Date.now();
+    S._waitFreshUntil=0;
     saveCfg({symbol:pick.symbol,leverage:S.config.leverage,levels:S.config.levels,
       gridStepPct:S.config.gridStepPct,huntPct:S.config.huntPct,tpNet:S.config.tpNet,tpUsd:S.config.tpUsd,
       cycleBalance:S.config.cycleBalance,directionMode:S.config.directionMode,
@@ -1621,6 +1623,7 @@ function armProgressive(){ if(S.status!=='running') return;
   // القاطع المرحلي: لا تسليح جديد أثناءه — الدفعة القادمة بعد الدراسة
   if(batchHoldActive()) return;
   if(S._noNewEntries) return; // تجميد الدخول حتى تُغلق المراكز الزائدة بربح
+  if(S._waitFreshUntil&&Date.now()<S._waitFreshUntil) return; // انتظار مرشح جديد (تنويع)
   // سقف التعرّض: لا مزيد من المستويات عند بلوغه — حماية من التصفية بلا وقف خسارة
   if(exposureCapped()){
     if(!S._expCapAt||Date.now()-S._expCapAt>300000){ S._expCapAt=Date.now();
@@ -2434,6 +2437,7 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   // القاطع المرحلي: لا إضافات صيد أثناءه
   if(batchHoldActive()) return null;
   if(S._noNewEntries) return null; // تجميد كامل: مراكز منصة زائدة لم تُغلق بربح بعد
+  if(S._waitFreshUntil&&Date.now()<S._waitFreshUntil) return null; // انتظار مرشح جديد (تنويع)
   // سقف التعرّض: لا إضافات جديدة عنده — الحجم الكلي محكوم رياضياً
   if(S.position&&exposureCapped()) return null;
   // ─── إصلاح الكارثة: لا إضافات صيد مادامت فرملة التقلب نشطة — لا تغذية للانهيار ───
