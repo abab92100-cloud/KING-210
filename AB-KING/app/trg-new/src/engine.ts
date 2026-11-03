@@ -1675,7 +1675,11 @@ export function batchHoldActive(){
     const p=S.lastPrice, long=S.position.side==='long';
     const worst=(S._batchWorst==null)?p:(long?Math.min(S._batchWorst,p):Math.max(S._batchWorst,p));
     if(worst!==S._batchWorst){ S._batchWorst=worst; S._batchWorseAt=Date.now(); } }
-  const __real=realBatchFills(); S._batchFills=__real; // تثبيت الحقيقة على الحالة
+  // الحقيقة = أوامرنا القائمة على المنصة + تعبئات أوامرنا (بادئاتنا فقط)
+  const __live=Math.max(0,Number(S._exEntryOpenN)||0);
+  const __filled=Math.max(0,Number(S._entryFillsN)||0);
+  const __real=Math.max(__live+__filled, 0);
+  S._batchFills=__real;
   if(__real<(S._cycleMaxFills||4)) return false;
   // ─── قاعدة المالك الزمنية (أمر 2026-10-24): انزلاق بعد 4 أوامر =
   // توقف كامل 3 ساعات، ثم دراسة: استمرار الانزلاق = +ساعة إضافية ودراسة،
@@ -3506,15 +3510,21 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
       // «أمر واحد و3 غير موجودة»): كل تنفيذ غير reduceOnly بعد فتح المركز
       // = أمر تعبئة واحد — أدق من أي تقدير محلي ───
       try{
+        // ─── نعدّ أوامرنا فقط (بادئات clientOid التي نضعها) — سبب اختلاف 3
+        // محركات: كان يعدّ أي تنفيذ دخول على الرمز (أوامر يدوية/قديمة) فيظن
+        // المجموعة مكتملة ويرفض التسليح: «القاطع ماضٍ (4)» والحقيقة أقل ───
+        const OUR=['hunt_','oid_','grp_','rep_','orph_','cls_'];
         const openedAt=(S.position&&S.position.openedAt)||0;
         const side=S.position? (S.position.side==='long'?'buy':'sell') : null;
         const uniq=new Set<string>();
         for(const f of fills){ const tt=Number(f.tradeTime)||0;
+          const co=String(f.clientOid||'');
+          if(!OUR.some(pf=>co.startsWith(pf))) continue;   // ليس أمرنا
           if(openedAt&&tt<openedAt-120000) continue;
           if(side&&String(f.side||'').toLowerCase()!==side) continue;
           if(f.reduceOnly) continue;
-          uniq.add(String(f.orderId||f.clientOid||f.tradeId||Math.random())); }
-        if(uniq.size>0){ S._entryFillsN=uniq.size; }
+          uniq.add(String(f.orderId||co)); }
+        S._entryFillsN=uniq.size;   // قد تكون صفراً — معلومة صحيحة لا تُتجاهل
       }catch{}
       for(const l of S.grid){ if(l.status==='cancelled'||l.status==='filled') continue;
         const e=agg(l.clientOid,byOidF)||agg(l.exchangeOrderId,byIdF);
