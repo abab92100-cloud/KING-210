@@ -2491,8 +2491,12 @@ function priceKick() {
 }
 function realBatchFills() {
   const c = S.config || {};
-  if (S._entryFillsN != null && Number(S._entryFillsN) > 0 && S.position) {
-    return Math.max(0, Math.min(20, Number(S._entryFillsN)));
+  if (S._entryFillsN != null && Number(S._entryFillsN) > 0 && S.position && Number(S.position.openedAt) > 0) {
+    const byCount = Math.max(0, Math.min(20, Number(S._entryFillsN)));
+    const noti = (S.position.size || 0) * (S.multiplier || 1) * (S.position.entry || 0);
+    const perMax = Math.max(3, Number(c.cycleBalance) || 3);
+    const byValue = Math.max(1, Math.ceil(noti / Math.max(3, perMax * 0.2)));
+    return Math.min(byCount, byValue);
   }
   if (S.position && S.multiplier > 0) {
     const notional = (S.position.size || 0) * S.multiplier * (S.position.entry || 0);
@@ -5556,13 +5560,17 @@ function saveCfg(v) {
       });
       exCancelStops(old).catch(() => {
       });
-      if (S.position) exCloseQty(old, S.position.side, S.position.size).catch((e) => pushLog("error", "\u0625\u063A\u0644\u0627\u0642 \u0645\u0631\u0643\u0632 \u0627\u0644\u0632\u0648\u062C \u0627\u0644\u0633\u0627\u0628\u0642 \u0641\u0634\u0644: " + (e.message || e)));
-      pushLog("server", "\u0623\u064F\u0644\u063A\u064A\u062A \u0623\u0648\u0627\u0645\u0631 \u0648\u0648\u0642\u0641 " + old + " \u0648\u0623\u064F\u063A\u0644\u0642 \u0645\u0631\u0643\u0632\u0647 \u0642\u0628\u0644 \u0627\u0644\u0627\u0646\u062A\u0642\u0627\u0644");
+      pushLog("server", "\u21AA\uFE0F \u0623\u064F\u0644\u063A\u064A\u062A \u0623\u0648\u0627\u0645\u0631 " + old + " \u0641\u0642\u0637 \u2014 \u0644\u0627 \u0625\u063A\u0644\u0627\u0642 \u0623\u064A \u0645\u0631\u0643\u0632 (\u0633\u0631\u0628 \u0627\u0644\u0625\u0646\u0642\u0627\u0630 \u064A\u062A\u0648\u0644\u0627\u0647 \u0628\u062C\u0646\u064A \u0631\u0627\u0628\u062D)");
     }
     S.grid = [];
     S.position = null;
     S._tpBanked = 0;
     S._trailFloor = 0;
+    S._entryFillsN = 0;
+    S._batchFills = 0;
+    S._batchHoldAt = 0;
+    S._batchWorst = null;
+    S._batchWorseAt = 0;
     S.realizedPnl = 0;
     S.feesPaid = 0;
     S.fundingPaid = 0;
