@@ -2192,30 +2192,62 @@ async function softTopUp() {
   }
   const entries = ex.filter((o) => o && o.reduceOnly !== true);
   S._exEntryOpenN = entries.length;
-  if (entries.length >= 4) return 0;
-  const cand = (S.grid || []).filter((l) => !l.reduceOnly && l.status === "armed" && !l.exchangeOrderId).sort((a, b) => Math.abs((a.price || 0) - (S.lastPrice || 0)) - Math.abs((b.price || 0) - (S.lastPrice || 0)))[0];
-  if (!cand) return 0;
-  const px = Number(cand.price) || 0;
-  if (!(px > 0)) return 0;
-  if (entries.some((o) => Math.abs((Number(o.price) || 0) - px) / px < 8e-4)) {
-    cand.status = "cancelled";
-    return 0;
+  const filled = Math.max(0, Number(S._entryFillsN) || 0);
+  const need = 4 - (entries.length + filled);
+  if (need <= 0) return 0;
+  const short = S.position.side === "short";
+  const cur = Number(S.lastPrice) || Number(S.position.entry) || 0;
+  if (!(cur > 0)) return 0;
+  const tk = S._tickMap && S._tickMap[S.config.symbol] || S.tickSize || 1e-8;
+  const dup = (px2) => entries.some((o) => Math.abs((Number(o.price) || 0) - px2) / px2 < 8e-4);
+  const valid = (px2) => short ? px2 > cur * 1.0004 : px2 < cur * 0.9996;
+  let px = 0, oid = null, qty = 0;
+  const cand = (S.grid || []).filter((l) => !l.reduceOnly && l.status === "armed" && !l.exchangeOrderId).sort((a, b) => Math.abs((a.price || 0) - cur) - Math.abs((b.price || 0) - cur))[0];
+  if (cand && Number(cand.price) > 0 && valid(Number(cand.price)) && !dup(Number(cand.price))) {
+    px = Number(cand.price);
+    oid = cand.clientOid;
+    qty = capEntryQty(cand.qty, px);
   }
+  if (!(px > 0)) {
+    const anchor = short ? Math.max(Number(S.position.entry) || cur, cur) : Math.min(Number(S.position.entry) || cur, cur);
+    for (const pct of [22e-4, 45e-4, 66e-4, 9e-3]) {
+      const q = roundTick(short ? anchor * (1 + pct) : anchor * (1 - pct), tk);
+      if (!(q > 0) || !valid(q) || dup(q)) continue;
+      px = q;
+      break;
+    }
+    if (!(px > 0)) return 0;
+    qty = capEntryQty(contractsForLevel(px), px);
+  }
+  if (!(qty >= 1)) return 0;
   try {
-    await exPlaceLimit({
-      clientOid: cand.clientOid,
+    const r = await exPlaceLimit({
+      clientOid: oid || uid("grp"),
       symbol: S.config.symbol,
-      side: cand.side,
+      side: short ? "sell" : "buy",
       price: px,
-      qty: capEntryQty(cand.qty, px),
+      qty,
       reduceOnly: false,
       leverage: S.config.leverage
     });
-    cand.status = "open";
-    pushLog("server", "\u2795 \u062A\u0639\u0628\u0626\u0629 \u0622\u0645\u0646\u0629: \u0623\u0645\u0631 @ " + fmtPx(px) + " \u2014 \u0627\u0644\u0642\u0627\u0626\u0645 " + (entries.length + 1) + "/4");
+    try {
+      (S.grid || []).push({
+        id: uid("ex"),
+        clientOid: oid || r.clientOid || uid("oid"),
+        side: short ? "sell" : "buy",
+        price: px,
+        qty,
+        status: "open",
+        reduceOnly: false,
+        exchangeOrderId: r.orderId,
+        filledAt: null,
+        origin: "grid"
+      });
+    } catch {
+    }
+    pushLog("server", "\u2795 \u0627\u0633\u062A\u0639\u0627\u062F\u0629 \u0623\u0645\u0631 \u0645\u0641\u0642\u0648\u062F @ " + fmtPx(px) + " \xD7" + qty + " \u2014 \u0627\u0644\u0645\u0643\u062A\u0645\u0644 " + (entries.length + filled + 1) + "/4");
     return 1;
   } catch (e) {
-    cand._lastErr = String(e?.message || e);
     return 0;
   }
 }
@@ -2271,6 +2303,11 @@ async function cancelEntryOrders() {
     pushLog("error", "\u062A\u0646\u0638\u064A\u0645 \u0627\u0644\u0637\u0648\u0627\u0631\u0626 \u0641\u0634\u0644: " + String(e?.message || e));
   }
   return { ok: true, cancelled, kept, symbol: sym };
+}
+function enableEntries() {
+  S._entriesEnabled = true;
+  pushLog("server", "\u25B6\uFE0F \u0641\u064F\u062A\u062D\u062A \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u2014 \u0627\u0633\u062A\u0639\u0627\u062F\u0629 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0641\u0642\u0648\u062F\u0629 (\u062D\u062A\u0649 4 \u0644\u0643\u0644 \u0635\u0641\u0642\u0629) \u0628\u0644\u0627 \u0632\u064A\u0627\u062F\u0629 \u0623\u0648 \u0646\u0642\u0635\u0627\u0646");
+  return { ok: true, enabled: true };
 }
 function gridStatus() {
   const c = S.config;
@@ -5267,6 +5304,13 @@ async function liveSync() {
       S._exEntryOpenN = (Array.isArray(exs) ? exs : []).filter((o) => o && o.reduceOnly !== true).length;
     } catch {
     }
+    if (!S._entriesEnabled) {
+      if (!S._gateLogAt || Date.now() - S._gateLogAt > 18e5) {
+        S._gateLogAt = Date.now();
+        pushLog("server", "\u23F8 \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u063A\u0644\u0642\u0629 \u2014 \u0646\u0641\u0651\u0630 \xAB\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0623\u0648\u0627\u0645\u0631\xBB \u0623\u0648 \xAB\u0628\u062F\u0627\u064A\u0629 \u0646\u0638\u064A\u0641\u0629\xBB \u0644\u0641\u062A\u062D \u0645\u0648\u062C\u0629 \u062C\u062F\u064A\u062F\u0629");
+      }
+      return;
+    }
     const want = S.grid.filter((l) => l.status === "armed").sort((a, b) => Math.abs((a.price || 0) - (S.lastPrice || 0)) - Math.abs((b.price || 0) - (S.lastPrice || 0)));
     if (!S.permDenied) for (const l of want) {
       if (l.exchangeOrderId) continue;
@@ -5947,7 +5991,7 @@ function initEngine() {
 // src/server-entry.ts
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "KING-1.9.6";
+var SRV_VER = "KING-1.9.7";
 var FLEET_N = 1;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
@@ -6206,6 +6250,8 @@ var srv = createServer(async (req, res) => {
             const rr = await cleanStart();
             return send(res, 200, rr);
           }
+          case "enableEntries":
+            return send(res, 200, enableEntries());
           case "ensureFour": {
             const need = ensureGroupFour();
             return send(res, 200, { ok: true, need });
@@ -6242,6 +6288,10 @@ var srv = createServer(async (req, res) => {
       } catch {
       }
       const a = String(j.action || "");
+      if (a === "enableAll") {
+        const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 8e3, { action: "enableEntries" })));
+        return send(res, 200, { ok: true, results: rs });
+      }
       if (a === "cleanAll") {
         const first = await jfetch("http://127.0.0.1:" + (BASE_PORT + 1) + "/cmd", 6e4, { action: "cleanStart" });
         const rest = await Promise.all(Array.from({ length: Math.max(0, FLEET_N - 1) }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 2 + i) + "/cmd", 3e4, { action: "cleanStart" })));
