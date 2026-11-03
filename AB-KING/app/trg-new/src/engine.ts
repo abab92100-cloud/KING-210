@@ -312,7 +312,13 @@ function saveAll(){ try{
     feesPaid:S.feesPaid,fundingPaid:S.fundingPaid||0,cycleHarvested:S.cycleHarvested||0,priceTrail:S.priceTrail,cvd:S.cvd,huntCount:S.huntCount,
     lastPrice:S.lastPrice,markPrice:S.markPrice,activeCycle:S.activeCycle,status:S.status,
     history:S.history,logs:S.logs,recentCoins:S.recentCoins||{},
-    _tickMap:S._tickMap||{},_multMap:S._multMap||{},savedAt:Date.now(),
+    _tickMap:S._tickMap||{},_multMap:S._multMap||{},
+    _entriesEnabled:!!S._entriesEnabled,          // بوابة الدخول (مغلفة افتراضياً)
+    _entryFillsN:S._entryFillsN||0,               // تعبئات المنصة
+    _batchFills:S._batchFills||0,_batchHoldAt:S._batchHoldAt||0,
+    _batchWorst:S._batchWorst||null,_batchWorseAt:S._batchWorseAt||0,
+    _groupN:S._groupN||1,
+    savedAt:Date.now(),
     // أعلام دورة الجني (قاعدة المالك: إعادة الاختيار بعد الجني) — تُحفظ حتى لا
     // تضيع إعادة الاختيار عند إعادة تشغيل السيرفر/الجوال بعد الجني مباشرة
     _harvestAt:S._harvestAt||0,_reselectDone:!!S._reselectDone,
