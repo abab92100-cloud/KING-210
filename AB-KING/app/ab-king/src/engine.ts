@@ -1243,6 +1243,50 @@ export function groupNeed(){
   const total=filledOrders+liveEntries;
   return Math.max(0,Math.min(4,4-total));
 }
+/* ═══ مطابقة المجموعة مع المنصة (حل جذري 3 نوفمبر — بدل إعادة البناء الأعمى):
+   1) نقرأ أوامر الدخول القائمة فعلياً على المنصة (المصدر الوحيد للحقيقة)
+   2) نحسب الناقص = 4 − القائم
+   3) نضع الناقص فقط، كل أمر في الجانب الصحيح من السعر الحالي (لا تنفيذ فوري)
+      وبمسافة من السعر الحالي (لا ننتظر عودة السعر — عيب PEPE)
+   4) نرفض أي سعر يكرر أمراً قائماً (عيب DOGE: 4 أوامر فوق الموجودة)
+   النتيجة: 4 أوامر دائماً، بلا تكرار، بلا انتظار، بلا إعادة بناء أعمى ═══ */
+async function exOpenEntries(sym:any){
+  try{ const r=await exOrders(sym); const arr:any[]=Array.isArray(r)?r:((r&&(r as any).data)||[]);
+    return arr.filter((o:any)=>o&&o.reduceOnly!==true&&Number(o.price)>0)
+      .map((o:any)=>({id:o.id||o.orderId,price:Number(o.price),size:Number(o.size)}));
+  }catch(e){ logSwallow('exOpenEntries',e); return null; }
+}
+export async function reconcileGroup(){
+  if(S.config.mode!=='live'||!S.keys||!S.position) return 0;
+  if(batchHoldActive()) return 0;
+  const sym=S.config.symbol;
+  const ex=await exOpenEntries(sym); if(!ex) return 0;      // فشل القراءة: لا إجراء (لا تكرار أعمى)
+  const need=4-ex.length;
+  if(need<=0){ return 0; }
+  const cur=Number(S.lastPrice)||Number(S.position.entry)||0; if(!(cur>0)) return 0;
+  const short=S.position.side==='short';
+  const tk=(S._tickMap&&S._tickMap[sym])||S.tickSize||1e-8;
+  const pcts=[0.0015,0.0030,0.0045,0.0060]; // ~0.15% بين كل أمر (المجموعة الأولى)
+  let placed=0;
+  for(const pct of pcts){
+    if(placed>=need) break;
+    const px=roundTick(short? cur*(1+pct) : cur*(1-pct), tk);
+    if(!(px>0)) continue;
+    if(short && !(px>cur*1.0002)) continue;                 // بيع على المنصة = أعلى من السعر
+    if(!short && !(px<cur*0.9998)) continue;                // شراء = أدنى من السعر
+    if(ex.some((o:any)=>Math.abs(o.price-px)/px<0.0005)) continue; // لا تكرار
+    const qty=capEntryQty(contractsForLevel(px),px);
+    if(!(qty>=1)) continue;
+    try{
+      await exPlaceLimit({clientOid:uid('grp'),symbol:sym,side:short?'sell':'buy',
+        price:px,qty,reduceOnly:false,leverage:S.config.leverage});
+      placed++;
+      pushLog('server','➕ أمر ضمن المجموعة @ '+fmtPx(px)+' ×'+qty+' — المكتمل '+(ex.length+placed)+'/4');
+    }catch(e){ logSwallow('groupPlace',e); }
+  }
+  if(placed>0) S._lastGroupFillAt=Date.now();
+  return placed;
+}
 export function ensureGroupFour(){
   if(S.config.mode!=='live'||!S.keys||!S.position) return 0;
   if(batchHoldActive()) return 0;
@@ -3448,7 +3492,10 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     // بعد) لا تُحسب (كانت تُحسب فتُقفل البوابة دائماً ← «رفض تسليح» مع أمر واحد!)
     const _liveAdds=S.grid.filter(l=>!l.reduceOnly&&(l.status==='open'||l.status==='filled')).length;
     const _room=Math.max(0,4-realBatchFills()-_liveAdds);
-    try{ ensureGroupFour(); }catch{}
+    try{ await reconcileGroup(); }catch{} // مطابقة تفاضلية مع المنصة (لا إعادة بناء أعمى)
+    // عدد أوامر الدخول القائمة فعلياً في المنصة (من exs المحمّلة أعلاه) —
+    // يمنع أي إرسال زائد من حلقة التسليح القديمة (عيب DOGE: 4 فوق الموجودة)
+    try{ S._exEntryOpenN=(Array.isArray(exs)?exs:[]).filter((o:any)=>o&&o.reduceOnly!==true).length; }catch{}
     const want=S.grid.filter(l=>(l.status==='armed')).sort((a,b)=>Math.abs((a.price||0)-(S.lastPrice||0))-Math.abs((b.price||0)-(S.lastPrice||0)));
     if(!S.permDenied) for(const l of want){ if(l.exchangeOrderId) continue;
       // ─── فصل دقيق (المصيبة المتكررة 3 نوفمبر): التجميد بسبب مركز زائد في
@@ -3456,7 +3503,8 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
       // بأمر واحد للأبد. الصحيح: التجميد يمنع الدخول في عملة/مركز جديد فقط،
       // ولا يمنع استكمال الأوامر الأربعة لمركز يملكه هذا المحرك بالفعل ───
       const __freezeBlocks=!!S._noNewEntries&&!S.position;
-      if(!l.reduceOnly&&(batchHoldActive()||__freezeBlocks||exposureCapped()||_room<=0)){
+      if(!l.reduceOnly&&(batchHoldActive()||__freezeBlocks||exposureCapped()||_room<=0
+        ||(Number(S._exEntryOpenN)||0)>=4)){
         // يبقى مسلحاً (لا يُلغى) حتى يزول المانع — فلا تضيع أوامر المجموعة
         l.exchangeOrderId=null; l._blockedAt=Date.now();
         if(!S._armedBlkAt||Date.now()-S._armedBlkAt>300000){ S._armedBlkAt=Date.now();
