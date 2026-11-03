@@ -2289,7 +2289,7 @@ function strategyFingerprint() {
     "maxOrd:4",
     "grp:4",
     "hold:3h",
-    "ladder:0.15/0.22/0.45/0.66/0.90"
+    "ladder:0.22/0.45/0.66/0.90/1.15"
   ].join("|");
 }
 function alignStrategy(cfg) {
@@ -3007,8 +3007,9 @@ function buildGrid(center, wide, initialCount) {
   }
   const reach = Math.max(spanMin, Math.min(step * n * 2, 0.12));
   if (span > reach) span = reach;
-  const pctA = Math.max(0.12, Math.min(0.3, (S.config.gridStepPct || 0.3) * 0.5)) / 100;
-  const GSP = [0, pctA, 0.22 / 100, 0.45 / 100, 0.66 / 100, 0.9 / 100];
+  const LADDER = [22e-4, 45e-4, 66e-4, 9e-3, 0.0115];
+  const pctA = LADDER[0];
+  const GSP = [0, LADDER[0], LADDER[1], LADDER[2], LADDER[3], LADDER[4]];
   const grpStep = (idx) => GSP[Math.min(5, Math.max(1, Math.ceil(idx / 4)))];
   const ownerLadderDist = (idx) => {
     let d = 0;
