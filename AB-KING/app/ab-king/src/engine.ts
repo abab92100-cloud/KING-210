@@ -1475,9 +1475,15 @@ export function priceKick(){ const t=S.priceTrail||[]; if(t.length<12) return {u
    الفعلية على المنصة ÷ قيمة الأمر الواحد (سقف نصيب المحرك) ─── */
 export function realBatchFills(){
   const c:any=S.config||{};
-  // 1) الأصدق: عدد تنفيذات الدخول المقروءة من المنصة نفسها
-  if(S._entryFillsN!=null&&Number(S._entryFillsN)>0&&S.position){
-    return Math.max(0,Math.min(20,Number(S._entryFillsN))); }
+  // 1) الأصدق: تنفيذات المنصة — بشرط وجود وقت فتح صالح (وإلا نقع على تنفيذات
+  // قديمة للرمز فنظن المجموعة مكتملة: «القاطع ماض 4» مع أمر واحد!)
+  if(S._entryFillsN!=null&&Number(S._entryFillsN)>0&&S.position&&Number(S.position.openedAt)>0){
+    const byCount=Math.max(0,Math.min(20,Number(S._entryFillsN)));
+    // سقف منطقي: لا يزيد عن تقدير القيمة ÷ أصغر أمر ممكن
+    const noti=(S.position.size||0)*(S.multiplier||1)*(S.position.entry||0);
+    const perMax=Math.max(3,Number(c.cycleBalance)||3);
+    const byValue=Math.max(1,Math.ceil(noti/Math.max(3,perMax*0.2)));
+    return Math.min(byCount,byValue); }
   if(S.position&&S.multiplier>0){
     const notional=(S.position.size||0)*S.multiplier*(S.position.entry||0);
     const perOrder=Math.max(3,Number(c.cycleBalance)||3);
@@ -3687,10 +3693,11 @@ export function saveCfg(v){
     // الوضع الحقيقي: ألغِ أوامر الزوج السابق وأوقفه وأغلق مركزه قبل الانتقال — لا أوامر يتيمة بلا رقيب
     if(S.config.mode==='live'&&S.keys){ exCancelAll(old).catch(()=>{});
       exCancelStops(old).catch(()=>{});
-      if(S.position) exCloseQty(old,S.position.side,S.position.size)
-        .catch(e=>pushLog('error','إغلاق مركز الزوج السابق فشل: '+(e.message||e)));
-      pushLog('server','أُلغيت أوامر ووقف '+old+' وأُغلق مركزه قبل الانتقال'); }
-    S.grid=[]; S.position=null; S._tpBanked=0; S._trailFloor=0; // سجل الصفقات يبقى — التاريخ لا يُمسح عند الانتقال
+      // ─── لا إغلاق مراكز عند التبديل إطلاقاً (قاعدة المالك: لا خسارة) —
+      // أي مركز حقيقي باقٍ يدخله سرب الإنقاذ ويثبت له جني رابحاً ───
+      pushLog('server','↪️ أُلغيت أوامر '+old+' فقط — لا إغلاق أي مركز (سرب الإنقاذ يتولاه بجني رابح)'); }
+    S.grid=[]; S.position=null; S._tpBanked=0; S._trailFloor=0;
+    S._entryFillsN=0; S._batchFills=0; S._batchHoldAt=0; S._batchWorst=null; S._batchWorseAt=0; // مجموعة جديدة على العملة الجديدة // سجل الصفقات يبقى — التاريخ لا يُمسح عند الانتقال
     S.realizedPnl=0; S.feesPaid=0; S.fundingPaid=0; S.slipCost=0; S._fundAt=0; S.ignoreExchangeUntil=Date.now()+12000;
     S.tape=[]; S.priceTrail=[]; S.emaFast=S.emaSlow=null; S._metaAt=0;
     // مضاعف العملة السابقة سمّ زاعف للجديدة (عقد PEPE = 520 ألف وحدة!) —
