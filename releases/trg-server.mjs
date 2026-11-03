@@ -1288,7 +1288,7 @@ async function backgroundPipeline() {
     const __radarAge = S.radar && S.radar.at ? Date.now() - S.radar.at : 1e12;
     const r = S.radar && S.radar.list && S.radar.list.length && __radarAge < 6e5 ? S.radar : await scanRadar();
     if (!r || !r.list || !r.list.length) return;
-    if (!S.position && !studying() && S.status === "running") {
+    if (!S.position && !studying() && S.status === "running" && !fleetFullNow()) {
       S.recentCoins = S.recentCoins || {};
       const freshC = (l) => Date.now() - (S.recentCoins[l.symbol] || 0) > 24 * 3600 * 1e3;
       const curL = r.list.find((l) => l.symbol === S.config.symbol);
@@ -1340,9 +1340,19 @@ async function backgroundPipeline() {
     logSwallow("silent-catch", e);
   }
 }
+function fleetFullNow() {
+  return Math.max(0, Number(S._exOpenCount) || 0) >= 5;
+}
 function openNextReady() {
   if (!S._nextSymbol || !S._nextReady) return false;
   if (S.position) return false;
+  if (fleetFullNow()) {
+    if (!S._fullBlkAt || Date.now() - S._fullBlkAt > 3e5) {
+      S._fullBlkAt = Date.now();
+      pushLog("server", "\u26D4 \u0639\u062F\u062F \u0627\u0644\u0645\u0631\u0627\u0643\u0632 \u0641\u064A \u0627\u0644\u0645\u0646\u0635\u0629 " + S._exOpenCount + " (5 \u0623\u0648 \u0623\u0643\u062B\u0631) \u2014 \u0644\u0627 \u0635\u0641\u0642\u0629 \u062C\u062F\u064A\u062F\u0629 \u062D\u062A\u0649 \u062A\u064F\u063A\u0644\u0642 \u0648\u0627\u062D\u062F\u0629");
+    }
+    return false;
+  }
   if (!S._harvestAt || Date.now() - S._harvestAt > 10 * 60 * 1e3) {
     S._nextReady = false;
     S._nextSymbol = null;
@@ -1575,7 +1585,7 @@ async function postHarvestReselect() {
       return Date.now() - t > 24 * 3600 * 1e3;
     };
     const cur = r.list.find((l) => l.symbol === S.config.symbol);
-    if (!S.position && !studying() && S.status === "running") {
+    if (!S.position && !studying() && S.status === "running" && !fleetFullNow()) {
       S.recentCoins = S.recentCoins || {};
       const freshC = (l) => Date.now() - (S.recentCoins[l.symbol] || 0) > 24 * 3600 * 1e3;
       const curL = r.list.find((l) => l.symbol === S.config.symbol);
@@ -4211,6 +4221,13 @@ function huntTrigger(p) {
   if (toxicBlocked(S.config.direction)) return null;
   if (batchHoldActive()) return null;
   if (S._noNewEntries) return null;
+  if (!S.position && fleetFullNow()) {
+    if (!S._fullBlkAt || Date.now() - S._fullBlkAt > 3e5) {
+      S._fullBlkAt = Date.now();
+      pushLog("server", "\u26D4 \u0639\u062F\u062F \u0627\u0644\u0645\u0631\u0627\u0643\u0632 \u0641\u064A \u0627\u0644\u0645\u0646\u0635\u0629 " + S._exOpenCount + " (5 \u0623\u0648 \u0623\u0643\u062B\u0631) \u2014 \u0644\u0627 \u0635\u0641\u0642\u0629 \u062C\u062F\u064A\u062F\u0629 \u062D\u062A\u0649 \u062A\u064F\u063A\u0644\u0642 \u0648\u0627\u062D\u062F\u0629");
+    }
+    return null;
+  }
   if (!S.position && (S._fleetTaken || []).map(String).includes(String(S.config.symbol))) {
     if (!S._ownerBlkAt || Date.now() - S._ownerBlkAt > 12e4) {
       S._ownerBlkAt = Date.now();
@@ -5044,7 +5061,7 @@ async function liveSync() {
         });
       }
     }
-    if (!S._posCntAt || Date.now() - S._posCntAt > 1e4) {
+    if (!S._posCntAt || Date.now() - S._posCntAt > 5e3) {
       S._posCntAt = Date.now();
       exAllPositions().then((list) => {
         const n = list.length;
