@@ -9,10 +9,10 @@ import './server-shims'; // أولًا دائمًا: يثبّت البيئة ق�
 import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
-  strategyFingerprint, alignStrategy, gridStatus, ensureGroupFour, cancelEntryOrders, cleanStart,
+  strategyFingerprint, alignStrategy, gridStatus, ensureGroupFour, cancelEntryOrders, cleanStart, enableEntries,
 } from './engine';
 
-const SRV_VER = 'TRQ-TRADING-1.7.12';
+const SRV_VER = 'TRQ-TRADING-1.7.13';
 const FLEET_N = 5;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
@@ -230,6 +230,7 @@ const srv = createServer(async (req, res) => {
           case 'gridStatus': return send(res, 200, { ok:true, slot:SLOT, status:gridStatus() });
           case 'cancelEntries': { const rr=await cancelEntryOrders(); return send(res,200,rr); }
           case 'cleanStart': { const rr=await cleanStart(); return send(res,200,rr); }
+          case 'enableEntries': return send(res,200, enableEntries());
           case 'ensureFour': { const need=ensureGroupFour(); return send(res, 200, { ok:true, need }); }
           default: return send(res, 400, { ok: false, error: 'إجراء غير معروف: ' + a });
         }
@@ -267,6 +268,11 @@ const srv = createServer(async (req, res) => {
       // الكلي يقسمه المنسق مرة واحدة: كل محرك يستلم نصيبه (÷5) فوراً
       // ─── مواءمة الاستراتيجية (أمر المالك): كل المحركات بنفس الاستراتيجية
       // تُطبّق من المحرك الأول على الباقي — العملة والرصيد يبقيان خاصين ───
+      if (a === 'enableAll') {
+        const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) =>
+          jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 8000, { action: 'enableEntries' })));
+        return send(res, 200, { ok: true, results: rs });
+      }
       if (a === 'cleanAll') {
         // بداية نظيفة متزامنة: إصلاح (إغفال المراكز) على محرك واحد ثم تنظيف البقية
         const first = await jfetch('http://127.0.0.1:' + (BASE_PORT + 1) + '/cmd', 60000, { action: 'cleanStart' });

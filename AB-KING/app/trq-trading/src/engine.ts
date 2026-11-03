@@ -1288,20 +1288,41 @@ async function softTopUp(){
     if(!Array.isArray(ex)) return 0; }catch(e){ return 0; }          // فشل القراءة = لا إجراء
   const entries=ex.filter((o:any)=>o&&o.reduceOnly!==true);
   S._exEntryOpenN=entries.length;
-  if(entries.length>=4) return 0;                                    // مكتمل
-  // مستوى واحد مسلّح فقط، الأقرب للسعر، وغير مكرر السعر مع المنصة
+  // المطلوب = 4 − (قائم على المنصة + تعبئات أوامرنا) — لا زيادة ولا نقصان
+  const filled=Math.max(0,Number(S._entryFillsN)||0);
+  const need=4-(entries.length+filled);
+  if(need<=0) return 0;
+  const short=S.position.side==='short';
+  const cur=Number(S.lastPrice)||Number(S.position.entry)||0; if(!(cur>0)) return 0;
+  const tk=(S._tickMap&&S._tickMap[S.config.symbol])||S.tickSize||1e-8;
+  const dup=(px:number)=>entries.some((o:any)=>Math.abs((Number(o.price)||0)-px)/px<0.0008);
+  const valid=(px:number)=>short?(px>cur*1.0004):(px<cur*0.9996);
+  // 1) مستوى مسلّح موجود (سلم سليم)
+  let px=0, oid=null as any, qty=0;
   const cand=(S.grid||[]).filter((l:any)=>!l.reduceOnly&&l.status==='armed'&&!l.exchangeOrderId)
-    .sort((a:any,b:any)=>Math.abs((a.price||0)-(S.lastPrice||0))-Math.abs((b.price||0)-(S.lastPrice||0)))[0];
-  if(!cand) return 0;
-  const px=Number(cand.price)||0; if(!(px>0)) return 0;
-  if(entries.some((o:any)=>Math.abs((Number(o.price)||0)-px)/px<0.0008)){ cand.status='cancelled'; return 0; }
+    .sort((a:any,b:any)=>Math.abs((a.price||0)-cur)-Math.abs((b.price||0)-cur))[0];
+  if(cand&&Number(cand.price)>0&&valid(Number(cand.price))&&!dup(Number(cand.price))){
+    px=Number(cand.price); oid=cand.clientOid; qty=capEntryQty(cand.qty,px);
+  }
+  // 2) لا سلم؟ ابنِ المستوى المفقود من منطقة الدخول (مرساة آمنة)
+  if(!(px>0)){
+    const anchor=short?Math.max(Number(S.position.entry)||cur,cur):Math.min(Number(S.position.entry)||cur,cur);
+    for(const pct of [0.0022,0.0045,0.0066,0.0090]){
+      const q=roundTick(short?anchor*(1+pct):anchor*(1-pct),tk);
+      if(!(q>0)||!valid(q)||dup(q)) continue;
+      px=q; break; }
+    if(!(px>0)) return 0;
+    qty=capEntryQty(contractsForLevel(px),px);
+  }
+  if(!(qty>=1)) return 0;
   try{
-    await exPlaceLimit({clientOid:cand.clientOid,symbol:S.config.symbol,side:cand.side,
-      price:px,qty:capEntryQty(cand.qty,px),reduceOnly:false,leverage:S.config.leverage});
-    cand.status='open';
-    pushLog('server','➕ تعبئة آمنة: أمر @ '+fmtPx(px)+' — القائم '+(entries.length+1)+'/4');
+    const r=await exPlaceLimit({clientOid:oid||uid('grp'),symbol:S.config.symbol,
+      side:short?'sell':'buy',price:px,qty,reduceOnly:false,leverage:S.config.leverage});
+    try{ (S.grid||[]).push({id:uid('ex'),clientOid:(oid||r.clientOid||uid('oid')),side:short?'sell':'buy',
+      price:px,qty,status:'open',reduceOnly:false,exchangeOrderId:r.orderId,filledAt:null,origin:'grid'}); }catch{}
+    pushLog('server','➕ استعادة أمر مفقود @ '+fmtPx(px)+' ×'+qty+' — المكتمل '+(entries.length+filled+1)+'/4');
     return 1;
-  }catch(e:any){ cand._lastErr=String(e?.message||e); return 0; }
+  }catch(e:any){ return 0; }
 }
 export async function reconcileGroup(){
   if(!S._entriesEnabled) return 0;      // بوابة مغلقة
@@ -1369,6 +1390,13 @@ export async function cancelEntryOrders(){
     pushLog('server','🧹 تنظيم الطوارئ: أُلغي '+cancelled+' أمر دخول — أُبقي '+kept+' أمر جني — لا إغلاق أي مركز');
   }catch(e:any){ pushLog('error','تنظيم الطوارئ فشل: '+String(e?.message||e)); }
   return { ok:true, cancelled, kept, symbol:sym };
+}
+/* تفعيل الأوامر فقط (أمر المالك 4 نوفمبر): يفتح بوابة الدخول ويبدأ استعادة
+   الأوامر المفقودة لأي صفقة — دون إغفال المراكز أو لمس أي أمر قائم */
+export function enableEntries(){
+  S._entriesEnabled=true;
+  pushLog('server','▶️ فُتحت بوابة الأوامر — استعادة الأوامر المفقودة (حتى 4 لكل صفقة) بلا زيادة أو نقصان');
+  return { ok:true, enabled:true };
 }
 export function gridStatus(){
   const c=S.config;
@@ -3620,6 +3648,11 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     // عدد أوامر الدخول القائمة فعلياً في المنصة (من exs المحمّلة أعلاه) —
     // يمنع أي إرسال زائد من حلقة التسليح القديمة (عيب DOGE: 4 فوق الموجودة)
     try{ S._exEntryOpenN=(Array.isArray(exs)?exs:[]).filter((o:any)=>o&&o.reduceOnly!==true).length; }catch{}
+    // بوابة مغلقة: لا محاولات إرسال إطلاقاً (لا رسائل متكررة مزعجة)
+    if(!S._entriesEnabled){
+      if(!S._gateLogAt||Date.now()-S._gateLogAt>1800000){ S._gateLogAt=Date.now();
+        pushLog('server','⏸ بوابة الدخول مغلقة — نفّذ «تفعيل الأوامر» أو «بداية نظيفة» لفتح موجة جديدة'); }
+      return; }
     const want=S.grid.filter(l=>(l.status==='armed')).sort((a,b)=>Math.abs((a.price||0)-(S.lastPrice||0))-Math.abs((b.price||0)-(S.lastPrice||0)));
     if(!S.permDenied) for(const l of want){ if(l.exchangeOrderId) continue;
       // ─── فصل دقيق (المصيبة المتكررة 3 نوفمبر): التجميد بسبب مركز زائد في
