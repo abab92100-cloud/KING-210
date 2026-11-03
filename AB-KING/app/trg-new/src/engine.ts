@@ -567,7 +567,7 @@ export async function backgroundPipeline(){
     // ─── منتقي الفرص (أمر المالك 2 نوفمبر): المحرك الخامل (بلا مركز ولا
     // أثناء دراسة) يبحث عن أفضل فرصة مؤهلة: درجة ≥68 + سيولة ≥3M +
     // غير متداولة 24 ساعة. لا يجد؟ ينتظر بصمت — لا دخول إجباري ───
-    if(!S.position&&!studying()&&S.status==='running'){
+    if(!S.position&&!studying()&&S.status==='running'&&!fleetFullNow()){
       S.recentCoins=S.recentCoins||{};
       const freshC=(l:any)=>(Date.now()-(S.recentCoins[l.symbol]||0))>24*3600*1000;
       const curL=r.list.find((l:any)=>l.symbol===S.config.symbol);
@@ -602,9 +602,19 @@ export async function backgroundPipeline(){
         pushLog('server','\u{1F9E0} \u0627\u0644\u062E\u0637 \u0627\u0644\u062E\u0644\u0641\u064A \u0627\u0644\u0645\u0633\u062A\u0645\u0631: \u0627\u0644\u0645\u0631\u0634\u062D \u0627\u0644\u062A\u0627\u0644\u064A '+nxt.disp+' (\u062F\u0631\u062C\u0629 '+nxt.score+') \u0645\u0631\u0634\u0651\u062D \u0628\u0639\u062F \u0627\u0644\u062C\u0646\u064A \u2014 \u064A\u064F\u062E\u062A\u0627\u0631 \u0625\u0646 \u0643\u0627\u0646\u062A \u0645\u0646\u0637\u0642\u062A\u0647 \u0623\u0642\u0648\u0649'); } }
   }catch(e){ logSwallow('silent-catch', e); }
 }
+/* ─── قاعدة الخمس (أمر المالك 3 نوفمبر 23:19): قبل فتح أي صفقة جديدة
+   يُقرأ عدد المراكز الحقيقية في المنصة — 5 أو أكثر = توقف تام حتى تُغلق
+   واحدة (بربح أو يدوياً). تُقرأ من المنصة كل 5 ثوانٍ ─── */
+export function fleetFullNow(){
+  return (Math.max(0,Number(S._exOpenCount)||0)) >= 5;
+}
 export function openNextReady(){
   if(!S._nextSymbol||!S._nextReady) return false;
   if(S.position) return false;
+  if(fleetFullNow()){ // 5 مراكز أو أكثر في المنصة → لا صفقة جديدة
+    if(!S._fullBlkAt||Date.now()-S._fullBlkAt>300000){ S._fullBlkAt=Date.now();
+      pushLog('server','⛔ عدد المراكز في المنصة '+(S._exOpenCount)+' (5 أو أكثر) — لا صفقة جديدة حتى تُغلق واحدة'); }
+    return false; }
   // ─── إصلاح الدوران المتسارع (المسار الثاني): القفز الفوري للمرشح المدروس
   // مسموح فقط خلال 10 دقائق بعد جني مكتمل — لا كل 30 ثانية بلا مركز كما كان ───
   if(!S._harvestAt||Date.now()-S._harvestAt>10*60*1000){ S._nextReady=false; S._nextSymbol=null; return false; }
@@ -763,7 +773,7 @@ export async function postHarvestReselect(){
     // ─── منتقي الفرص (أمر المالك 2 نوفمبر): المحرك الخامل (بلا مركز ولا
     // أثناء دراسة) يبحث عن أفضل فرصة مؤهلة: درجة ≥68 + سيولة ≥3M +
     // غير متداولة 24 ساعة. لا يجد؟ ينتظر بصمت — لا دخول إجباري ───
-    if(!S.position&&!studying()&&S.status==='running'){
+    if(!S.position&&!studying()&&S.status==='running'&&!fleetFullNow()){
       S.recentCoins=S.recentCoins||{};
       const freshC=(l:any)=>(Date.now()-(S.recentCoins[l.symbol]||0))>24*3600*1000;
       const curL=r.list.find((l:any)=>l.symbol===S.config.symbol);
@@ -2811,6 +2821,11 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   // القاطع المرحلي: لا إضافات صيد أثناءه
   if(batchHoldActive()) return null;
   if(S._noNewEntries) return null; // تجميد كامل: مراكز منصة زائدة لم تُغلق بربح بعد
+  // قاعدة الخمس: لا مركز جديد إن كان العدد في المنصة ≥ 5 (يُفحص قبل كل فتح)
+  if(!S.position&&fleetFullNow()){
+    if(!S._fullBlkAt||Date.now()-S._fullBlkAt>300000){ S._fullBlkAt=Date.now();
+      pushLog('server','⛔ عدد المراكز في المنصة '+(S._exOpenCount)+' (5 أو أكثر) — لا صفقة جديدة حتى تُغلق واحدة'); }
+    return null; }
   // ─── ملكية العملة (حادثة JASMY: 8 أوامر = محركان × قاطع 4 لكل منهما):
   // لا مركز جديد على عملة يحملها محرك آخر — تُقرأ من /fleet كل 10ث ───
   if(!S.position&&(S._fleetTaken||[]).map(String).includes(String(S.config.symbol))){
@@ -3462,7 +3477,7 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     // المراكز الحية بربح — عدّ المراكز الحية في الحساب كله كل 10 ثوانٍ.
     // المسموح الطبيعي: 5 في الأسطول (مركز لكل محرك) أو 1 في الأحادي —
     // أي زيادة = بقايا جلسات سابقة → تجميد فوري للدخول والتبديل ═══
-    if(!S._posCntAt||Date.now()-S._posCntAt>10000){ S._posCntAt=Date.now();
+    if(!S._posCntAt||Date.now()-S._posCntAt>5000){ S._posCntAt=Date.now();
       exAllPositions().then(list=>{
         const n=list.length;
         const allowed=(typeof FLEET_MODE==='function'&&FLEET_MODE())?5:1;
