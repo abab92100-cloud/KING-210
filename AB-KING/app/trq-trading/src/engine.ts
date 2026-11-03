@@ -1257,7 +1257,7 @@ async function exOpenEntries(sym:any){
   }catch(e){ logSwallow('exOpenEntries',e); return null; }
 }
 export async function reconcileGroup(){
-  if(EMERGENCY_BLOCK_ENTRIES) return 0; // إيقاف طارئ — لا إضافة أوامر
+  if(!S._entriesEnabled) return 0;      // بوابة مغلقة
   if(S.config.mode!=='live'||!S.keys||!S.position) return 0;
   if(batchHoldActive()) return 0;
   const sym=S.config.symbol;
@@ -1356,6 +1356,38 @@ export function alignStrategy(cfg:any){
     strategyFingerprint()); }
   return changed>0;
 }
+/* ─── بداية نظيفة (أمر المالك 3 نوفمبر 15:45 بعد إغلاق صفقتي الخسارة يدوياً):
+   1) تُغلق بوابة الدخول
+   2) تُلغى كل أوامر الدخول المتراكمة للرمز
+   3) تُغفل كل المراكز الحقيقية المتبقية: يبقى لها أمر جني رابح فقط — لا إضافة
+   4) تُصفَّر كل العدّادات والسجلات والمجموعات
+   5) تُفتح البوابة لموجة جديدة نظيفة: المحرك يختار فرصة مؤهلة ويبني 4 أوامر
+   لا يبيع بخسارة ولا يغلق مركزاً — الإغفال = جني رابح فقط ─── */
+export async function cleanStart(){
+  S._entriesEnabled=false;
+  let cancelled=0, ignored=0;
+  try{ const rr=await cancelEntryOrders(); cancelled=Number(rr&&(rr as any).cancelled)||0; }catch{}
+  // إغفال كل المراكز الحقيقية: لكل مركز أمر جني رابح واحد فقط (بلا إضافة)
+  // — يُنفّذ عبر الإصلاح الشامل بعد إفراغ رمز المحرك حتى لا يُستثنى مركزه
+  try{
+    const curSym=S.config.symbol, curDisp=S.config.displaySymbol;
+    S.config.symbol='__NONE__'; S.config.displaySymbol='—';
+    const rep=await repairAccount(); ignored=Array.isArray(rep&&(rep as any).report)?((rep as any).report.length):0;
+    S.config.symbol=curSym; S.config.displaySymbol=curDisp;
+    pushLog('server','🙈 أُغفلت '+ignored+' صفقة/صفقات — لكل منها جني رابح فقط، لا أوامر دخول ولا إغلاق بخسارة');
+  }catch(e){ logSwallow('cleanStartPos',e); }
+  // تصفير كامل
+  S.grid=[]; S.position=null; S.journal=[]; S.logs=[]; S.realizedPnl=0; S.feesPaid=0;
+  S.cycleHarvested=0; S.slipCost=0; S.fundingPaid=0;
+  S._entryFillsN=0; S._batchFills=0; S._batchHoldAt=0; S._batchWorst=null; S._batchWorseAt=0;
+  S._batchStudiedAt=false; S._groupN=1; S._harvestAt=0; S._reselectDone=false; S._reselectBusy=false;
+  S._noNewEntries=false; S._flatConfirmed=false; S._flatStrikes=0; S._waitFreshUntil=0;
+  S.recentCoins={}; S._nextReady=false; S._nextSymbol=null; S._dirFlipAt=0;
+  S.status='running'; S.activeCycle=null; S.startedAt=Date.now();
+  S._entriesEnabled=true; // فتح البوابة للموجة الجديدة
+  pushLog('server','🚀 بداية نظيفة: أُلغي '+cancelled+' أمر دخول · أُغفلت المراكز القديمة بجني رابح · صُفّرت العدّادات · فُتحت البوابة — بحث عن فرصة مؤهلة جديدة');
+  return { ok:true, cancelled, ignored };
+}
 /* ─── إصلاح الحساب الشامل (أمر المالك الصريح): يمسح كل مراكز الحساب، يلغي
    كل الأوامر والستوبات، يثبت لكل مركز هدف جني رابحاً واحداً، ويعيد تقريراً
    كاملاً يُعرض في التطبيق — المنصة هي المرجع الوحيد ─── */
@@ -1418,11 +1450,11 @@ async function orphanSweep(){
 /* ⛔ إيقاف طارئ (3 نوفمبر 15:35 — حماية أموال حقيقية): تراكم 17 أمر دخول
    ومركز PEPE بـ943$ على نصيب 34$. يُمنع أي أمر دخول جديد من نقطة الإرسال
    الأخيرة — أوامر الجني (reduceOnly) تعمل طبيعياً. يُرفع فقط بقرار واعٍ. */
-const EMERGENCY_BLOCK_ENTRIES=true;
 async function exPlaceLimit(intent){
   await ensureLiveMeta(intent.symbol);
-  if(!intent.reduceOnly&&EMERGENCY_BLOCK_ENTRIES){
-    throw new Error('⛔ إيقاف طارئ: لا أوامر دخول جديدة — إدارة المراكز والجني فقط'); }
+  // بوابة الدخول: مغلقة افتراضياً — تُفتح حصراً بأمر «بداية نظيفة»
+  if(!intent.reduceOnly&&!S._entriesEnabled){
+    throw new Error('⛔ بوابة الدخول مغلقة — نفّذ «بداية نظيفة» لفتح موجة جديدة'); }
   // ─── بوابة الإرسال النهائية (درس UNI: مستوى محفوظ بحجم 30 وحدة من إصدار
   // قديم أُعيد إرساله!): السقف يُطبق هنا حتماً مهما كان المحفوظ، والتقريب
   // يستخدم tick الرمز نفسه من خريطة المواصفات لا tick العملة السابقة ───
