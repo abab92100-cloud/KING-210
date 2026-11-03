@@ -5078,12 +5078,13 @@ async function liveSync() {
     const want = S.grid.filter((l) => l.status === "armed").sort((a, b) => Math.abs((a.price || 0) - (S.lastPrice || 0)) - Math.abs((b.price || 0) - (S.lastPrice || 0)));
     if (!S.permDenied) for (const l of want) {
       if (l.exchangeOrderId) continue;
-      if (!l.reduceOnly && (batchHoldActive() || S._noNewEntries || exposureCapped() || _room <= 0)) {
+      const __freezeBlocks = !!S._noNewEntries && !S.position;
+      if (!l.reduceOnly && (batchHoldActive() || __freezeBlocks || exposureCapped() || _room <= 0)) {
         l.exchangeOrderId = null;
         l._blockedAt = Date.now();
         if (!S._armedBlkAt || Date.now() - S._armedBlkAt > 3e5) {
           S._armedBlkAt = Date.now();
-          pushLog("server", "\u{1F6E1}\uFE0F \u0631\u0641\u0636 \u062A\u0633\u0644\u064A\u062D " + (l.reduceOnly ? "\u062C\u0646\u064A" : "\u062F\u062E\u0648\u0644") + " @ " + fmtPx(l.price) + " \u2014 " + (batchHoldActive() ? "\u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D (4 \u0623\u0648\u0627\u0645\u0631 \u062B\u0645 \u062A\u0648\u0642\u0641)" : S._noNewEntries ? "\u062A\u062C\u0645\u064A\u062F \u0627\u0644\u062F\u062E\u0648\u0644" : exposureCapped() ? "\u0633\u0642\u0641 \u0627\u0644\u062A\u0639\u0631\u0636 (\u0647\u0627\u0645\u0634 > 4\xD7)" : "\u0627\u0643\u062A\u0645\u0644 \u062D\u062F 4 \u0623\u0648\u0627\u0645\u0631 (\u062D\u064A " + _liveAdds + " + \u0645\u0646\u0641\u0651\u0630 " + realBatchFills() + ")"));
+          pushLog("server", "\u{1F6E1}\uFE0F \u0631\u0641\u0636 \u062A\u0633\u0644\u064A\u062D " + (l.reduceOnly ? "\u062C\u0646\u064A" : "\u062F\u062E\u0648\u0644") + " @ " + fmtPx(l.price) + " \u2014 " + (batchHoldActive() ? "\u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D (4 \u0623\u0648\u0627\u0645\u0631 \u062B\u0645 \u062A\u0648\u0642\u0641)" : __freezeBlocks ? "\u062A\u062C\u0645\u064A\u062F \u0627\u0644\u062F\u062E\u0648\u0644 (\u0645\u0631\u0643\u0632 \u062C\u062F\u064A\u062F \u0641\u0642\u0637 \u2014 \u0644\u064A\u0633 \u0645\u062C\u0645\u0648\u0639\u062A\u0643 \u0627\u0644\u0642\u0627\u0626\u0645\u0629)" : exposureCapped() ? "\u0633\u0642\u0641 \u0627\u0644\u062A\u0639\u0631\u0636 (\u0647\u0627\u0645\u0634 > 4\xD7)" : "\u0627\u0643\u062A\u0645\u0644 \u062D\u062F 4 \u0623\u0648\u0627\u0645\u0631 (\u062D\u064A " + _liveAdds + " + \u0645\u0646\u0641\u0651\u0630 " + realBatchFills() + ")"));
         }
         continue;
       }
