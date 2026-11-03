@@ -2159,60 +2159,46 @@ function groupNeed() {
   const total = filledOrders + liveEntries;
   return Math.max(0, Math.min(4, 4 - total));
 }
-async function exOpenEntries(sym) {
-  try {
-    const r = await exOrders(sym);
-    const arr = Array.isArray(r) ? r : r && r.data || [];
-    return arr.filter((o) => o && o.reduceOnly !== true && Number(o.price) > 0).map((o) => ({ id: o.id || o.orderId, price: Number(o.price), size: Number(o.size) }));
-  } catch (e) {
-    logSwallow("exOpenEntries", e);
-    return null;
-  }
-}
-async function reconcileGroup() {
+async function softTopUp() {
   if (!S._entriesEnabled) return 0;
-  if (S.config.mode !== "live" || !S.keys || !S.position) return 0;
-  if (batchHoldActive()) return 0;
-  const sym = S.config.symbol;
-  const ex = await exOpenEntries(sym);
-  if (!ex) return 0;
-  const need = 4 - ex.length;
-  if (need <= 0) {
+  if (S.config.mode !== "live" || !S.keys) return 0;
+  if (!S.position || batchHoldActive()) return 0;
+  let ex = null;
+  try {
+    const r = await exOrders(S.config.symbol);
+    ex = Array.isArray(r) ? r : r && r.data || [];
+    if (!Array.isArray(ex)) return 0;
+  } catch (e) {
     return 0;
   }
-  const cur = Number(S.lastPrice) || Number(S.position.entry) || 0;
-  if (!(cur > 0)) return 0;
-  const short = S.position.side === "short";
-  const tk = S._tickMap && S._tickMap[sym] || S.tickSize || 1e-8;
-  const pcts = [15e-4, 3e-3, 45e-4, 6e-3];
-  let placed = 0;
-  for (const pct of pcts) {
-    if (placed >= need) break;
-    const px = roundTick(short ? cur * (1 + pct) : cur * (1 - pct), tk);
-    if (!(px > 0)) continue;
-    if (short && !(px > cur * 1.0002)) continue;
-    if (!short && !(px < cur * 0.9998)) continue;
-    if (ex.some((o) => Math.abs(o.price - px) / px < 5e-4)) continue;
-    const qty = capEntryQty(contractsForLevel(px), px);
-    if (!(qty >= 1)) continue;
-    try {
-      await exPlaceLimit({
-        clientOid: uid("grp"),
-        symbol: sym,
-        side: short ? "sell" : "buy",
-        price: px,
-        qty,
-        reduceOnly: false,
-        leverage: S.config.leverage
-      });
-      placed++;
-      pushLog("server", "\u2795 \u0623\u0645\u0631 \u0636\u0645\u0646 \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0629 @ " + fmtPx(px) + " \xD7" + qty + " \u2014 \u0627\u0644\u0645\u0643\u062A\u0645\u0644 " + (ex.length + placed) + "/4");
-    } catch (e) {
-      logSwallow("groupPlace", e);
-    }
+  const entries = ex.filter((o) => o && o.reduceOnly !== true);
+  S._exEntryOpenN = entries.length;
+  if (entries.length >= 4) return 0;
+  const cand = (S.grid || []).filter((l) => !l.reduceOnly && l.status === "armed" && !l.exchangeOrderId).sort((a, b) => Math.abs((a.price || 0) - (S.lastPrice || 0)) - Math.abs((b.price || 0) - (S.lastPrice || 0)))[0];
+  if (!cand) return 0;
+  const px = Number(cand.price) || 0;
+  if (!(px > 0)) return 0;
+  if (entries.some((o) => Math.abs((Number(o.price) || 0) - px) / px < 8e-4)) {
+    cand.status = "cancelled";
+    return 0;
   }
-  if (placed > 0) S._lastGroupFillAt = Date.now();
-  return placed;
+  try {
+    await exPlaceLimit({
+      clientOid: cand.clientOid,
+      symbol: S.config.symbol,
+      side: cand.side,
+      price: px,
+      qty: capEntryQty(cand.qty, px),
+      reduceOnly: false,
+      leverage: S.config.leverage
+    });
+    cand.status = "open";
+    pushLog("server", "\u2795 \u062A\u0639\u0628\u0626\u0629 \u0622\u0645\u0646\u0629: \u0623\u0645\u0631 @ " + fmtPx(px) + " \u2014 \u0627\u0644\u0642\u0627\u0626\u0645 " + (entries.length + 1) + "/4");
+    return 1;
+  } catch (e) {
+    cand._lastErr = String(e?.message || e);
+    return 0;
+  }
 }
 function ensureGroupFour() {
   if (S.config.mode !== "live" || !S.keys || !S.position) return 0;
@@ -5263,7 +5249,7 @@ async function liveSync() {
     const _liveAdds = S.grid.filter((l) => !l.reduceOnly && (l.status === "open" || l.status === "filled")).length;
     const _room = Math.max(0, 4 - realBatchFills() - _liveAdds);
     try {
-      await reconcileGroup();
+      await softTopUp();
     } catch {
     }
     try {
