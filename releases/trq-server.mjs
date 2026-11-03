@@ -3724,7 +3724,6 @@ function fillLevel(id, fp, taker) {
       if (S._batchFills >= (S._cycleMaxFills || 4) && !S._batchHoldAt) {
         S._batchHoldAt = Date.now();
         S._batchStudiedAt = false;
-        cancelPendingAdds();
         pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0627\u0644\u0645\u0631\u062D\u0644\u064A: \u0627\u0643\u062A\u0645\u0644\u062A 4 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u062A\u0648\u0642\u0641 \u0627\u0644\u0641\u062A\u062D \u062D\u062A\u0649 \u0627\u0644\u0627\u0633\u062A\u0642\u0631\u0627\u0631 + \u062F\u0631\u0627\u0633\u0629 \u062C\u062F\u064A\u062F\u0629 \u062B\u0645 4 \u0623\u062E\u0631\u0649");
       }
     }
@@ -3833,7 +3832,6 @@ function harvestRipe(p) {
     if (dt > 0 && dt < 6e3) {
       const adv = (S.position.side === "short" ? p - pv.px : pv.px - p) / pv.px * 100;
       if (adv >= 0.35) {
-        cancelPendingAdds();
         S._waveHoldUntil = Date.now() + 6e4;
         if (!S._advSpkAt || Date.now() - S._advSpkAt > 6e4) {
           S._advSpkAt = Date.now();
@@ -3845,7 +3843,6 @@ function harvestRipe(p) {
   if (S.position && S.status === "running") {
     const wv = waveAdversePct();
     if (wv >= 0.8) {
-      cancelPendingAdds();
       S._waveHoldUntil = Date.now() + 6e4;
       if (!S._wavePullAt || Date.now() - S._wavePullAt > 6e4) {
         S._wavePullAt = Date.now();
@@ -4357,7 +4354,6 @@ function maybeHunt(p) {
       S._batchWorst = null;
       S._batchWorseAt = 0;
       S._nextCycleMax = 3;
-      cancelPendingAdds();
       pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0627\u0644\u0645\u0631\u062D\u0644\u064A (\u0635\u064A\u062F): \u0627\u0643\u062A\u0645\u0644\u062A 4 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u062A\u0648\u0642\u0641 \u0627\u0644\u0641\u062A\u062D \u062D\u062A\u0649 \u064A\u062A\u0648\u0642\u0641 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 + \u062F\u0631\u0627\u0633\u0629 \u062B\u0645 4 \u0623\u062E\u0631\u0649");
     }
   }
@@ -4459,20 +4455,6 @@ function reversalAgainst(p) {
   if (tA && mA && bA && adv >= 0.65) return true;
   if (tA && mA && adv >= 1.4) return true;
   return false;
-}
-function cancelPendingAdds() {
-  const live = S.config.mode === "live" && S.keys;
-  for (const g of S.grid) {
-    if (g.lane === "comp" && !batchHoldActive()) continue;
-    if (!g.reduceOnly && (g.status === "armed" || g.status === "open") && !g.filledAt) {
-      g.status = "cancelled";
-      if (live && g.exchangeOrderId) {
-        const id = g.exchangeOrderId;
-        g.exchangeOrderId = null;
-        exCancelOne(id);
-      } else g.exchangeOrderId = null;
-    }
-  }
 }
 async function patienceLimit(p) {
   if (!p || S.status !== "running" || !S.position) return;
@@ -4602,7 +4584,6 @@ function ensureGrid() {
     if (S.position) syncPositionTp();
     return;
   }
-  cancelPendingAdds();
   const keep = S.grid.filter((g) => g.status === "filled" || g.status === "cancelled" || g.status === "staged" || g.reduceOnly && (g.status === "open" || g.status === "armed"));
   S.grid = [...keep, ...buildGrid(center, false, 4)].filter((g) => keep.includes(g) || g.reduceOnly || g.status !== "armed" || !shouldFill(g, center));
   S.gridAnchor = center;
@@ -5854,9 +5835,7 @@ function saveCfg(v) {
     startStudy(!!(pf && Date.now() - pf.at < 24 * 3600 * 1e3));
     pushLog("server", "\u0627\u0646\u062A\u0642\u0627\u0644 \u0625\u0644\u0649 " + S.config.displaySymbol + " \u2014 \u0623\u064F\u0644\u063A\u064A\u062A \u062D\u0627\u0644\u0629 \u0627\u0644\u0632\u0648\u062C \u0627\u0644\u0633\u0627\u0628\u0642" + (pf && Date.now() - pf.at < 24 * 3600 * 1e3 ? " \xB7 \u0628\u0635\u0645\u062A\u0647\u0627 \u0645\u0639\u0631\u0648\u0641\u0629 \u2014 \u0625\u062D\u0645\u0627\u0621 \u0642\u0635\u064A\u0631" : " \xB7 \u062A\u064F\u062F\u0631\u0633 60 \u062B\u0627\u0646\u064A\u0629 \u0642\u0628\u0644 \u0623\u064A \u062F\u062E\u0648\u0644"));
   } else if (S.status === "running" && (oldLv !== S.config.leverage || oldN !== S.config.levels || oldStep !== S.config.gridStepPct || oldBal !== S.config.cycleBalance)) {
-    cancelPendingAdds();
-    if (S.config.mode === "live" && S.keys) exCancelAll(sym).catch(() => {
-    });
+    pushLog("server", "\u2699\uFE0F \u062A\u063A\u064A\u0651\u0631\u062A \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0634\u0628\u0643\u0629 \u2014 \u064A\u064F\u0628\u0646\u0649 \u0633\u0644\u0645 \u062C\u062F\u064A\u062F \u062F\u0648\u0646 \u0625\u0644\u063A\u0627\u0621 \u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0635\u0641\u0642\u0627\u062A \u0627\u0644\u0642\u0627\u0626\u0645\u0629");
     const c = S.lastPrice || S.gridAnchor || (S.position ? S.position.entry : 0);
     if (c > 0) {
       const keep = S.grid.filter((g) => g.status === "filled" || g.status === "cancelled" || g.reduceOnly && (g.status === "open" || g.status === "armed"));
