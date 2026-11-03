@@ -2152,6 +2152,48 @@ async function alignHarvestCore(sym, since) {
     logSwallow("alignHarvest", e);
   }
 }
+function groupNeed() {
+  if (!S.position) return 0;
+  const liveEntries = S.grid.filter((l) => !l.reduceOnly && l.status === "open" && l.exchangeOrderId).length;
+  const filledOrders = S._entryFillsN != null ? Math.max(0, Number(S._entryFillsN) || 0) : Math.max(0, Math.round((S.position.size || 0) * (S.multiplier || 1) * (S.position.entry || 0) / Math.max(3, Number(S.config.cycleBalance) || 3)));
+  const total = filledOrders + liveEntries;
+  return Math.max(0, Math.min(4, 4 - total));
+}
+function ensureGroupFour() {
+  if (S.config.mode !== "live" || !S.keys || !S.position) return 0;
+  if (batchHoldActive()) return 0;
+  const need = groupNeed();
+  if (need <= 0) return 0;
+  let armed = S.grid.filter((l) => !l.reduceOnly && (l.status === "armed" || l.status === "open")).length;
+  if (armed < need) {
+    try {
+      const c = S.lastPrice || S.position.entry || 0;
+      const fresh = buildGrid(c, false, Math.max(8, effLevels())).filter((x) => !x.reduceOnly);
+      const keep = S.grid.filter((l) => l.reduceOnly || l.status === "open" || l.status === "filled");
+      S.grid = keep.concat(fresh);
+      armed = fresh.filter((l) => l.status === "armed").length;
+      pushLog("server", "\u{1F501} \u0625\u0639\u0627\u062F\u0629 \u0628\u0646\u0627\u0621 \u0633\u0644\u0645 \u0627\u0644\u0645\u0631\u0643\u0632 (\u0643\u0627\u0646 \u0646\u0627\u0642\u0635\u0627\u064B) \u2014 \u0645\u0633\u0644\u0651\u062D \u0627\u0644\u0622\u0646 " + armed + " \u2014 \u0645\u0637\u0644\u0648\u0628 " + need + " \u0623\u0648\u0627\u0645\u0631 \u0644\u0625\u0643\u0645\u0627\u0644 \u0627\u0644\u0623\u0631\u0628\u0639\u0629");
+    } catch (e) {
+      logSwallow("rebuildGrid", e);
+    }
+  }
+  return need;
+}
+function gridStatus() {
+  const c = S.config;
+  return {
+    symbol: c.symbol,
+    mode: c.mode,
+    cycleBalance: c.cycleBalance,
+    leverage: c.leverage,
+    fills: S._entryFillsN != null ? S._entryFillsN : null,
+    need: groupNeed(),
+    pos: S.position ? { side: S.position.side, size: S.position.size, entry: S.position.entry } : null,
+    hold: batchHoldActive(),
+    noNew: !!S._noNewEntries,
+    levels: (S.grid || []).map((l) => ({ p: l.price, q: l.qty, st: l.status, ro: !!l.reduceOnly })).slice(0, 30)
+  };
+}
 var STRATEGY_VER = "TRQ-GROUPS-v1";
 function strategyFingerprint() {
   const c = S.config || {};
@@ -5075,6 +5117,10 @@ async function liveSync() {
     }
     const _liveAdds = S.grid.filter((l) => !l.reduceOnly && (l.status === "open" || l.status === "filled")).length;
     const _room = Math.max(0, 4 - realBatchFills() - _liveAdds);
+    try {
+      ensureGroupFour();
+    } catch {
+    }
     const want = S.grid.filter((l) => l.status === "armed").sort((a, b) => Math.abs((a.price || 0) - (S.lastPrice || 0)) - Math.abs((b.price || 0) - (S.lastPrice || 0)));
     if (!S.permDenied) for (const l of want) {
       if (l.exchangeOrderId) continue;
@@ -5757,7 +5803,7 @@ function initEngine() {
 // src/server-entry.ts
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "TRQ-TRADING-1.7.9";
+var SRV_VER = "TRQ-TRADING-1.7.10";
 var FLEET_N = 5;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
@@ -6006,6 +6052,12 @@ var srv = createServer(async (req, res) => {
           }
           case "fingerprint":
             return send(res, 200, { ok: true, fp: strategyFingerprint(), slot: SLOT });
+          case "gridStatus":
+            return send(res, 200, { ok: true, slot: SLOT, status: gridStatus() });
+          case "ensureFour": {
+            const need = ensureGroupFour();
+            return send(res, 200, { ok: true, need });
+          }
           default:
             return send(res, 400, { ok: false, error: "\u0625\u062C\u0631\u0627\u0621 \u063A\u064A\u0631 \u0645\u0639\u0631\u0648\u0641: " + a });
         }
