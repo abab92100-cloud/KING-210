@@ -311,7 +311,8 @@ function saveAll(){ try{
   const rt={grid:S.grid,position:S.position,journal:S.journal,realizedPnl:S.realizedPnl,
     feesPaid:S.feesPaid,fundingPaid:S.fundingPaid||0,cycleHarvested:S.cycleHarvested||0,priceTrail:S.priceTrail,cvd:S.cvd,huntCount:S.huntCount,
     lastPrice:S.lastPrice,markPrice:S.markPrice,activeCycle:S.activeCycle,status:S.status,
-    history:S.history,logs:S.logs,recentCoins:S.recentCoins||{},savedAt:Date.now(),
+    history:S.history,logs:S.logs,recentCoins:S.recentCoins||{},
+    _tickMap:S._tickMap||{},_multMap:S._multMap||{},savedAt:Date.now(),
     // أعلام دورة الجني (قاعدة المالك: إعادة الاختيار بعد الجني) — تُحفظ حتى لا
     // تضيع إعادة الاختيار عند إعادة تشغيل السيرفر/الجوال بعد الجني مباشرة
     _harvestAt:S._harvestAt||0,_reselectDone:!!S._reselectDone,
@@ -1154,7 +1155,11 @@ async function ensureLiveMeta(symbol){ if(S._metaSym===symbol&&S.multiplier>0) r
     S._tickMap=S._tickMap||{}; S._tickMap[symbol]=+ct.tickSize||0;
     S._multMap=S._multMap||{}; S._multMap[symbol]=mul;
     if(+ct.maxOrderQty>0) S.maxOrderQty=+ct.maxOrderQty; S._metaAt=Date.now();
-  }catch(_){ throw new Error('بيانات العقد غير جاهزة — أُجّل الأمر لحين توثيق المضاعف'); } }
+  }catch(_){
+    // فشل الجلب (429/شبكة): استخدم المواصفات المحفوظة لنفس الرمز إن وُجدت
+    const km=(S._multMap&&S._multMap[symbol])||0, kt=(S._tickMap&&S._tickMap[symbol])||0;
+    if(km>0){ S.multiplier=km; if(kt>0) S.tickSize=kt; S._metaSym=symbol; return; }
+    throw new Error('بيانات العقد غير جاهزة — أُجّل الأمر لحين توثيق المضاعف'); } }
 /* ─── سرب إنقاذ المراكز اليتيمة (كارثة 8 مراكز): الانتقال بين العملات مع
    فشل إغلاق المركز القديم (429/هامش) ترك مراكز حقيقية بلا إدارة. هذا الفحص
    يلتقط كل مركز في الحساب ليس للعملة الحالية ويُثبت له أمر جني رابح (tpUsd)
@@ -3195,7 +3200,10 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
   if(S.config.mode!=='live'||!S.keys) return;
   // حصة القراءة (درس عاصفة 429 على «قراءة المركز»): 4ث كحد أدنى بين الدورات،
   // وعند رفض الحصة (429) تبريد 45ث كاملة — لا نطرق الباب أثناء العاصفة
-  if(Date.now()-(S._syncAt||0)<4000) return;
+  // تهدئة أعمق (ملاحظة المالك 3 نوفمبر: «لا شيء يعمل» بسبب سيل 429):
+  // دورة كل 8 ثوانٍ + تبريد 45 ثانية عند الرفض — القراءة أهدأ والأخطاء أقل
+  if(S._rlUntil&&Date.now()<S._rlUntil) return;
+  if(Date.now()-(S._syncAt||0)<8000) return;
   S._syncAt=Date.now();
   // سرب إنقاذ المراكز اليتيمة كل 5 دقائق — قبل أي منطق آخر
   if(!S._orphanAt||Date.now()-S._orphanAt>300000){ S._orphanAt=Date.now(); orphanSweep().catch(()=>{}); }
@@ -3395,16 +3403,18 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     // ─── نقطة الإرسال الوحيدة (الثقب الحقيقي: كانت ترسل أي مستوى armed
     // بلا فحص!): لا أمر دخول أثناء القاطع، ولا أثناء التجميد، ولا فوق
     // سقف التعرض، وبحد أقصى 4 أوامر دخول حية في أي لحظة ───
-    const _liveAdds=S.grid.filter(l=>!l.reduceOnly&&(l.status==='open'||l.status==='armed')).length;
+    // الأوامر الحية = المُنفّذة + القائمة على المنصة فقط — المسلّحة (لم تُرسل
+    // بعد) لا تُحسب (كانت تُحسب فتُقفل البوابة دائماً ← «رفض تسليح» مع أمر واحد!)
+    const _liveAdds=S.grid.filter(l=>!l.reduceOnly&&(l.status==='open'||l.status==='filled')).length;
+    const _room=Math.max(0,4-realBatchFills()-_liveAdds);
     const want=S.grid.filter(l=>(l.status==='armed')).sort((a,b)=>Math.abs((a.price||0)-(S.lastPrice||0))-Math.abs((b.price||0)-(S.lastPrice||0)));
     if(!S.permDenied) for(const l of want){ if(l.exchangeOrderId) continue;
-      if(!l.reduceOnly&&(batchHoldActive()||S._noNewEntries||exposureCapped()
-        ||(S._liveAddsCount=(S._liveAddsCount||_liveAdds))>=4)){
+      if(!l.reduceOnly&&(batchHoldActive()||S._noNewEntries||exposureCapped()||_room<=0)){
         // يبقى مسلحاً (لا يُلغى) حتى يزول المانع — فلا تضيع أوامر المجموعة
         l.exchangeOrderId=null; l._blockedAt=Date.now();
         if(!S._armedBlkAt||Date.now()-S._armedBlkAt>300000){ S._armedBlkAt=Date.now();
           pushLog('server','🛡️ رفض تسليح '+(l.reduceOnly?'جني':'دخول')+' @ '+fmtPx(l.price)+' — '+
-            (batchHoldActive()?'القاطع ماضٍ (4 أوامر ثم توقف)':S._noNewEntries?'تجميد الدخول':'سقف التعرض أو حد 4 أوامر')); }
+            (batchHoldActive()?'القاطع ماضٍ (4 أوامر ثم توقف)':S._noNewEntries?'تجميد الدخول':exposureCapped()?'سقف التعرض (هامش > 4×)':'اكتمل حد 4 أوامر (حي '+_liveAdds+' + منفّذ '+realBatchFills()+')')); }
         continue; }
       try{ const r=await exPlaceLimit({clientOid:l.clientOid,symbol:sym,side:l.side,
         price:l.price,qty:l.qty,reduceOnly:l.reduceOnly,leverage:S.config.leverage});
