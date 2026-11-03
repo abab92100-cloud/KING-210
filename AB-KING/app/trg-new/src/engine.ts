@@ -1256,6 +1256,37 @@ async function exOpenEntries(sym:any){
       .map((o:any)=>({id:o.id||o.orderId,price:Number(o.price),size:Number(o.size)}));
   }catch(e){ logSwallow('exOpenEntries',e); return null; }
 }
+/* ─── تعبئة آمنة (النسخة النهائية 3 نوفمبر — عودة لسلوك 1.0.25/26):
+   • لا إعادة بناء للسلم إطلاقاً (كانت سبب 17 أمراً و943$ على PEPE)
+   • تقرأ أوامر الدخول القائمة من المنصة (المصدر الوحيد)
+   • تُسلّح مستوى واحداً فقط لكل دورة (8 ثوانٍ) حتى يكتمل 4
+   • ترفض أي سعر يكرر أمراً قائماً (تفادي التكرار)
+   • تُبقي أوامر الجني (reduceOnly) دون مساس ─── */
+async function softTopUp(){
+  if(!S._entriesEnabled) return 0;
+  if(S.config.mode!=='live'||!S.keys) return 0;
+  if(!S.position||batchHoldActive()) return 0;
+  let ex:any[]|null=null;
+  try{ const r=await exOrders(S.config.symbol);
+    ex=Array.isArray(r)?r:((r&&(r as any).data)||[]);
+    if(!Array.isArray(ex)) return 0; }catch(e){ return 0; }          // فشل القراءة = لا إجراء
+  const entries=ex.filter((o:any)=>o&&o.reduceOnly!==true);
+  S._exEntryOpenN=entries.length;
+  if(entries.length>=4) return 0;                                    // مكتمل
+  // مستوى واحد مسلّح فقط، الأقرب للسعر، وغير مكرر السعر مع المنصة
+  const cand=(S.grid||[]).filter((l:any)=>!l.reduceOnly&&l.status==='armed'&&!l.exchangeOrderId)
+    .sort((a:any,b:any)=>Math.abs((a.price||0)-(S.lastPrice||0))-Math.abs((b.price||0)-(S.lastPrice||0)))[0];
+  if(!cand) return 0;
+  const px=Number(cand.price)||0; if(!(px>0)) return 0;
+  if(entries.some((o:any)=>Math.abs((Number(o.price)||0)-px)/px<0.0008)){ cand.status='cancelled'; return 0; }
+  try{
+    await exPlaceLimit({clientOid:cand.clientOid,symbol:S.config.symbol,side:cand.side,
+      price:px,qty:capEntryQty(cand.qty,px),reduceOnly:false,leverage:S.config.leverage});
+    cand.status='open';
+    pushLog('server','➕ تعبئة آمنة: أمر @ '+fmtPx(px)+' — القائم '+(entries.length+1)+'/4');
+    return 1;
+  }catch(e:any){ cand._lastErr=String(e?.message||e); return 0; }
+}
 export async function reconcileGroup(){
   if(!S._entriesEnabled) return 0;      // بوابة مغلقة
   if(S.config.mode!=='live'||!S.keys||!S.position) return 0;
@@ -3551,7 +3582,7 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     // بعد) لا تُحسب (كانت تُحسب فتُقفل البوابة دائماً ← «رفض تسليح» مع أمر واحد!)
     const _liveAdds=S.grid.filter(l=>!l.reduceOnly&&(l.status==='open'||l.status==='filled')).length;
     const _room=Math.max(0,4-realBatchFills()-_liveAdds);
-    try{ await reconcileGroup(); }catch{} // مطابقة تفاضلية مع المنصة (لا إعادة بناء أعمى)
+    try{ await softTopUp(); }catch{} // تعبئة آمنة: أمر واحد كحد أقصى لكل دورة، من السلم القائم فقط
     // عدد أوامر الدخول القائمة فعلياً في المنصة (من exs المحمّلة أعلاه) —
     // يمنع أي إرسال زائد من حلقة التسليح القديمة (عيب DOGE: 4 فوق الموجودة)
     try{ S._exEntryOpenN=(Array.isArray(exs)?exs:[]).filter((o:any)=>o&&o.reduceOnly!==true).length; }catch{}
