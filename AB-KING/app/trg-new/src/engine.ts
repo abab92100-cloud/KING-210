@@ -1279,6 +1279,7 @@ async function exOpenEntries(sym:any){
    • ترفض أي سعر يكرر أمراً قائماً (تفادي التكرار)
    • تُبقي أوامر الجني (reduceOnly) دون مساس ─── */
 async function softTopUp(){
+  if(S.status!=='running') return 0;   // موقوف/مؤقت = لا استعادة ولا إضافة
   if(!S._entriesEnabled) return 0;
   if(S.config.mode!=='live'||!S.keys) return 0;
   if(!S.position||batchHoldActive()) return 0;
@@ -1527,9 +1528,12 @@ async function orphanSweep(){
    الأخيرة — أوامر الجني (reduceOnly) تعمل طبيعياً. يُرفع فقط بقرار واعٍ. */
 async function exPlaceLimit(intent){
   await ensureLiveMeta(intent.symbol);
-  // بوابة الدخول: مغلقة افتراضياً — تُفتح حصراً بأمر «بداية نظيفة»
+  // ⛔ إيقاف صلب (أمر المالك 4 نوفمبر 00:32): البوت الموقوف/المؤقت لا يفتح أي
+  // صفقة إطلاقاً — الحالة تُفحص في نقطة الإرسال الأخيرة
+  if(!intent.reduceOnly&&S.status!=='running'){
+    throw new Error('⛔ البوت غير مُشغّل — لا أوامر دخول (اضغط تشغيل)'); }
   if(!intent.reduceOnly&&!S._entriesEnabled){
-    throw new Error('⛔ بوابة الدخول مغلقة — نفّذ «بداية نظيفة» لفتح موجة جديدة'); }
+    throw new Error('⛔ بوابة الدخول مغلقة — نفّذ «تفعيل الأوامر»'); }
   // ─── بوابة الإرسال النهائية (درس UNI: مستوى محفوظ بحجم 30 وحدة من إصدار
   // قديم أُعيد إرساله!): السقف يُطبق هنا حتماً مهما كان المحفوظ، والتقريب
   // يستخدم tick الرمز نفسه من خريطة المواصفات لا tick العملة السابقة ───
@@ -3648,6 +3652,8 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     // عدد أوامر الدخول القائمة فعلياً في المنصة (من exs المحمّلة أعلاه) —
     // يمنع أي إرسال زائد من حلقة التسليح القديمة (عيب DOGE: 4 فوق الموجودة)
     try{ S._exEntryOpenN=(Array.isArray(exs)?exs:[]).filter((o:any)=>o&&o.reduceOnly!==true).length; }catch{}
+    // إيقاف/توقيت: لا تسليح ولا رسائل
+    if(S.status!=='running') return;
     // بوابة مغلقة: لا محاولات إرسال إطلاقاً (لا رسائل متكررة مزعجة)
     if(!S._entriesEnabled){
       if(!S._gateLogAt||Date.now()-S._gateLogAt>1800000){ S._gateLogAt=Date.now();
@@ -3841,23 +3847,13 @@ export function pauseBot(){ if(R()){ remoteCmd('pause').then(()=>remoteSync()); 
   emit(); saveAll(); }
 export async function stopBot(){ if(R()){ await remoteCmd('stop'); await remoteSync(); return; }
   if(S.status==='idle') return;
-  const p=S.lastPrice||S.markPrice||0, prevSide=S.position?S.position.side:null;
-  if(S.config.mode==='live'&&S.keys&&prevSide){
-    try{ await exCancelAll(S.config.symbol); await exCancelStops(S.config.symbol); S._guardId=null; }catch(e){ logSwallow("silent-catch", e); }
-    // الإغلاق يجب أن يتأكد لا أن يُرسل ويُنسى: أعد المحاولة حتى يتسطح المركز
-    // فعلًا على المنصة — الإرسال الأعمى القديم ترك مركزه مفتوحًا وأغلق محليًا فقط
-    let flat=false;
-    for(let i=0;i<4&&!flat;i++){
-      try{ await exClose(S.config.symbol,prevSide); }catch(e){ logSwallow("silent-catch", e); }
-      try{ await new Promise(r=>setTimeout(r,700));
-        const pos=await exPosition(S.config.symbol); flat=!pos; }catch(e){ logSwallow("silent-catch", e); }
-    }
-    S.ignoreExchangeUntil=Date.now()+15000; // لا تستعد مركزًا يُسوّى الآن كشبح
-    if(!flat){ pushLog('error','⚠️ إغلاق المنصة لم يتأكد بعد 4 محاولات — راجع المركز يدويًا في KuCoin فورًا');
-      notify('تحذير: إغلاق المركز على المنصة لم يتأكد — تحقق يدويًا فورًا','warn'); } }
-  await flattenAt(p,'إيقاف'); S.status='stopped';
+  S.status='stopped';
+  S._entriesEnabled=false; // البوابة تُغلق أيضاً — لا أوامر بعد الإيقاف
+  // ─── الإيقاف لا يبيع بسعر السوق (قاعدة المالك: لا خسارة أبداً) ───
+  // يُوقف كل تداول جديد، ويترك كل مركز بأمر جني رابحه على المنصة
+  try{ if(S.config.mode==='live'&&S.keys&&S.position){ await syncPositionTp(); } }catch(e){ logSwallow('stopTp',e); }
   clearNativeOngoing();
-  pushLog('info','إيقاف — أُغلقت كل الصفقات عند السعر الحالي');
+  pushLog('info','⏹ إيقاف كامل — لا أوامر دخول جديدة. المراكز تبقى بأوامر جنيها على المنصة (لا بيع بخسارة)');
   toast('تم إيقاف البوت'); emit(); saveAll(); }
 export function newCycle(){ if(R()){ remoteCmd('newCycle').then(()=>remoteSync()); return; } // الرصيد يحمل الأرباح المجناة أصلًا (تُضاف لحظة الجني) — لا جمع مزدوج
   // ─── حادثة 1 نوفمبر: زر «دورة» كان يغلق المركز بسعر السوق (خسارة -0.76 CRV)
