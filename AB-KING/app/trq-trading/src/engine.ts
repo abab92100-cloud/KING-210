@@ -1304,7 +1304,7 @@ export async function reconcileGroup(){
   const cur=Number(S.lastPrice)||Number(S.position.entry)||0; if(!(cur>0)) return 0;
   const short=S.position.side==='short';
   const tk=(S._tickMap&&S._tickMap[sym])||S.tickSize||1e-8;
-  const pcts=[0.0015,0.0030,0.0045,0.0060]; // ~0.15% بين كل أمر (المجموعة الأولى)
+  const pcts=[0.0022,0.0045,0.0066,0.0090]; // تباعد المجموعة الأولى الجديد 0.22%
   let placed=0;
   for(const pct of pcts){
     if(placed>=need) break;
@@ -1379,7 +1379,7 @@ export function strategyFingerprint(){
     'lev:'+Number(c.leverage||0),
     'lvls:'+Number(c.levels||0),
     'tp:'+(Number(c.tpUsd)>0?('usd'+Number(c.tpUsd)):('net'+Number(c.tpNet||0))),
-    'maxOrd:4','grp:4','hold:3h','ladder:0.15/0.22/0.45/0.66/0.90'
+    'maxOrd:4','grp:4','hold:3h','ladder:0.22/0.45/0.66/0.90/1.15'
   ].join('|');
 }
 /* مواءمة حقول الاستراتيجية فقط (لا العملة ولا نصيب الرصيد — لكل محرك
@@ -1930,8 +1930,11 @@ export function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.con
   // ─── سلم المجموعات (أمر المالك 2 نوفمبر NMR): كل مجموعة = 4 أوامر
   // بتباعدها الخاص، وبين المجموعات توقف 3 ساعات + تحقق استقرار:
   // م1 0.15% · م2 0.22% · م3 0.45% · م4 0.66% · م5 0.90% ───
-  const pctA=Math.max(0.12,Math.min(0.30,(S.config.gridStepPct||0.3)*0.5))/100;
-  const GSP=[0,pctA,0.22/100,0.45/100,0.66/100,0.90/100];
+  // ─── تباعد المجموعات (أمر المالك 3 نوفمبر 19:01): كل مجموعة 4 أوامر
+  // م1 0.22% · م2 0.45% · م3 0.66% · م4 0.90% · م5 1.15% ───
+  const LADDER=[0.0022,0.0045,0.0066,0.0090,0.0115];
+  const pctA=LADDER[0];
+  const GSP=[0,LADDER[0],LADDER[1],LADDER[2],LADDER[3],LADDER[4]];
   const grpStep=(idx:any)=>GSP[Math.min(5,Math.max(1,Math.ceil(idx/4)))];
   const ownerLadderDist=(idx:any)=>{ let d=0;
     for(let j=1;j<=idx;j++){ d+=grpStep(j); } return d; };
