@@ -3415,12 +3415,17 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     const _room=Math.max(0,4-realBatchFills()-_liveAdds);
     const want=S.grid.filter(l=>(l.status==='armed')).sort((a,b)=>Math.abs((a.price||0)-(S.lastPrice||0))-Math.abs((b.price||0)-(S.lastPrice||0)));
     if(!S.permDenied) for(const l of want){ if(l.exchangeOrderId) continue;
-      if(!l.reduceOnly&&(batchHoldActive()||S._noNewEntries||exposureCapped()||_room<=0)){
+      // ─── فصل دقيق (المصيبة المتكررة 3 نوفمبر): التجميد بسبب مركز زائد في
+      // الحساب كان يوقف تسليح المجموعة على المركز القائم نفسه — فيبقى المركز
+      // بأمر واحد للأبد. الصحيح: التجميد يمنع الدخول في عملة/مركز جديد فقط،
+      // ولا يمنع استكمال الأوامر الأربعة لمركز يملكه هذا المحرك بالفعل ───
+      const __freezeBlocks=!!S._noNewEntries&&!S.position;
+      if(!l.reduceOnly&&(batchHoldActive()||__freezeBlocks||exposureCapped()||_room<=0)){
         // يبقى مسلحاً (لا يُلغى) حتى يزول المانع — فلا تضيع أوامر المجموعة
         l.exchangeOrderId=null; l._blockedAt=Date.now();
         if(!S._armedBlkAt||Date.now()-S._armedBlkAt>300000){ S._armedBlkAt=Date.now();
           pushLog('server','🛡️ رفض تسليح '+(l.reduceOnly?'جني':'دخول')+' @ '+fmtPx(l.price)+' — '+
-            (batchHoldActive()?'القاطع ماضٍ (4 أوامر ثم توقف)':S._noNewEntries?'تجميد الدخول':exposureCapped()?'سقف التعرض (هامش > 4×)':'اكتمل حد 4 أوامر (حي '+_liveAdds+' + منفّذ '+realBatchFills()+')')); }
+            (batchHoldActive()?'القاطع ماضٍ (4 أوامر ثم توقف)':__freezeBlocks?'تجميد الدخول (مركز جديد فقط — ليس مجموعتك القائمة)':exposureCapped()?'سقف التعرض (هامش > 4×)':'اكتمل حد 4 أوامر (حي '+_liveAdds+' + منفّذ '+realBatchFills()+')')); }
         continue; }
       try{ const r=await exPlaceLimit({clientOid:l.clientOid,symbol:sym,side:l.side,
         price:l.price,qty:l.qty,reduceOnly:l.reduceOnly,leverage:S.config.leverage});
