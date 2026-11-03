@@ -2415,7 +2415,7 @@ function fillLevel(id,fp,taker){ const l=S.grid.find(g=>g.id===id);
     if(!l.reduceOnly){ S._batchFills=(S._batchFills||0)+1;
       if(S._batchFills>=(S._cycleMaxFills||4)&&!S._batchHoldAt){
         S._batchHoldAt=Date.now(); S._batchStudiedAt=false;
-        cancelPendingAdds();
+        // (لا إلغاء لأوامر الصفقة — أمر المالك 3 نوفمبر 23:51: الأوامر القائمة تُترك كما هي)
         pushLog('server','🧷 القاطع المرحلي: اكتملت 4 أوامر دخول — توقف الفتح حتى الاستقرار + دراسة جديدة ثم 4 أخرى'); } }
     const lotId=noteEntry(d.addedQty,fp,fee,l.origin==='hunt'?'hunt':'grid');
     l.lotId=l.lotId||lotId;
@@ -2517,7 +2517,7 @@ function harvestRipe(p){ if(!p||S.status==='idle') return;
   const pv=S._harvPrev;
   if(S.position&&pv&&pv.px>0){ const dt=Date.now()-pv.at;
     if(dt>0&&dt<6000){ const adv=(S.position.side==='short'?(p-pv.px):(pv.px-p))/pv.px*100;
-      if(adv>=0.35){ cancelPendingAdds(); S._waveHoldUntil=Date.now()+60000;
+      if(adv>=0.35){ S._waveHoldUntil=Date.now()+60000; // تجميد إضافات فقط — لا إلغاء أوامر
         if(!S._advSpkAt||Date.now()-S._advSpkAt>60000){ S._advSpkAt=Date.now();
           pushLog('server','⚡ انزلاق عكسي '+adv.toFixed(2)+'% خلال '+Math.round(dt/1000)+'ث — سُحبت المستويات من المنصة 60ث حتى يهدأ السعر'); } } } }
   // ——— درع الموجة المتدرجة ———
@@ -2526,7 +2526,7 @@ function harvestRipe(p){ if(!p||S.status==='idle') return;
   // سحب فوري من المنصة (لا تعطيل محلي فقط) + تجميد إعادة التسليح 60ث تتمدد
   // ما دامت الموجة مستمرة — «الاتباعد وقت الخطر» بشكله الصحيح للحقيقي
   if(S.position&&S.status==='running'){ const wv=waveAdversePct();
-    if(wv>=0.8){ cancelPendingAdds(); S._waveHoldUntil=Date.now()+60000;
+    if(wv>=0.8){ S._waveHoldUntil=Date.now()+60000; // تجميد إضافات فقط — لا إلغاء أوامر
       if(!S._wavePullAt||Date.now()-S._wavePullAt>60000){ S._wavePullAt=Date.now();
         pushLog('server','🌊 موجة معاكسة '+wv.toFixed(2)+'% خلال 60ث — سُحبت المستويات من المنصة وتجميد التسليح حتى تستقر'); } } }
   S._harvPrev={px:p,at:Date.now()}; }
@@ -2917,7 +2917,7 @@ function maybeHunt(p){ const hit=huntTrigger(p); if(!hit) return false;
     if(S._batchFills>=(S._cycleMaxFills||4)&&!S._batchHoldAt){
       S._batchHoldAt=Date.now(); S._batchStudiedAt=false; S._batchWorst=null; S._batchWorseAt=0;
       S._nextCycleMax=3; // بعد الانزلاق: الدورة القادمة 3 أوامر متباعدة فقط (قاعدة المالك)
-      cancelPendingAdds();
+      // (لا إلغاء لأوامر الصفقة القائمة)
       pushLog('server','🧷 القاطع المرحلي (صيد): اكتملت 4 أوامر دخول — توقف الفتح حتى يتوقف الانزلاق + دراسة ثم 4 أخرى'); } }
   if(d.closedQty>0){ const of=S.journal.find(j=>j.status==='open')?.fees||0;
     noteClose(d.closedQty,p,fee,'صفقة',d.realized-of-fee); S.huntOpen=Math.max(0,(S.huntOpen||0)-1); }
@@ -3132,7 +3132,7 @@ function ensureGrid(){ if(S.status!=='running') return;
   if(chasing&&!empty){ const paused=jump>0.02&&jump<0.16;
     if(!(paused&&inAddZone(center))) return; }
   if(S.position&&!inAddZone(center)&&!empty){ if(S.position) syncPositionTp(); return; }
-  cancelPendingAdds();
+  // (لا إلغاء لأوامر الصفقة عند إعادة التمركز — تُترك كما هي)
   const keep=S.grid.filter(g=>g.status==='filled'||g.status==='cancelled'||g.status==='staged'||
     (g.reduceOnly&&(g.status==='open'||g.status==='armed')));
   S.grid=[...keep,...buildGrid(center,false,4)].filter(g=>
@@ -3949,8 +3949,9 @@ export function saveCfg(v){
      oldStep!==S.config.gridStepPct||oldBal!==S.config.cycleBalance)){
     // تغيّر رأس المال/الرافعة/المستويات/الخطوة أثناء التشغيل: أعد بناء الشبكة فورًا
     // بالأحجام والعدد الفعّال المحسوبين من القيم الجديدة — لا تبقَ شبكة بمعاملات قديمة
-    cancelPendingAdds();
-    if(S.config.mode==='live'&&S.keys) exCancelAll(sym).catch(()=>{});
+    // أمر المالك (3 نوفمبر 23:51): لا إلغاء لأوامر الصفقات المفتوحة عند تغيير
+    // الإعدادات — يُبنى السلم الجديد ويُتحقق من عدم تكرار الأسعار عند الإرسال
+    pushLog('server','⚙️ تغيّرت إعدادات الشبكة — يُبنى سلم جديد دون إلغاء أوامر الصفقات القائمة');
     const c=S.lastPrice||S.gridAnchor||(S.position?S.position.entry:0);
     if(c>0){ const keep=S.grid.filter(g=>g.status==='filled'||g.status==='cancelled'||
         (g.reduceOnly&&(g.status==='open'||g.status==='armed')));
