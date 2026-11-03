@@ -2179,6 +2179,7 @@ function groupNeed() {
   return Math.max(0, Math.min(4, 4 - total));
 }
 async function softTopUp() {
+  if (S.status !== "running") return 0;
   if (!S._entriesEnabled) return 0;
   if (S.config.mode !== "live" || !S.keys) return 0;
   if (!S.position || batchHoldActive()) return 0;
@@ -2512,8 +2513,11 @@ async function orphanSweep() {
 }
 async function exPlaceLimit(intent) {
   await ensureLiveMeta(intent.symbol);
+  if (!intent.reduceOnly && S.status !== "running") {
+    throw new Error("\u26D4 \u0627\u0644\u0628\u0648\u062A \u063A\u064A\u0631 \u0645\u064F\u0634\u063A\u0651\u0644 \u2014 \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 (\u0627\u0636\u063A\u0637 \u062A\u0634\u063A\u064A\u0644)");
+  }
   if (!intent.reduceOnly && !S._entriesEnabled) {
-    throw new Error("\u26D4 \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u063A\u0644\u0642\u0629 \u2014 \u0646\u0641\u0651\u0630 \xAB\u0628\u062F\u0627\u064A\u0629 \u0646\u0638\u064A\u0641\u0629\xBB \u0644\u0641\u062A\u062D \u0645\u0648\u062C\u0629 \u062C\u062F\u064A\u062F\u0629");
+    throw new Error("\u26D4 \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u063A\u0644\u0642\u0629 \u2014 \u0646\u0641\u0651\u0630 \xAB\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0623\u0648\u0627\u0645\u0631\xBB");
   }
   if (!intent.reduceOnly) {
     const before = Math.floor(Number(intent.qty) || 0);
@@ -2567,17 +2571,6 @@ function exCloseQty(symbol2, side, qty) {
     type: "market",
     side: side === "short" ? "buy" : "sell",
     size: qty,
-    reduceOnly: true,
-    marginMode: "CROSS"
-  });
-}
-function exClose(symbol2, side) {
-  return placeOrderSmart({
-    clientOid: "cls_" + Date.now().toString(36),
-    symbol: symbol2,
-    type: "market",
-    side: side === "short" ? "buy" : "sell",
-    closeOrder: true,
     reduceOnly: true,
     marginMode: "CROSS"
   });
@@ -5304,6 +5297,7 @@ async function liveSync() {
       S._exEntryOpenN = (Array.isArray(exs) ? exs : []).filter((o) => o && o.reduceOnly !== true).length;
     } catch {
     }
+    if (S.status !== "running") return;
     if (!S._entriesEnabled) {
       if (!S._gateLogAt || Date.now() - S._gateLogAt > 18e5) {
         S._gateLogAt = Date.now();
@@ -5618,40 +5612,17 @@ async function stopBot() {
     return;
   }
   if (S.status === "idle") return;
-  const p = S.lastPrice || S.markPrice || 0, prevSide = S.position ? S.position.side : null;
-  if (S.config.mode === "live" && S.keys && prevSide) {
-    try {
-      await exCancelAll(S.config.symbol);
-      await exCancelStops(S.config.symbol);
-      S._guardId = null;
-    } catch (e) {
-      logSwallow("silent-catch", e);
-    }
-    let flat = false;
-    for (let i = 0; i < 4 && !flat; i++) {
-      try {
-        await exClose(S.config.symbol, prevSide);
-      } catch (e) {
-        logSwallow("silent-catch", e);
-      }
-      try {
-        await new Promise((r) => setTimeout(r, 700));
-        const pos = await exPosition(S.config.symbol);
-        flat = !pos;
-      } catch (e) {
-        logSwallow("silent-catch", e);
-      }
-    }
-    S.ignoreExchangeUntil = Date.now() + 15e3;
-    if (!flat) {
-      pushLog("error", "\u26A0\uFE0F \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0645\u0646\u0635\u0629 \u0644\u0645 \u064A\u062A\u0623\u0643\u062F \u0628\u0639\u062F 4 \u0645\u062D\u0627\u0648\u0644\u0627\u062A \u2014 \u0631\u0627\u062C\u0639 \u0627\u0644\u0645\u0631\u0643\u0632 \u064A\u062F\u0648\u064A\u064B\u0627 \u0641\u064A KuCoin \u0641\u0648\u0631\u064B\u0627");
-      notify("\u062A\u062D\u0630\u064A\u0631: \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0645\u0631\u0643\u0632 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 \u0644\u0645 \u064A\u062A\u0623\u0643\u062F \u2014 \u062A\u062D\u0642\u0642 \u064A\u062F\u0648\u064A\u064B\u0627 \u0641\u0648\u0631\u064B\u0627", "warn");
-    }
-  }
-  await flattenAt(p, "\u0625\u064A\u0642\u0627\u0641");
   S.status = "stopped";
+  S._entriesEnabled = false;
+  try {
+    if (S.config.mode === "live" && S.keys && S.position) {
+      await syncPositionTp();
+    }
+  } catch (e) {
+    logSwallow("stopTp", e);
+  }
   clearNativeOngoing();
-  pushLog("info", "\u0625\u064A\u0642\u0627\u0641 \u2014 \u0623\u064F\u063A\u0644\u0642\u062A \u0643\u0644 \u0627\u0644\u0635\u0641\u0642\u0627\u062A \u0639\u0646\u062F \u0627\u0644\u0633\u0639\u0631 \u0627\u0644\u062D\u0627\u0644\u064A");
+  pushLog("info", "\u23F9 \u0625\u064A\u0642\u0627\u0641 \u0643\u0627\u0645\u0644 \u2014 \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u062C\u062F\u064A\u062F\u0629. \u0627\u0644\u0645\u0631\u0627\u0643\u0632 \u062A\u0628\u0642\u0649 \u0628\u0623\u0648\u0627\u0645\u0631 \u062C\u0646\u064A\u0647\u0627 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629 (\u0644\u0627 \u0628\u064A\u0639 \u0628\u062E\u0633\u0627\u0631\u0629)");
   toast("\u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0627\u0644\u0628\u0648\u062A");
   emit();
   saveAll();
