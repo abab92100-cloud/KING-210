@@ -2170,6 +2170,7 @@ async function exOpenEntries(sym) {
   }
 }
 async function reconcileGroup() {
+  if (EMERGENCY_BLOCK_ENTRIES) return 0;
   if (S.config.mode !== "live" || !S.keys || !S.position) return 0;
   if (batchHoldActive()) return 0;
   const sym = S.config.symbol;
@@ -2232,6 +2233,39 @@ function ensureGroupFour() {
     }
   }
   return need;
+}
+async function cancelEntryOrders() {
+  if (S.config.mode !== "live" || !S.keys) return { ok: false, why: "\u0644\u064A\u0633 \u062D\u0642\u064A\u0642\u064A\u0627\u064B" };
+  const sym = S.config.symbol;
+  let cancelled = 0, kept = 0;
+  try {
+    const r = await kcPrivate("GET", "/api/v1/orders?status=active&symbol=" + encodeURIComponent(sym));
+    const arr = Array.isArray(r) ? r : r && r.data || [];
+    for (const o of arr) {
+      const id = o.id || o.orderId;
+      if (o.reduceOnly === true) {
+        kept++;
+        continue;
+      }
+      try {
+        await kcPrivate("DELETE", "/api/v1/orders/" + id);
+        cancelled++;
+      } catch (e) {
+        if (/cannot be canceled|not exist/i.test(String(e?.message || ""))) {
+        } else logSwallow("cancelEntry", e);
+      }
+    }
+    for (const l of S.grid) {
+      if (!l.reduceOnly && l.status !== "filled") {
+        l.status = "cancelled";
+        l.exchangeOrderId = null;
+      }
+    }
+    pushLog("server", "\u{1F9F9} \u062A\u0646\u0638\u064A\u0645 \u0627\u0644\u0637\u0648\u0627\u0631\u0626: \u0623\u064F\u0644\u063A\u064A " + cancelled + " \u0623\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u0623\u064F\u0628\u0642\u064A " + kept + " \u0623\u0645\u0631 \u062C\u0646\u064A \u2014 \u0644\u0627 \u0625\u063A\u0644\u0627\u0642 \u0623\u064A \u0645\u0631\u0643\u0632");
+  } catch (e) {
+    pushLog("error", "\u062A\u0646\u0638\u064A\u0645 \u0627\u0644\u0637\u0648\u0627\u0631\u0626 \u0641\u0634\u0644: " + String(e?.message || e));
+  }
+  return { ok: true, cancelled, kept, symbol: sym };
 }
 function gridStatus() {
   const c = S.config;
@@ -2380,8 +2414,12 @@ async function orphanSweep() {
     logSwallow("orphanSweep", e);
   }
 }
+var EMERGENCY_BLOCK_ENTRIES = true;
 async function exPlaceLimit(intent) {
   await ensureLiveMeta(intent.symbol);
+  if (!intent.reduceOnly && EMERGENCY_BLOCK_ENTRIES) {
+    throw new Error("\u26D4 \u0625\u064A\u0642\u0627\u0641 \u0637\u0627\u0631\u0626: \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u062C\u062F\u064A\u062F\u0629 \u2014 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u0631\u0627\u0643\u0632 \u0648\u0627\u0644\u062C\u0646\u064A \u0641\u0642\u0637");
+  }
   if (!intent.reduceOnly) {
     const before = Math.floor(Number(intent.qty) || 0);
     const capped = capEntryQty(before, intent.price);
@@ -5861,7 +5899,7 @@ function initEngine() {
 // src/server-entry.ts
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "KING-1.9.4";
+var SRV_VER = "KING-1.9.5";
 var FLEET_N = 1;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
@@ -6112,6 +6150,10 @@ var srv = createServer(async (req, res) => {
             return send(res, 200, { ok: true, fp: strategyFingerprint(), slot: SLOT });
           case "gridStatus":
             return send(res, 200, { ok: true, slot: SLOT, status: gridStatus() });
+          case "cancelEntries": {
+            const rr = await cancelEntryOrders();
+            return send(res, 200, rr);
+          }
           case "ensureFour": {
             const need = ensureGroupFour();
             return send(res, 200, { ok: true, need });
@@ -6148,6 +6190,10 @@ var srv = createServer(async (req, res) => {
       } catch {
       }
       const a = String(j.action || "");
+      if (a === "stabilize") {
+        const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 15e3, { action: "cancelEntries" })));
+        return send(res, 200, { ok: true, results: rs });
+      }
       if (a === "alignFleet") {
         const base = j.cfg || {};
         const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 8e3, { action: "alignStrategy", cfg: base })));
