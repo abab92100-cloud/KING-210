@@ -2697,7 +2697,9 @@ function batchHoldActive() {
       S._batchWorseAt = Date.now();
     }
   }
-  const __real = realBatchFills();
+  const __live = Math.max(0, Number(S._exEntryOpenN) || 0);
+  const __filled = Math.max(0, Number(S._entryFillsN) || 0);
+  const __real = Math.max(__live + __filled, 0);
   S._batchFills = __real;
   if (__real < (S._cycleMaxFills || 4)) return false;
   const H = 36e5;
@@ -5126,19 +5128,20 @@ async function liveSync() {
         return { avgPx: e.cost / e.size, size: e.size, fee: e.fee };
       };
       try {
+        const OUR = ["hunt_", "oid_", "grp_", "rep_", "orph_", "cls_"];
         const openedAt = S.position && S.position.openedAt || 0;
         const side = S.position ? S.position.side === "long" ? "buy" : "sell" : null;
         const uniq = /* @__PURE__ */ new Set();
         for (const f of fills) {
           const tt = Number(f.tradeTime) || 0;
+          const co = String(f.clientOid || "");
+          if (!OUR.some((pf) => co.startsWith(pf))) continue;
           if (openedAt && tt < openedAt - 12e4) continue;
           if (side && String(f.side || "").toLowerCase() !== side) continue;
           if (f.reduceOnly) continue;
-          uniq.add(String(f.orderId || f.clientOid || f.tradeId || Math.random()));
+          uniq.add(String(f.orderId || co));
         }
-        if (uniq.size > 0) {
-          S._entryFillsN = uniq.size;
-        }
+        S._entryFillsN = uniq.size;
       } catch {
       }
       for (const l of S.grid) {
