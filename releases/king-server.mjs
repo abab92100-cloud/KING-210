@@ -2170,7 +2170,7 @@ async function exOpenEntries(sym) {
   }
 }
 async function reconcileGroup() {
-  if (EMERGENCY_BLOCK_ENTRIES) return 0;
+  if (!S._entriesEnabled) return 0;
   if (S.config.mode !== "live" || !S.keys || !S.position) return 0;
   if (batchHoldActive()) return 0;
   const sym = S.config.symbol;
@@ -2313,6 +2313,60 @@ function alignStrategy(cfg) {
   }
   return changed > 0;
 }
+async function cleanStart() {
+  S._entriesEnabled = false;
+  let cancelled = 0, ignored = 0;
+  try {
+    const rr = await cancelEntryOrders();
+    cancelled = Number(rr && rr.cancelled) || 0;
+  } catch {
+  }
+  try {
+    const curSym = S.config.symbol, curDisp = S.config.displaySymbol;
+    S.config.symbol = "__NONE__";
+    S.config.displaySymbol = "\u2014";
+    const rep = await repairAccount();
+    ignored = Array.isArray(rep && rep.report) ? rep.report.length : 0;
+    S.config.symbol = curSym;
+    S.config.displaySymbol = curDisp;
+    pushLog("server", "\u{1F648} \u0623\u064F\u063A\u0641\u0644\u062A " + ignored + " \u0635\u0641\u0642\u0629/\u0635\u0641\u0642\u0627\u062A \u2014 \u0644\u0643\u0644 \u0645\u0646\u0647\u0627 \u062C\u0646\u064A \u0631\u0627\u0628\u062D \u0641\u0642\u0637\u060C \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u0648\u0644\u0627 \u0625\u063A\u0644\u0627\u0642 \u0628\u062E\u0633\u0627\u0631\u0629");
+  } catch (e) {
+    logSwallow("cleanStartPos", e);
+  }
+  S.grid = [];
+  S.position = null;
+  S.journal = [];
+  S.logs = [];
+  S.realizedPnl = 0;
+  S.feesPaid = 0;
+  S.cycleHarvested = 0;
+  S.slipCost = 0;
+  S.fundingPaid = 0;
+  S._entryFillsN = 0;
+  S._batchFills = 0;
+  S._batchHoldAt = 0;
+  S._batchWorst = null;
+  S._batchWorseAt = 0;
+  S._batchStudiedAt = false;
+  S._groupN = 1;
+  S._harvestAt = 0;
+  S._reselectDone = false;
+  S._reselectBusy = false;
+  S._noNewEntries = false;
+  S._flatConfirmed = false;
+  S._flatStrikes = 0;
+  S._waitFreshUntil = 0;
+  S.recentCoins = {};
+  S._nextReady = false;
+  S._nextSymbol = null;
+  S._dirFlipAt = 0;
+  S.status = "running";
+  S.activeCycle = null;
+  S.startedAt = Date.now();
+  S._entriesEnabled = true;
+  pushLog("server", "\u{1F680} \u0628\u062F\u0627\u064A\u0629 \u0646\u0638\u064A\u0641\u0629: \u0623\u064F\u0644\u063A\u064A " + cancelled + " \u0623\u0645\u0631 \u062F\u062E\u0648\u0644 \xB7 \u0623\u064F\u063A\u0641\u0644\u062A \u0627\u0644\u0645\u0631\u0627\u0643\u0632 \u0627\u0644\u0642\u062F\u064A\u0645\u0629 \u0628\u062C\u0646\u064A \u0631\u0627\u0628\u062D \xB7 \u0635\u064F\u0641\u0651\u0631\u062A \u0627\u0644\u0639\u062F\u0651\u0627\u062F\u0627\u062A \xB7 \u0641\u064F\u062A\u062D\u062A \u0627\u0644\u0628\u0648\u0627\u0628\u0629 \u2014 \u0628\u062D\u062B \u0639\u0646 \u0641\u0631\u0635\u0629 \u0645\u0624\u0647\u0644\u0629 \u062C\u062F\u064A\u062F\u0629");
+  return { ok: true, cancelled, ignored };
+}
 async function repairAccount() {
   if (S.config.mode !== "live" || !S.keys) return { ok: false, error: "\u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0641\u0642\u0637" };
   pushLog("server", "\u{1F527} \u0628\u062F\u0621 \u0625\u0635\u0644\u0627\u062D \u0627\u0644\u062D\u0633\u0627\u0628 \u0627\u0644\u0634\u0627\u0645\u0644 \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639...");
@@ -2414,11 +2468,10 @@ async function orphanSweep() {
     logSwallow("orphanSweep", e);
   }
 }
-var EMERGENCY_BLOCK_ENTRIES = true;
 async function exPlaceLimit(intent) {
   await ensureLiveMeta(intent.symbol);
-  if (!intent.reduceOnly && EMERGENCY_BLOCK_ENTRIES) {
-    throw new Error("\u26D4 \u0625\u064A\u0642\u0627\u0641 \u0637\u0627\u0631\u0626: \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u062C\u062F\u064A\u062F\u0629 \u2014 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u0631\u0627\u0643\u0632 \u0648\u0627\u0644\u062C\u0646\u064A \u0641\u0642\u0637");
+  if (!intent.reduceOnly && !S._entriesEnabled) {
+    throw new Error("\u26D4 \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u063A\u0644\u0642\u0629 \u2014 \u0646\u0641\u0651\u0630 \xAB\u0628\u062F\u0627\u064A\u0629 \u0646\u0638\u064A\u0641\u0629\xBB \u0644\u0641\u062A\u062D \u0645\u0648\u062C\u0629 \u062C\u062F\u064A\u062F\u0629");
   }
   if (!intent.reduceOnly) {
     const before = Math.floor(Number(intent.qty) || 0);
@@ -5899,7 +5952,7 @@ function initEngine() {
 // src/server-entry.ts
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "KING-1.9.5";
+var SRV_VER = "KING-1.9.6";
 var FLEET_N = 1;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
@@ -6154,6 +6207,10 @@ var srv = createServer(async (req, res) => {
             const rr = await cancelEntryOrders();
             return send(res, 200, rr);
           }
+          case "cleanStart": {
+            const rr = await cleanStart();
+            return send(res, 200, rr);
+          }
           case "ensureFour": {
             const need = ensureGroupFour();
             return send(res, 200, { ok: true, need });
@@ -6190,6 +6247,11 @@ var srv = createServer(async (req, res) => {
       } catch {
       }
       const a = String(j.action || "");
+      if (a === "cleanAll") {
+        const first = await jfetch("http://127.0.0.1:" + (BASE_PORT + 1) + "/cmd", 6e4, { action: "cleanStart" });
+        const rest = await Promise.all(Array.from({ length: Math.max(0, FLEET_N - 1) }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 2 + i) + "/cmd", 3e4, { action: "cleanStart" })));
+        return send(res, 200, { ok: true, first, rest });
+      }
       if (a === "stabilize") {
         const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 15e3, { action: "cancelEntries" })));
         return send(res, 200, { ok: true, results: rs });
