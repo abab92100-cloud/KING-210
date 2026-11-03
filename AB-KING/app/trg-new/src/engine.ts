@@ -1257,6 +1257,7 @@ async function exOpenEntries(sym:any){
   }catch(e){ logSwallow('exOpenEntries',e); return null; }
 }
 export async function reconcileGroup(){
+  if(EMERGENCY_BLOCK_ENTRIES) return 0; // إيقاف طارئ — لا إضافة أوامر
   if(S.config.mode!=='live'||!S.keys||!S.position) return 0;
   if(batchHoldActive()) return 0;
   const sym=S.config.symbol;
@@ -1301,6 +1302,26 @@ export function ensureGroupFour(){
     }catch(e){ logSwallow('rebuildGrid',e); }
   }
   return need;
+}
+/* إلغاء كل أوامر الدخول المتراكمة للرمز الحالي — يبقي أوامر الجني (reduceOnly)
+   للخروج الآمن. لا يغلق أي مركز ولا يبيع بخسارة. */
+export async function cancelEntryOrders(){
+  if(S.config.mode!=='live'||!S.keys) return { ok:false, why:'ليس حقيقياً' };
+  const sym=S.config.symbol; let cancelled=0, kept=0;
+  try{
+    const r=await kcPrivate('GET','/api/v1/orders?status=active&symbol='+encodeURIComponent(sym));
+    const arr:any[]=Array.isArray(r)?r:((r&&(r as any).data)||[]);
+    for(const o of arr){
+      const id=o.id||o.orderId;
+      if(o.reduceOnly===true){ kept++; continue; }
+      try{ await kcPrivate('DELETE','/api/v1/orders/'+id); cancelled++; }catch(e:any){
+        if(/cannot be canceled|not exist/i.test(String(e?.message||''))) {} else logSwallow('cancelEntry',e); }
+    }
+    // تنظيف الحالة المحلية: ألغِ مستويات الدخول المحلية
+    for(const l of S.grid){ if(!l.reduceOnly&&l.status!=='filled'){ l.status='cancelled'; l.exchangeOrderId=null; } }
+    pushLog('server','🧹 تنظيم الطوارئ: أُلغي '+cancelled+' أمر دخول — أُبقي '+kept+' أمر جني — لا إغلاق أي مركز');
+  }catch(e:any){ pushLog('error','تنظيم الطوارئ فشل: '+String(e?.message||e)); }
+  return { ok:true, cancelled, kept, symbol:sym };
 }
 export function gridStatus(){
   const c=S.config;
@@ -1394,8 +1415,14 @@ async function orphanSweep(){
     }
   }catch(e){ logSwallow('orphanSweep',e); } }
 
+/* ⛔ إيقاف طارئ (3 نوفمبر 15:35 — حماية أموال حقيقية): تراكم 17 أمر دخول
+   ومركز PEPE بـ943$ على نصيب 34$. يُمنع أي أمر دخول جديد من نقطة الإرسال
+   الأخيرة — أوامر الجني (reduceOnly) تعمل طبيعياً. يُرفع فقط بقرار واعٍ. */
+const EMERGENCY_BLOCK_ENTRIES=true;
 async function exPlaceLimit(intent){
   await ensureLiveMeta(intent.symbol);
+  if(!intent.reduceOnly&&EMERGENCY_BLOCK_ENTRIES){
+    throw new Error('⛔ إيقاف طارئ: لا أوامر دخول جديدة — إدارة المراكز والجني فقط'); }
   // ─── بوابة الإرسال النهائية (درس UNI: مستوى محفوظ بحجم 30 وحدة من إصدار
   // قديم أُعيد إرساله!): السقف يُطبق هنا حتماً مهما كان المحفوظ، والتقريب
   // يستخدم tick الرمز نفسه من خريطة المواصفات لا tick العملة السابقة ───
