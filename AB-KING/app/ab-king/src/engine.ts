@@ -1231,6 +1231,41 @@ async function alignHarvestCore(sym:any,since:any){
     pushLog('server','💵 جني المنصة الفعلي '+fmtUsd(real)+' (بعد الرسوم الحقيقية) — التطبيق كان يقدّر '+fmtUsd(est)+' — صُحّحت الدفاتر ليطابقا حرفياً');
   }catch(e){ logSwallow('alignHarvest',e); } }
 
+/* ─── فرض المجموعة الرباعية (حل جذري 3 نوفمبر — بدل العدّادات): أي مركز
+   حقيقي يجب أن يملك دائماً 4 أوامر دخول (منفّذة + قائمة). عند نقصها يُعاد
+   بناء السلم الميت ويُسلّح الناقص — كل دورة مزامنة. يعتمد على واقع المنصة:
+   حجم المركز + أوامره القائمة، لا على عدّاد داخلي قد يفسد ─── */
+export function groupNeed(){
+  if(!S.position) return 0;
+  const liveEntries=S.grid.filter((l:any)=>!l.reduceOnly&&l.status==='open'&&l.exchangeOrderId).length;
+  const filledOrders=(S._entryFillsN!=null)?Math.max(0,Number(S._entryFillsN)||0):
+    Math.max(0,Math.round(((S.position.size||0)*(S.multiplier||1)*(S.position.entry||0))/Math.max(3,Number(S.config.cycleBalance)||3)));
+  const total=filledOrders+liveEntries;
+  return Math.max(0,Math.min(4,4-total));
+}
+export function ensureGroupFour(){
+  if(S.config.mode!=='live'||!S.keys||!S.position) return 0;
+  if(batchHoldActive()) return 0;
+  const need=groupNeed(); if(need<=0) return 0;
+  let armed=S.grid.filter((l:any)=>!l.reduceOnly&&(l.status==='armed'||l.status==='open')).length;
+  if(armed<need){
+    try{ const c=S.lastPrice||S.position.entry||0;
+      const fresh=buildGrid(c,false,Math.max(8,effLevels())).filter((x:any)=>!x.reduceOnly);
+      const keep=S.grid.filter((l:any)=>l.reduceOnly||l.status==='open'||l.status==='filled');
+      S.grid=keep.concat(fresh); armed=fresh.filter((l:any)=>l.status==='armed').length;
+      pushLog('server','🔁 إعادة بناء سلم المركز (كان ناقصاً) — مسلّح الآن '+armed+' — مطلوب '+need+' أوامر لإكمال الأربعة');
+    }catch(e){ logSwallow('rebuildGrid',e); }
+  }
+  return need;
+}
+export function gridStatus(){
+  const c=S.config;
+  return { symbol:c.symbol, mode:c.mode, cycleBalance:c.cycleBalance, leverage:c.leverage,
+    fills:(S._entryFillsN!=null?S._entryFillsN:null), need:groupNeed(),
+    pos:S.position?{side:S.position.side,size:S.position.size,entry:S.position.entry}:null,
+    hold:batchHoldActive(), noNew:!!S._noNewEntries,
+    levels:(S.grid||[]).map((l:any)=>({p:l.price,q:l.qty,st:l.status,ro:!!l.reduceOnly})).slice(0,30) };
+}
 /* ─── بصمة الاستراتيجية الموحدة (أمر المالك 2 نوفمبر 23:59): الأسطول
    الخمسة يجب أن يعملوا بنفس الاستراتيجية حرفياً — بصمة واحدة تُطبع في
    السجل وتُقارن بين المحركات، وأي انحراف يظهر فوراً ─── */
@@ -3413,6 +3448,7 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
     // بعد) لا تُحسب (كانت تُحسب فتُقفل البوابة دائماً ← «رفض تسليح» مع أمر واحد!)
     const _liveAdds=S.grid.filter(l=>!l.reduceOnly&&(l.status==='open'||l.status==='filled')).length;
     const _room=Math.max(0,4-realBatchFills()-_liveAdds);
+    try{ ensureGroupFour(); }catch{}
     const want=S.grid.filter(l=>(l.status==='armed')).sort((a,b)=>Math.abs((a.price||0)-(S.lastPrice||0))-Math.abs((b.price||0)-(S.lastPrice||0)));
     if(!S.permDenied) for(const l of want){ if(l.exchangeOrderId) continue;
       // ─── فصل دقيق (المصيبة المتكررة 3 نوفمبر): التجميد بسبب مركز زائد في

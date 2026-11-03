@@ -9,7 +9,7 @@ import './server-shims'; // أولًا دائمًا: يثبّت البيئة ق�
 import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
-  strategyFingerprint, alignStrategy,
+  strategyFingerprint, alignStrategy, gridStatus, ensureGroupFour,
 } from './engine';
 
 const SRV_VER = 'TRG-NEW-1.0.0';
@@ -227,6 +227,8 @@ const srv = createServer(async (req, res) => {
           case 'repair': { const rr = await repairAccount(); return send(res, 200, rr); }
           case 'alignStrategy': { const ch = alignStrategy(j.cfg||{}); return send(res, 200, { ok:true, changed:!!ch, fp:strategyFingerprint() }); }
           case 'fingerprint': return send(res, 200, { ok:true, fp:strategyFingerprint(), slot:SLOT });
+          case 'gridStatus': return send(res, 200, { ok:true, slot:SLOT, status:gridStatus() });
+          case 'ensureFour': { const need=ensureGroupFour(); return send(res, 200, { ok:true, need }); }
           default: return send(res, 400, { ok: false, error: 'إجراء غير معروف: ' + a });
         }
       }
