@@ -1495,6 +1495,10 @@ async function scanRadar() {
       }
       return { ...r, preScore: Math.max(0, Math.min(100, Math.round(sc))) };
     }).sort((a, b) => b.preScore - a.preScore);
+    if (!S._scanLogAt || Date.now() - S._scanLogAt > 3e5) {
+      S._scanLogAt = Date.now();
+      pushLog("server", "\u{1F50E} \u0645\u0633\u062D \u0634\u0627\u0645\u0644: " + rows.length + " \u0639\u0645\u0644\u0629 \u0641\u064A \u0627\u0644\u0645\u0646\u0635\u0629 \u2014 \u0641\u062D\u0635 \u0645\u0639\u0645\u0651\u0642 \u0644\u0623\u0641\u0636\u0644 " + Math.min(30, preScored.length));
+    }
     const det = await Promise.all(preScored.slice(0, 30).map(async (r) => {
       const out = { ...r, vol: 0, spread: 0, trendPct: 0, price: 0 };
       try {
@@ -5302,10 +5306,17 @@ async function liveSync() {
         }));
         try {
           const liveSet = /* @__PURE__ */ new Map();
-          for (const ep of S.exPositions) liveSet.set(String(ep.symbol).replace(/USDTM$/i, ""), ep);
+          for (const ep of S.exPositions) liveSet.set(String(ep.symbol).replace(/USDTM$/i, "").toUpperCase(), ep);
           for (const [sym2, ep] of liveSet) {
-            const hasOpen = S.journal.some((j) => j.status === "open" && String(j.symbol).toUpperCase() === sym2.toUpperCase());
-            if (!hasOpen) {
+            const row = S.journal.find((j) => j.status === "open" && String(j.symbol).toUpperCase() === sym2);
+            if (row) {
+              row.qty = ep.size;
+              row.entry = ep.entry;
+              row.side = ep.side;
+              row.exPnl = Number(ep.pnl) || 0;
+              if (!row.mult) row.mult = Number(S.multiplier) || 1;
+              row.lastPx = S.lastPrice || row.lastPx;
+            } else {
               S.journal.push({
                 id: uid("jsy"),
                 symbol: sym2,
@@ -5319,7 +5330,10 @@ async function liveSync() {
                 closedAt: 0,
                 mergedOrders: 1,
                 status: "open",
-                source: "\u0645\u0632\u0627\u0645\u0646\u0629 \u0627\u0644\u0645\u0646\u0635\u0629"
+                source: "\u0645\u0632\u0627\u0645\u0646\u0629 \u0627\u0644\u0645\u0646\u0635\u0629",
+                exPnl: Number(ep.pnl) || 0,
+                mult: Number(S.multiplier) || 1,
+                lastPx: S.lastPrice || 0
               });
             }
           }
@@ -5329,7 +5343,8 @@ async function liveSync() {
               j.status = "closed";
               j.closedAt = Date.now();
               j.exit = j.exit || j.entry;
-              if (j.source !== "\u0625\u064A\u0642\u0627\u0641") j.source = "\u0645\u0632\u0627\u0645\u0646\u0629 \u0627\u0644\u0645\u0646\u0635\u0629 (\u0644\u0645 \u064A\u0639\u062F \u0642\u0627\u0626\u0645\u0627\u064B)";
+              j.pnl = 0;
+              if (j.source !== "\u0625\u064A\u0642\u0627\u0641") j.source = "\u0623\u064F\u063A\u0644\u0642 \u0639\u0644\u0649 \u0627\u0644\u0645\u0646\u0635\u0629";
             }
           }
         } catch (e) {
@@ -5781,6 +5796,11 @@ async function botTick() {
 }
 function startBot() {
   clearHalt();
+  S._entriesEnabled = true;
+  if (!S._startGateLog || Date.now() - S._startGateLog > 1e3) {
+    S._startGateLog = Date.now();
+    pushLog("server", "\u25B6\uFE0F \u062A\u0634\u063A\u064A\u0644: \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0645\u0641\u062A\u0648\u062D\u0629 \u2014 \u0627\u0644\u0628\u062D\u062B \u0627\u0644\u0634\u0627\u0645\u0644 \u0648\u0627\u0644\u062F\u0631\u0627\u0633\u0629 \u062B\u0645 \u0627\u0644\u0641\u062A\u062D");
+  }
   try {
     S._studyAt = 0;
     S._fleetOpened = Number(S._fleetOpened) || 0;
@@ -6439,8 +6459,11 @@ var srv = createServer(async (req, res) => {
           ...S,
           journal: (S.journal || []).slice(-120).map((r) => {
             if (r.status !== "open") return r;
-            const feeEst = lp ? r.qty * mult * lp * taker : 0;
-            const f = lp ? (r.side === "short" ? 1 : -1) * (r.entry - lp) * mult * r.qty - (r.fees || 0) - feeEst : 0;
+            if (r.exPnl !== void 0 && r.exPnl !== null) return { ...r, floatNet: Math.round(Number(r.exPnl) * 100) / 100 };
+            const rm = Number(r.mult) || mult;
+            const rp = r.symbol && r.symbol.toUpperCase() === String(S.config.displaySymbol || "").toUpperCase() ? lp : Number(r.lastPx) || lp;
+            const feeEst = rp ? r.qty * rm * rp * taker : 0;
+            const f = rp ? (r.side === "short" ? 1 : -1) * (r.entry - rp) * rm * r.qty - (r.fees || 0) - feeEst : 0;
             return { ...r, floatNet: Math.round((f + Number.EPSILON) * 100) / 100 };
           }),
           logs: (S.logs || []).slice(-80)
