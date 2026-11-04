@@ -1443,6 +1443,24 @@ export function enableEntries(){
    الحقوق الحقيقية في KuCoin هي المصدر الوحيد. يُعاد ضبط رأس المال والربح
    المعروض ليطابق المنصة تماماً، ويُصفَّر «الربح المجني» الوهمي.
    لا يُغلق مركزاً ولا يبيع بخسارة. */
+/* ─── تصفير الحالة العالقة (أمر المالك 4 نوفمبر 12:42): التطبيق كان يُظهر
+   صفقات ونتائج قديمة بعد كل تحديث لأن الحالة محفوظة على القرص. هذا يمسح
+   السجلات والصفقات والأوامر المحلية ويبدأ نظيفاً — المفاتيح والإعدادات
+   والرصيد تبقى. لا يغلق أي مركز ولا يبيع بخسارة ─── */
+export function resetState(){
+  const before={journal:(S.journal||[]).length, logs:(S.logs||[]).length,
+    pos:!!S.position, realized:Number(S.realizedPnl)||0};
+  S.journal=[]; S.logs=[]; S.grid=[]; S.position=null; S.activeCycle=null;
+  S.realizedPnl=0; S.cycleHarvested=0; S.feesPaid=0; S.fundingPaid=0; S.slipCost=0;
+  S._entryFillsN=0; S._batchFills=0; S._batchHoldAt=0; S._groupIdx=1; S._groupFillBase=0;
+  S._groupDoneAt=0; S._groupExtreme=0; S._groupAnchor=0; S._groupPlacedTotal=0;
+  S.recentCoins={}; S._nextReady=false; S._nextSymbol=null; S._studiedAt=0;
+  S.status='stopped'; S._entriesEnabled=false; S._eqStart=0;
+  pushLog('server','🧹 تصفير الحالة: حُذف '+before.journal+' صفقة قديمة و'+before.logs+
+    ' سجلاً ورصيد ربح تقديري '+fmtUsd(before.realized)+' — بداية نظيفة (المفاتيح والإعدادات محفوظة)');
+  saveAll(); emit();
+  return { ok:true, cleared:before };
+}
 export function syncBooks(totalEq:any, share:any){
   const eq=Number(totalEq)||0, sh=Number(share)||0;
   if(!(eq>0)) return { ok:false, why:'لا حقوق مقروءة' };
@@ -2974,8 +2992,9 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(batchHoldActive()) return null;
   if(S._noNewEntries) return null; // تجميد كامل: مراكز منصة زائدة لم تُغلق بربح بعد
   // قاعدة الخمس: لا مركز جديد إن كان العدد في المنصة ≥ 5 (يُفحص قبل كل فتح)
-  // بوابة التسلسل: لا فتح حتى يسبقني الأسطول السابق بدوره
-  if(!S.position&&(Number(S._fleetOpened)||0)<((Number(S._mySlot)||1)-1)){
+  // بوابة التسلسل (اختيارية): تُفعّل فقط إذا طلب المالك seqMode — الوضع
+  // الافتراضي: الأسطول كامل يفتح مرة واحدة، كل محرك بدراسته المستقلة
+  if(S.config.seqMode===true&&!S.position&&(Number(S._fleetOpened)||0)<((Number(S._mySlot)||1)-1)){
     if(!S._seqBlkAt||Date.now()-S._seqBlkAt>60000){ S._seqBlkAt=Date.now();
       pushLog('server','⏳ الأسطول '+((Number(S._mySlot)||1))+' ينتظر الأسطول '+((Number(S._fleetOpened)||0)+1)+' — لا فتح قبل دوره'); }
     return null; }

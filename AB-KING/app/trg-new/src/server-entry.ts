@@ -10,7 +10,7 @@ import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
   strategyFingerprint, alignStrategy, gridStatus, ensureGroupFour, cancelEntryOrders, cleanStart, enableEntries, syncBooks,
-  requestHalt, clearHalt, haltRequested, setFleetGate,
+  requestHalt, clearHalt, haltRequested, setFleetGate, resetState,
 } from './engine';
 
 const SRV_VER = 'TRG-NEW-1.0.0';
@@ -201,7 +201,9 @@ const srv = createServer(async (req, res) => {
     const u = new URL(req.url || '/', 'http://127.0.0.1');
 
     if (req.method === 'GET' && (u.pathname === '/' || u.pathname === '/health'))
-      return send(res, 200, { ok: true, name: 'TRG-NEW Fleet Server', version: SRV_VER, fleet: FLEET_N, at: Date.now() });
+      return send(res, 200, { ok: true, name: 'TRG-NEW Fleet Server', version: SRV_VER, fleet: FLEET_N,
+        at: Date.now(), startedAt: (process as any).uptime?.() ? Math.round(Date.now() - (process as any).uptime() * 1000) : null,
+        pid: (process as any).pid });
 
     if (SLOT > 0) {
       // ─── محرك قطاع: نفس واجهة المحرك الأصيلة ───
@@ -243,6 +245,7 @@ const srv = createServer(async (req, res) => {
           case 'cleanStart': { const rr=await cleanStart(); return send(res,200,rr); }
           case 'enableEntries': return send(res,200, enableEntries());
           case 'syncBooks': return send(res,200, syncBooks(j.totalEq, j.share));
+          case 'resetState': return send(res,200, resetState());
           case 'fleetGate': return send(res,200, setFleetGate(j.opened, SLOT));
           case 'ensureFour': { const need=ensureGroupFour(); return send(res, 200, { ok:true, need }); }
           default: return send(res, 400, { ok: false, error: 'إجراء غير معروف: ' + a });
@@ -298,6 +301,11 @@ const srv = createServer(async (req, res) => {
         return send(res, 200, { ok: true, instant: true, halted: a !== 'start' });
       }
       if (a === 'haltState') return send(res, 200, { ok: true, halted: haltRequested() });
+      if (a === 'resetAll') {
+        const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) =>
+          jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 30000, { action: 'resetState' })));
+        return send(res, 200, { ok: true, results: rs });
+      }
       if (a === 'enableAll') {
         const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) =>
           jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 8000, { action: 'enableEntries' })));

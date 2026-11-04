@@ -60,12 +60,27 @@ EOF
 chmod +x ~/.termux/boot/trg.sh
 echo "✓ إقلاع تلقائي لـ TRG-NEW مُجهّز (Termux:Boot يشغّل الثلاثة مستقلين)"
 
-# 6) تشغيل الأسطول الآن
-pgrep -f trg-server.mjs >/dev/null 2>&1 && { echo "• الأسطول يعمل — إعادة تشغيله بالنسخة الجديدة..."; pkill -f trg-server.mjs || true; sleep 2; }
+# 6) تشغيل الأسطول الآن — قتل شامل لكل نسخة قديمة (المحركات الخمسة أيضاً)
+echo "• إيقاف أي نسخة قديمة تماماً (منسق + 5 محركات)..."
+pkill -f trg-server.mjs 2>/dev/null || true
+sleep 2
+pgrep -f trg-server.mjs >/dev/null 2>&1 && { pkill -9 -f trg-server.mjs 2>/dev/null || true; sleep 2; }
+# تأكيد أن المنافذ 9010-9015 حرة
+for port in 9010 9011 9012 9013 9014 9015; do
+  curl -s --max-time 2 127.0.0.1:$port/health >/dev/null 2>&1 && { echo "! المنفذ $port لا يزال مشغولاً — محاولة إضافية"; fuser -k $port/tcp 2>/dev/null || true; sleep 1; }
+done
+sleep 1
 nohup node ~/trg-server.mjs >> ~/trg-server.log 2>&1 &
 echo "✓ أسطول TRG-NEW انطلق — المنسق على 9010 ومحركاته على 9011-9015"
 
 # 7) فحص الصحة
 sleep 4
-echo "• فحص صحة الأسطول..."
-curl -s 127.0.0.1:9010/health && echo "" && echo "══ تم — أسطول TRG-NEW يعمل والحارس يحميه (مستقل عن AB-KING وTRQ) ══" || echo "! راجع: cat ~/trg-server.log"
+echo "• فحص صحة الأسطول (الإصدار يجب أن يطابق آخر تحديث)..."
+H=$(curl -s --max-time 8 127.0.0.1:9010/health)
+echo "$H"
+echo ""
+echo "══ تم — أسطول TRG-NEW يعمل ══"
+echo ""
+echo "⚠️ خطوتان إلزاميتان لمسح البيانات القديمة العالقة:"
+echo "   1) curl -s -X POST 127.0.0.1:9010/cmd -H 'Content-Type: application/json' -d '{\"action\":\"resetAll\"}'"
+echo "   2) ثبّت أحدث APK على الجوال (الواجهة القديمة تُخفي المفاتيح الجديدة)"
