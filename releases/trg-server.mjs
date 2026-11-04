@@ -1,3 +1,10 @@
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined") return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
+
 // src/server-shims.ts
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -1340,6 +1347,36 @@ async function backgroundPipeline() {
     logSwallow("silent-catch", e);
   }
 }
+function haltPath() {
+  try {
+    const dir2 = S._storeDir || process.env.ABKING_DIR || (process.env.HOME || "/root") + "/.ab-king";
+    return String(dir2) + "/HALT";
+  } catch {
+    return "/tmp/ab-king-HALT";
+  }
+}
+function haltRequested() {
+  try {
+    const fs = __require("fs");
+    return !!fs.existsSync(haltPath());
+  } catch {
+    return false;
+  }
+}
+function requestHalt(reason = "\u0625\u064A\u0642\u0627\u0641 \u0645\u0646 \u0627\u0644\u0648\u0627\u062C\u0647\u0629") {
+  try {
+    const fs = __require("fs");
+    fs.writeFileSync(haltPath(), JSON.stringify({ at: Date.now(), reason }));
+  } catch {
+  }
+}
+function clearHalt() {
+  try {
+    const fs = __require("fs");
+    fs.unlinkSync(haltPath());
+  } catch {
+  }
+}
 function fleetFullNow() {
   return Math.max(0, Number(S._exOpenCount) || 0) >= 5;
 }
@@ -2528,7 +2565,7 @@ async function orphanSweep() {
 }
 async function exPlaceLimit(intent) {
   await ensureLiveMeta(intent.symbol);
-  if (!intent.reduceOnly && S.status !== "running") {
+  if (!intent.reduceOnly && (S.status !== "running" || haltRequested())) {
     throw new Error("\u26D4 \u0627\u0644\u0628\u0648\u062A \u063A\u064A\u0631 \u0645\u064F\u0634\u063A\u0651\u0644 \u2014 \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 (\u0627\u0636\u063A\u0637 \u062A\u0634\u063A\u064A\u0644)");
   }
   if (!intent.reduceOnly && !S._entriesEnabled) {
@@ -5570,6 +5607,7 @@ async function botTick() {
   }
 }
 function startBot() {
+  clearHalt();
   try {
     pushLog("server", "\u{1F9EC} \u0628\u0635\u0645\u0629 \u0627\u0644\u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A\u0629: " + strategyFingerprint());
   } catch {
@@ -5622,6 +5660,7 @@ function startBot() {
   saveAll();
 }
 function pauseBot() {
+  requestHalt("\u062A\u0648\u0642\u064A\u062A \u0645\u0624\u0642\u062A");
   if (R()) {
     remoteCmd("pause").then(() => remoteSync());
     return;
@@ -5644,9 +5683,14 @@ function pauseBot() {
   saveAll();
 }
 async function stopBot() {
+  requestHalt("\u0625\u064A\u0642\u0627\u0641 \u0645\u0646 \u0627\u0644\u0648\u0627\u062C\u0647\u0629");
   if (R()) {
-    await remoteCmd("stop");
-    await remoteSync();
+    try {
+      await remoteCmd("stop");
+    } catch {
+    }
+    await remoteSync().catch(() => {
+    });
     return;
   }
   if (S.status === "idle") return;
@@ -6305,6 +6349,18 @@ var srv = createServer(async (req, res) => {
         const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 15e3, { action: "syncBooks", totalEq: eq, share })));
         return send(res, 200, { ok: true, equity: eq, share, results: rs });
       }
+      if (a === "stop" || a === "pause" || a === "start") {
+        try {
+          if (a === "start") clearHalt();
+          else requestHalt(a === "stop" ? "\u0625\u064A\u0642\u0627\u0641" : "\u062A\u0648\u0642\u064A\u062A");
+        } catch {
+        }
+        const payload2 = { action: a };
+        Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 8e3, payload2))).catch(() => {
+        });
+        return send(res, 200, { ok: true, instant: true, halted: a !== "start" });
+      }
+      if (a === "haltState") return send(res, 200, { ok: true, halted: haltRequested() });
       if (a === "enableAll") {
         const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 8e3, { action: "enableEntries" })));
         return send(res, 200, { ok: true, results: rs });
