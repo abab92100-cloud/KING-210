@@ -2048,14 +2048,19 @@ export function levelQtys(center,n){ const c=S.config;
   // المتاح الفعلي لدى المنصة أدق من رصيد الحساب الكلي: الهامش المحجوز لا يُنفق منه
   if(c.mode==='live'&&S.exAvail>0) budget=Math.min(budget,Math.max(0,S.exAvail*0.95));
   else if(c.mode==='live'&&S.exEquity>0) budget=Math.min(budget,Math.max(0,S.exEquity*0.95-used));
-  // مجموع نسب السلم = m + 0.25·m(m−1) — الوحدة = الميزانية ÷ المجموع
-  const denom=mm=>mm+0.08*mm*(mm-1); // تسطيح التدرج (طلب المالك): أوائل المستويات أكبر بكثير — لا فتات
+  // ─── توزيع المالك (4 نوفمبر 14:13): الرصيد ÷ 5 أساطيل ÷ 5 مجموعات، ثم
+  // كل مجموعة 4 أوامر بتدرّج هندسي تصاعدي نسبة 1.35:
+  //   الأول (الدخول) الأصغر، ثم أكبر، ثم أكبر، ثم أكبر
+  //   مثال (نصيب 31.62$): 0.78 · 1.05 · 1.42 · 1.92 (هامش لكل أمر)
+  const RATIO=Math.max(1.05,Math.min(2.0,Number(S.config.sizeRatio)||1.35));
+  const wrapper=i=>Math.pow(RATIO,i%4);
+  const wsum=[1,2,3,4].reduce((a,_v,i)=>a+Math.pow(RATIO,i),0);
+  const groupBudget=budget/5;                       // 5 مجموعات لكل أسطول
   let m=Math.max(1,n);
-  // قلّص العدد فقط إن عجز أصغر مستوى عن شراء عقد واحد — لا أرضية $1 تُفسد النسبة
-  while(m>1&&Math.floor((budget/denom(m))*lev/cv)<1) m--;
-  const unit=budget/denom(m);
+  // قلّص العدد فقط إن عجز أصغر أمر عن شراء عقد واحد
+  while(m>1&&Math.floor((groupBudget/wsum)*lev/cv)<1) m--;
   const out:any[]=[]; let acc=0;
-  for(let i=0;i<m;i++){ let q=Math.max(1,Math.floor(unit*(1+0.5*i)*lev/cv));
+  for(let i=0;i<m;i++){ let q=Math.max(1,Math.floor((groupBudget*wrapper(i)/wsum)*lev/cv));
     if(S.maxOrderQty>0) q=Math.min(q,S.maxOrderQty); // سقف المنصة للأمر الواحد
     if(acc+q*cv/lev>budget&&out.length) break; // لا تتجاوز السيولة أبدًا
     out.push(q); acc+=q*cv/lev; }
@@ -3649,7 +3654,9 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
         const eq=Number(a&&a.accountEquity);
         if(eq>0&&isFinite(eq)){ S.exEquity=eq;
           if(!(S._eqStart>0)) S._eqStart=eq;
-          S.realizedPnl=Math.round((eq-(S._eqStart||eq))*100)/100; S.pnlReal=true; } }).catch(()=>{}); }
+          // المحقق فقط = تغيّر الحقوق − الربح/الخسارة العائمة للمركز الحالي
+          const floatNow=Number(S.position&&S.position.unrealized)||0;
+          S.realizedPnl=Math.round(((eq-(S._eqStart||eq))-floatNow)*100)/100; S.pnlReal=true; } }).catch(()=>{}); }
     // الرافعة ثابتة كما ضبطها المالك تمامًا — لا تكيّف ولا تحذير:
     // في وضع CROSS تُتجاهل رافعة الأمر وتُطبَّق رافعة الرمز، لذا تُفرض على المنصة
     // عبر نقطة KuCoin الرسمية (مخنوقة 5 دقائق، صامتة إن رُفضت أثناء مركز مفتوح)
@@ -3684,6 +3691,26 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
           symbol:String(x.symbol), side:(Number(x.currentQty)||0)>0?'long':'short',
           size:Math.abs(Number(x.currentQty)||0), entry:Number(x.avgEntryPrice)||0,
           pnl:Math.round((Number((x as any).unrealisedPnl)||0)*100)/100 }));
+        // ─── توحيد السجل مع الواقع (أمر المالك 4 نوفمبر 14:13): كل مركز
+        // حقيقي في المنصة يجب أن يظهر في سجل التطبيق (معلق)، وكل صف لا مركز
+        // له في المنصة يُقفل. كان التطبيق يعرض 3 بينما المنصة فيها 5 ───
+        try{
+          const liveSet=new Map<string,any>();
+          for(const ep of S.exPositions) liveSet.set(String(ep.symbol).replace(/USDTM$/i,''),ep);
+          for(const [sym,ep] of liveSet){
+            const hasOpen=S.journal.some((j:any)=>j.status==='open'&&String(j.symbol).toUpperCase()===sym.toUpperCase());
+            if(!hasOpen){
+              S.journal.push({id:uid('jsy'),symbol:sym,side:ep.side,entry:ep.entry,qty:ep.size,
+                exit:null,pnl:0,fees:0,openedAt:Date.now(),closedAt:0,mergedOrders:1,
+                status:'open',source:'مزامنة المنصة'} as any);
+            }
+          }
+          for(const j of S.journal){
+            if(j.status!=='open') continue;
+            if(!liveSet.has(String(j.symbol).toUpperCase())){
+              j.status='closed'; j.closedAt=Date.now(); j.exit=j.exit||j.entry;
+              if(j.source!=='إيقاف') j.source='مزامنة المنصة (لم يعد قائماً)';
+            } } }catch(e){ logSwallow('journalSync',e); }
         if(!S._exListLogAt||Date.now()-S._exListLogAt>300000){ S._exListLogAt=Date.now();
           if(n>0) pushLog('server','📋 مراكز المنصة الحقيقية ('+n+'): '+S.exPositions.map((p:any)=>p.symbol.replace('USDTM','')).join(' · ')); }
         if(S._noNewEntries&&!was){ pushLog('server','⛔ تجميد الدخول: '+n+' مركزاً حياً في المنصة (المسموح '+allowed+') — لا صفقات جديدة ولا تبديل حتى تُغلق الزائدة بربح'); }
