@@ -3180,14 +3180,16 @@ function levelQtys(center, n) {
   let budget = Math.max(0, total - used) * (S.regime ? S.regime.sizeMult : 1) * memSizeMult();
   if (c.mode === "live" && S.exAvail > 0) budget = Math.min(budget, Math.max(0, S.exAvail * 0.95));
   else if (c.mode === "live" && S.exEquity > 0) budget = Math.min(budget, Math.max(0, S.exEquity * 0.95 - used));
-  const denom = (mm) => mm + 0.08 * mm * (mm - 1);
+  const RATIO = Math.max(1.05, Math.min(2, Number(S.config.sizeRatio) || 1.35));
+  const wrapper = (i) => Math.pow(RATIO, i % 4);
+  const wsum = [1, 2, 3, 4].reduce((a, _v, i) => a + Math.pow(RATIO, i), 0);
+  const groupBudget = budget / 5;
   let m = Math.max(1, n);
-  while (m > 1 && Math.floor(budget / denom(m) * lev / cv) < 1) m--;
-  const unit = budget / denom(m);
+  while (m > 1 && Math.floor(groupBudget / wsum * lev / cv) < 1) m--;
   const out = [];
   let acc = 0;
   for (let i = 0; i < m; i++) {
-    let q = Math.max(1, Math.floor(unit * (1 + 0.5 * i) * lev / cv));
+    let q = Math.max(1, Math.floor(groupBudget * wrapper(i) / wsum * lev / cv));
     if (S.maxOrderQty > 0) q = Math.min(q, S.maxOrderQty);
     if (acc + q * cv / lev > budget && out.length) break;
     out.push(q);
@@ -5242,7 +5244,8 @@ async function liveSync() {
         if (eq > 0 && isFinite(eq)) {
           S.exEquity = eq;
           if (!(S._eqStart > 0)) S._eqStart = eq;
-          S.realizedPnl = Math.round((eq - (S._eqStart || eq)) * 100) / 100;
+          const floatNow = Number(S.position && S.position.unrealized) || 0;
+          S.realizedPnl = Math.round((eq - (S._eqStart || eq) - floatNow) * 100) / 100;
           S.pnlReal = true;
         }
       }).catch(() => {
@@ -5297,6 +5300,41 @@ async function liveSync() {
           entry: Number(x.avgEntryPrice) || 0,
           pnl: Math.round((Number(x.unrealisedPnl) || 0) * 100) / 100
         }));
+        try {
+          const liveSet = /* @__PURE__ */ new Map();
+          for (const ep of S.exPositions) liveSet.set(String(ep.symbol).replace(/USDTM$/i, ""), ep);
+          for (const [sym2, ep] of liveSet) {
+            const hasOpen = S.journal.some((j) => j.status === "open" && String(j.symbol).toUpperCase() === sym2.toUpperCase());
+            if (!hasOpen) {
+              S.journal.push({
+                id: uid("jsy"),
+                symbol: sym2,
+                side: ep.side,
+                entry: ep.entry,
+                qty: ep.size,
+                exit: null,
+                pnl: 0,
+                fees: 0,
+                openedAt: Date.now(),
+                closedAt: 0,
+                mergedOrders: 1,
+                status: "open",
+                source: "\u0645\u0632\u0627\u0645\u0646\u0629 \u0627\u0644\u0645\u0646\u0635\u0629"
+              });
+            }
+          }
+          for (const j of S.journal) {
+            if (j.status !== "open") continue;
+            if (!liveSet.has(String(j.symbol).toUpperCase())) {
+              j.status = "closed";
+              j.closedAt = Date.now();
+              j.exit = j.exit || j.entry;
+              if (j.source !== "\u0625\u064A\u0642\u0627\u0641") j.source = "\u0645\u0632\u0627\u0645\u0646\u0629 \u0627\u0644\u0645\u0646\u0635\u0629 (\u0644\u0645 \u064A\u0639\u062F \u0642\u0627\u0626\u0645\u0627\u064B)";
+            }
+          }
+        } catch (e) {
+          logSwallow("journalSync", e);
+        }
         if (!S._exListLogAt || Date.now() - S._exListLogAt > 3e5) {
           S._exListLogAt = Date.now();
           if (n > 0) pushLog("server", "\u{1F4CB} \u0645\u0631\u0627\u0643\u0632 \u0627\u0644\u0645\u0646\u0635\u0629 \u0627\u0644\u062D\u0642\u064A\u0642\u064A\u0629 (" + n + "): " + S.exPositions.map((p) => p.symbol.replace("USDTM", "")).join(" \xB7 "));
