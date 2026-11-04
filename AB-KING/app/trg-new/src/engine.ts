@@ -1323,9 +1323,13 @@ async function softTopUp(){
   const entries=ex.filter((o:any)=>o&&o.reduceOnly!==true);
   S._exEntryOpenN=entries.length;
   // المطلوب = 4 − (قائم على المنصة + تعبئات أوامرنا) — لا زيادة ولا نقصان
-  const filled=Math.max(0,Number(S._entryFillsN)||0);
-  const need=4-(entries.length+filled);
+  // المجموعة الحالية: الناقص = 4 − (قائم + تعبئات هذه المجموعة)
+  const base=Math.max(0,Number(S._groupFillBase)||0);
+  const inGroup=Math.max(0,(Number(S._entryFillsN)||0)-base);
+  const need=4-(entries.length+inGroup);
   if(need<=0) return 0;
+  // مرساة المجموعة: أعلى نقطة خلال الانتظار (م2+) أو سعر الدخول (م1)
+  const gAnchor=Number(S._groupAnchor)>0?Number(S._groupAnchor):(Number(S.position.entry)||Number(S.lastPrice)||0);
   const short=S.position.side==='short';
   const cur=Number(S.lastPrice)||Number(S.position.entry)||0; if(!(cur>0)) return 0;
   const tk=(S._tickMap&&S._tickMap[S.config.symbol])||S.tickSize||1e-8;
@@ -1340,8 +1344,10 @@ async function softTopUp(){
   }
   // 2) لا سلم؟ ابنِ المستوى المفقود من منطقة الدخول (مرساة آمنة)
   if(!(px>0)){
-    const anchor=short?Math.max(Number(S.position.entry)||cur,cur):Math.min(Number(S.position.entry)||cur,cur);
-    for(const pct of [0.0022,0.0045,0.0066,0.0090]){
+    const gIdx=Math.min(5,Math.max(1,Number(S._groupIdx)||1));
+    const stepPct=[0.0025,0.0035,0.0050,0.0065,0.0075][gIdx-1];
+    const anchor=short?Math.max(gAnchor,cur):Math.min(gAnchor,cur);
+    for(let k=1;k<=4;k++){ const pct=stepPct*k;
       const q=roundTick(short?anchor*(1+pct):anchor*(1-pct),tk);
       if(!(q>0)||!valid(q)||dup(q)) continue;
       px=q; break; }
@@ -1354,7 +1360,8 @@ async function softTopUp(){
       side:short?'sell':'buy',price:px,qty,reduceOnly:false,leverage:S.config.leverage});
     try{ (S.grid||[]).push({id:uid('ex'),clientOid:(oid||r.clientOid||uid('oid')),side:short?'sell':'buy',
       price:px,qty,status:'open',reduceOnly:false,exchangeOrderId:r.orderId,filledAt:null,origin:'grid'}); }catch{}
-    pushLog('server','➕ استعادة أمر مفقود @ '+fmtPx(px)+' ×'+qty+' — المكتمل '+(entries.length+filled+1)+'/4');
+    pushLog('server','➕ أمر المجموعة '+(S._groupIdx||1)+': @ '+fmtPx(px)+' ×'+qty+
+      ' — المكتمل '+(Math.min(4,entries.length+inGroup+1))+'/4');
     return 1;
   }catch(e:any){ return 0; }
 }
@@ -1470,7 +1477,7 @@ export function strategyFingerprint(){
     'lev:'+Number(c.leverage||0),
     'lvls:'+Number(c.levels||0),
     'tp:'+(Number(c.tpUsd)>0?('usd'+Number(c.tpUsd)):('net'+Number(c.tpNet||0))),
-    'maxOrd:4','grp:4','hold:3h','ladder:0.22/0.45/0.66/0.90/1.15'
+    'maxOrd:4','grp:4','waits:3h/3h/5h/5h','ladder:0.25/0.35/0.50/0.65/0.75'
   ].join('|');
 }
 /* مواءمة حقول الاستراتيجية فقط (لا العملة ولا نصيب الرصيد — لكل محرك
@@ -1588,7 +1595,11 @@ async function exPlaceLimit(intent){
     throw new Error('⛔ بوابة الدخول مغلقة — نفّذ «تفعيل الأوامر»'); }
   if(!intent.reduceOnly&&S.position){
     const placed=(Number(S._exEntryOpenN)||0)+(Number(S._entryFillsN)||0);
-    if(placed>=4){ throw new Error('⛔ المركز مكتمل (4 أوامر) — لا إضافة'); }
+    const hardCap=20; // 5 مجموعات × 4
+    if(placed>=hardCap){ throw new Error('⛔ اكتملت المجموعات الخمس (20 أمراً) — لا إضافة'); }
+    const gPlaced=(Number(S._groupPlacedTotal)||0);
+    if(batchHoldActive()&&(Number(S._entryFillsN)||0)>=(Number(S._groupFillBase)||0)+4&&!S._groupDoneAt)
+      throw new Error('⛔ المجموعة مكتملة — انتظار');
     const lev=Math.max(1,Number(S.config.leverage)||1);
     const posMargin=((S.position.size||0)*(S.multiplier||1)*(S.position.entry||0))/lev;
     const newMargin=((Number(intent.qty)||0)*(S.multiplier||1)*(Number(intent.price)||1))/lev;
@@ -1780,10 +1791,35 @@ export function batchHoldActive(){
   // الحقيقة = أوامرنا القائمة على المنصة + تعبئات أوامرنا (بادئاتنا فقط)
   const __live=Math.max(0,Number(S._exEntryOpenN)||0);
   const __filled=Math.max(0,Number(S._entryFillsN)||0);
-  const __real=Math.max(__live+__filled, 0);
-  S._batchFills=__real;
-  // سقف صارم: 4 أوامر دخول للمركز الواحد مدى حياته (كانت 18 تعبئة = 663$)
-  if(__real<(S._cycleMaxFills||4)) return false;
+  // ═══ منطق المالك (4 نوفمبر): 5 مجموعات × 4 أوامر، تصاعدية بانتظارات ═══
+  const STEP_WAITS=[3,3,5,5];              // ساعات بعد كل مجموعة
+  const gIdx=Math.min(5,Math.max(1,Number(S._groupIdx)||1));
+  const base=Math.max(0,Number(S._groupFillBase)||0);
+  const inGroup=Math.max(0,(Number(S._entryFillsN)||0)-base);   // تعبئات المجموعة الحالية
+  S._batchFills=inGroup;
+  if(inGroup<4) return false;               // لم تكتمل المجموعة → يُسمح بالإكمال
+  // المجموعة اكتملت → بدأ الانتظار
+  if(!S._groupDoneAt) S._groupDoneAt=Date.now();
+  if(gIdx>=5){ // انتهت المجموعات الخمس
+    if(!S._maxGroupsLog||Date.now()-S._maxGroupsLog>1800000){ S._maxGroupsLog=Date.now();
+      pushLog('server','🧷 اكتملت المجموعات الخمس (20 أمراً) — توقف تام حتى الجني'); }
+    return true; }
+  const waitH=STEP_WAITS[gIdx-1]*3600000;
+  const elapsed=Date.now()-S._groupDoneAt;
+  if(elapsed<waitH){ return true; }
+  // انتهى الانتظار → المجموعة التالية من أعلى/أدنى نقطة بلغها السعر
+  S._groupIdx=gIdx+1;
+  S._groupFillBase=Number(S._entryFillsN)||0;
+  S._groupDoneAt=0;
+  S._groupAnchor=Number(S._groupExtreme)>0?Number(S._groupExtreme):(S.position?S.position.entry:S.lastPrice);
+  S._groupExtreme=0;
+  S._batchHoldAt=0;
+  pushLog('server','📈 المجموعة '+S._groupIdx+' (4 أوامر بتباعد '+(([0.25,0.35,0.50,0.65,0.75][S._groupIdx-1]))+'%) من '+
+    fmtPx(S._groupAnchor)+' — أعلى نقطة خلال الانتظار');
+  try{ const fresh=buildGrid(S._groupAnchor,false,effLevels()).filter((x:any)=>!x.reduceOnly);
+    const keep=S.grid.filter((l:any)=>l.reduceOnly||l.status==='filled'||l.status==='open');
+    S.grid=keep.concat(fresh); S.gridAnchor=S._groupAnchor; }catch{}
+  return false;
   // ─── قاعدة المالك الزمنية (أمر 2026-10-24): انزلاق بعد 4 أوامر =
   // توقف كامل 3 ساعات، ثم دراسة: استمرار الانزلاق = +ساعة إضافية ودراسة،
   // ولا عودة إلا باستقرار فعلي (لا انزلاق جديد منذ ساعة كاملة) + إشارة
@@ -1799,8 +1835,16 @@ export function batchHoldActive(){
   // 4 أوامر لكل مجموعة → توقف 3 ساعات → تحقق استقرار فعلي (لا قاع/قمة
   // جديدة منذ 30 دقيقة) → فتح المجموعة التالية (4 أوامر بتباعد خاص) ───
   // توقف مطلق حتى تُجنى الصفقة (لا تعزيز ولا مجموعات إضافية)
-  if(S._batchHoldAt&&(!S._batchHoldLogAt||Date.now()-S._batchHoldLogAt>1800000)){ S._batchHoldLogAt=Date.now();
-    pushLog('server','🧷 بلغ المركز 4 أوامر — توقف كامل حتى الجني (لا تعزيز ولا مجموعات إضافية)'); }
+  // تتبع أعلى نقطة (شورت) أو أدنى نقطة (لونغ) خلال الانتظار — منها تُبنى المجموعة التالية
+  try{ const px=Number(S.lastPrice)||0;
+    if(px>0&&S.position){
+      const short=S.position.side==='short';
+      const prev=Number(S._groupExtreme)||0;
+      S._groupExtreme=short?(prev>0?Math.max(prev,px):px):(prev>0?Math.min(prev,px):px);
+    } }catch{}
+  if(!S._groupWaitLog||Date.now()-S._groupWaitLog>1800000){ S._groupWaitLog=Date.now();
+    const left=Math.max(0,STEP_WAITS[Math.min(4,Math.max(1,S._groupIdx||1))-1]*3600000-(Date.now()-(S._groupDoneAt||Date.now())));
+    pushLog('server','⏳ اكتملت المجموعة '+(S._groupIdx||1)+' — انتظار '+Math.floor(left/3600000)+'س '+Math.floor((left%3600000)/60000)+'د · أعلى نقطة: '+fmtPx(S._groupExtreme)); }
   return true; }
 
 export function exposureCapped(){ const pos=S.position; if(!pos) return false;
@@ -2025,7 +2069,9 @@ export function buildGrid(center:any,wide?:any,initialCount?:any){ const c=S.con
   // م1 0.15% · م2 0.22% · م3 0.45% · م4 0.66% · م5 0.90% ───
   // ─── تباعد المجموعات (أمر المالك 3 نوفمبر 19:01): كل مجموعة 4 أوامر
   // م1 0.22% · م2 0.45% · م3 0.66% · م4 0.90% · م5 1.15% ───
-  const LADDER=[0.0022,0.0045,0.0066,0.0090,0.0115];
+  // ─── سلم المالك (4 نوفمبر 12:05): كل مجموعة 4 أوامر (مع أمر الدخول)
+  // م1 0.25% · م2 0.35% · م3 0.50% · م4 0.65% · م5 0.75% ───
+  const LADDER=[0.0025,0.0035,0.0050,0.0065,0.0075];
   const pctA=LADDER[0];
   const GSP=[0,LADDER[0],LADDER[1],LADDER[2],LADDER[3],LADDER[4]];
   const grpStep=(idx:any)=>GSP[Math.min(5,Math.max(1,Math.ceil(idx/4)))];
