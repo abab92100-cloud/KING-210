@@ -2251,9 +2251,11 @@ async function softTopUp() {
   }
   const entries = ex.filter((o) => o && o.reduceOnly !== true);
   S._exEntryOpenN = entries.length;
-  const filled = Math.max(0, Number(S._entryFillsN) || 0);
-  const need = 4 - (entries.length + filled);
+  const base = Math.max(0, Number(S._groupFillBase) || 0);
+  const inGroup = Math.max(0, (Number(S._entryFillsN) || 0) - base);
+  const need = 4 - (entries.length + inGroup);
   if (need <= 0) return 0;
+  const gAnchor = Number(S._groupAnchor) > 0 ? Number(S._groupAnchor) : Number(S.position.entry) || Number(S.lastPrice) || 0;
   const short = S.position.side === "short";
   const cur = Number(S.lastPrice) || Number(S.position.entry) || 0;
   if (!(cur > 0)) return 0;
@@ -2268,8 +2270,11 @@ async function softTopUp() {
     qty = capEntryQty(cand.qty, px);
   }
   if (!(px > 0)) {
-    const anchor = short ? Math.max(Number(S.position.entry) || cur, cur) : Math.min(Number(S.position.entry) || cur, cur);
-    for (const pct of [22e-4, 45e-4, 66e-4, 9e-3]) {
+    const gIdx = Math.min(5, Math.max(1, Number(S._groupIdx) || 1));
+    const stepPct = [25e-4, 35e-4, 5e-3, 65e-4, 75e-4][gIdx - 1];
+    const anchor = short ? Math.max(gAnchor, cur) : Math.min(gAnchor, cur);
+    for (let k = 1; k <= 4; k++) {
+      const pct = stepPct * k;
       const q = roundTick(short ? anchor * (1 + pct) : anchor * (1 - pct), tk);
       if (!(q > 0) || !valid(q) || dup(q)) continue;
       px = q;
@@ -2304,7 +2309,7 @@ async function softTopUp() {
       });
     } catch {
     }
-    pushLog("server", "\u2795 \u0627\u0633\u062A\u0639\u0627\u062F\u0629 \u0623\u0645\u0631 \u0645\u0641\u0642\u0648\u062F @ " + fmtPx(px) + " \xD7" + qty + " \u2014 \u0627\u0644\u0645\u0643\u062A\u0645\u0644 " + (entries.length + filled + 1) + "/4");
+    pushLog("server", "\u2795 \u0623\u0645\u0631 \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0629 " + (S._groupIdx || 1) + ": @ " + fmtPx(px) + " \xD7" + qty + " \u2014 \u0627\u0644\u0645\u0643\u062A\u0645\u0644 " + Math.min(4, entries.length + inGroup + 1) + "/4");
     return 1;
   } catch (e) {
     return 0;
@@ -2409,8 +2414,8 @@ function strategyFingerprint() {
     "tp:" + (Number(c.tpUsd) > 0 ? "usd" + Number(c.tpUsd) : "net" + Number(c.tpNet || 0)),
     "maxOrd:4",
     "grp:4",
-    "hold:3h",
-    "ladder:0.22/0.45/0.66/0.90/1.15"
+    "waits:3h/3h/5h/5h",
+    "ladder:0.25/0.35/0.50/0.65/0.75"
   ].join("|");
 }
 function alignStrategy(cfg) {
@@ -2594,9 +2599,13 @@ async function exPlaceLimit(intent) {
   }
   if (!intent.reduceOnly && S.position) {
     const placed = (Number(S._exEntryOpenN) || 0) + (Number(S._entryFillsN) || 0);
-    if (placed >= 4) {
-      throw new Error("\u26D4 \u0627\u0644\u0645\u0631\u0643\u0632 \u0645\u0643\u062A\u0645\u0644 (4 \u0623\u0648\u0627\u0645\u0631) \u2014 \u0644\u0627 \u0625\u0636\u0627\u0641\u0629");
+    const hardCap = 20;
+    if (placed >= hardCap) {
+      throw new Error("\u26D4 \u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0627\u062A \u0627\u0644\u062E\u0645\u0633 (20 \u0623\u0645\u0631\u0627\u064B) \u2014 \u0644\u0627 \u0625\u0636\u0627\u0641\u0629");
     }
+    const gPlaced = Number(S._groupPlacedTotal) || 0;
+    if (batchHoldActive() && (Number(S._entryFillsN) || 0) >= (Number(S._groupFillBase) || 0) + 4 && !S._groupDoneAt)
+      throw new Error("\u26D4 \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0629 \u0645\u0643\u062A\u0645\u0644\u0629 \u2014 \u0627\u0646\u062A\u0638\u0627\u0631");
     const lev = Math.max(1, Number(S.config.leverage) || 1);
     const posMargin = (S.position.size || 0) * (S.multiplier || 1) * (S.position.entry || 0) / lev;
     const newMargin = (Number(intent.qty) || 0) * (S.multiplier || 1) * (Number(intent.price) || 1) / lev;
@@ -2825,9 +2834,40 @@ function batchHoldActive() {
   }
   const __live = Math.max(0, Number(S._exEntryOpenN) || 0);
   const __filled = Math.max(0, Number(S._entryFillsN) || 0);
-  const __real = Math.max(__live + __filled, 0);
-  S._batchFills = __real;
-  if (__real < (S._cycleMaxFills || 4)) return false;
+  const STEP_WAITS = [3, 3, 5, 5];
+  const gIdx = Math.min(5, Math.max(1, Number(S._groupIdx) || 1));
+  const base = Math.max(0, Number(S._groupFillBase) || 0);
+  const inGroup = Math.max(0, (Number(S._entryFillsN) || 0) - base);
+  S._batchFills = inGroup;
+  if (inGroup < 4) return false;
+  if (!S._groupDoneAt) S._groupDoneAt = Date.now();
+  if (gIdx >= 5) {
+    if (!S._maxGroupsLog || Date.now() - S._maxGroupsLog > 18e5) {
+      S._maxGroupsLog = Date.now();
+      pushLog("server", "\u{1F9F7} \u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0627\u062A \u0627\u0644\u062E\u0645\u0633 (20 \u0623\u0645\u0631\u0627\u064B) \u2014 \u062A\u0648\u0642\u0641 \u062A\u0627\u0645 \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A");
+    }
+    return true;
+  }
+  const waitH = STEP_WAITS[gIdx - 1] * 36e5;
+  const elapsed = Date.now() - S._groupDoneAt;
+  if (elapsed < waitH) {
+    return true;
+  }
+  S._groupIdx = gIdx + 1;
+  S._groupFillBase = Number(S._entryFillsN) || 0;
+  S._groupDoneAt = 0;
+  S._groupAnchor = Number(S._groupExtreme) > 0 ? Number(S._groupExtreme) : S.position ? S.position.entry : S.lastPrice;
+  S._groupExtreme = 0;
+  S._batchHoldAt = 0;
+  pushLog("server", "\u{1F4C8} \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0629 " + S._groupIdx + " (4 \u0623\u0648\u0627\u0645\u0631 \u0628\u062A\u0628\u0627\u0639\u062F " + [0.25, 0.35, 0.5, 0.65, 0.75][S._groupIdx - 1] + "%) \u0645\u0646 " + fmtPx(S._groupAnchor) + " \u2014 \u0623\u0639\u0644\u0649 \u0646\u0642\u0637\u0629 \u062E\u0644\u0627\u0644 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631");
+  try {
+    const fresh = buildGrid(S._groupAnchor, false, effLevels()).filter((x) => !x.reduceOnly);
+    const keep = S.grid.filter((l) => l.reduceOnly || l.status === "filled" || l.status === "open");
+    S.grid = keep.concat(fresh);
+    S.gridAnchor = S._groupAnchor;
+  } catch {
+  }
+  return false;
   const H = 36e5;
   if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 18e5)) {
     S._batchHoldLogAt = Date.now();
@@ -2835,9 +2875,19 @@ function batchHoldActive() {
     const calm = S._batchWorseAt ? Math.floor((Date.now() - S._batchWorseAt) / H) : 0;
     pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D: " + S._batchFills + " \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u0645\u0636\u0649 " + el + "\u0633" + min + "\u062F \u0645\u0646 \u0648\u062C\u0648\u0628 \u0627\u0644\u06403 \u0633\u0627\u0639\u0627\u062A" + (S._batchWorseAt ? Date.now() - S._batchWorseAt > H ? " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u062A\u0648\u0642\u0641 \u0645\u0646\u0630 " + calm + " \u0633\u0627\u0639\u0629" : " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u0627 \u0632\u0627\u0644 \u0646\u0634\u0637\u0627\u064B" : " \u2014 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629"));
   }
-  if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 18e5)) {
-    S._batchHoldLogAt = Date.now();
-    pushLog("server", "\u{1F9F7} \u0628\u0644\u063A \u0627\u0644\u0645\u0631\u0643\u0632 4 \u0623\u0648\u0627\u0645\u0631 \u2014 \u062A\u0648\u0642\u0641 \u0643\u0627\u0645\u0644 \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A (\u0644\u0627 \u062A\u0639\u0632\u064A\u0632 \u0648\u0644\u0627 \u0645\u062C\u0645\u0648\u0639\u0627\u062A \u0625\u0636\u0627\u0641\u064A\u0629)");
+  try {
+    const px = Number(S.lastPrice) || 0;
+    if (px > 0 && S.position) {
+      const short = S.position.side === "short";
+      const prev = Number(S._groupExtreme) || 0;
+      S._groupExtreme = short ? prev > 0 ? Math.max(prev, px) : px : prev > 0 ? Math.min(prev, px) : px;
+    }
+  } catch {
+  }
+  if (!S._groupWaitLog || Date.now() - S._groupWaitLog > 18e5) {
+    S._groupWaitLog = Date.now();
+    const left = Math.max(0, STEP_WAITS[Math.min(4, Math.max(1, S._groupIdx || 1)) - 1] * 36e5 - (Date.now() - (S._groupDoneAt || Date.now())));
+    pushLog("server", "\u23F3 \u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0629 " + (S._groupIdx || 1) + " \u2014 \u0627\u0646\u062A\u0638\u0627\u0631 " + Math.floor(left / 36e5) + "\u0633 " + Math.floor(left % 36e5 / 6e4) + "\u062F \xB7 \u0623\u0639\u0644\u0649 \u0646\u0642\u0637\u0629: " + fmtPx(S._groupExtreme));
   }
   return true;
 }
@@ -3118,7 +3168,7 @@ function buildGrid(center, wide, initialCount) {
   }
   const reach = Math.max(spanMin, Math.min(step * n * 2, 0.12));
   if (span > reach) span = reach;
-  const LADDER = [22e-4, 45e-4, 66e-4, 9e-3, 0.0115];
+  const LADDER = [25e-4, 35e-4, 5e-3, 65e-4, 75e-4];
   const pctA = LADDER[0];
   const GSP = [0, LADDER[0], LADDER[1], LADDER[2], LADDER[3], LADDER[4]];
   const grpStep = (idx) => GSP[Math.min(5, Math.max(1, Math.ceil(idx / 4)))];
