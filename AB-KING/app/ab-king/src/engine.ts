@@ -1624,7 +1624,30 @@ async function exPlaceLimit(intent){
     postOnly:true, // كل الأوامر الحدّية صانعة سوق: رسوم 0.02% بدل 0.06% — برأس مال صغير الفرق صافٍ حقيقي
     marginMode:'CROSS'}); // متبادل دائمًا بأمر المالك — الرصيد الكلي يحمي الصفقة
 }
+/* ─── درع موحّد (مراجعة 4 نوفمبر 12:30): أي أمر دخول — حدّي أو سوقي —
+   يمر على نفس البوابات: الحالة · مفتاح الإيقاف · بوابة الأوامر · سقف الحجم ·
+   حد 20 أمراً · حد الهامش 4×. كان مسار الصيد السوقي يلتف على كل ذلك ─── */
+function assertEntryAllowed(symbol:any, qty:any, price:any){
+  if(S.status!=='running') throw new Error('⛔ البوت غير مُشغّل — لا أوامر دخول');
+  if(haltRequested()) throw new Error('⛔ مفتاح الإيقاف مفعّل — لا أوامر دخول');
+  if(!S._entriesEnabled) throw new Error('⛔ بوابة الأوامر مغلقة — نفّذ «تفعيل الأوامر»');
+  const placed=(Number(S._exEntryOpenN)||0)+(Number(S._entryFillsN)||0);
+  if(placed>=20) throw new Error('⛔ اكتملت المجموعات الخمس (20 أمراً)');
+  if(S.position){
+    const lev=Math.max(1,Number(S.config.leverage)||1), mult=S.multiplier||1, px=Number(price)||Number(S.lastPrice)||0;
+    const posMargin=((S.position.size||0)*mult*(S.position.entry||0))/lev;
+    const newMargin=(Math.abs(Number(qty)||0)*mult*px)/lev;
+    const capM=Math.max(5,(Number(S.config.cycleBalance)||0)*4);
+    if(px>0&&posMargin+newMargin>capM) throw new Error('⛔ سقف الهامش: التجاوز يمنع الإضافة');
+  }
+  void symbol;
+}
 async function exPlaceMarket(symbol,side,qty){
+  // تحصين مسار الصيد السوقي بكل البوابات + سقف الحجم (كان يلتف عليها كلها)
+  const px=Number(S.lastPrice)||Number(S.markPrice)||0;
+  const capped=capEntryQty(qty,px>0?px:1);
+  assertEntryAllowed(symbol,capped,px);
+  qty=capped;
   await ensureLiveMeta(symbol);
   return placeOrderSmart({clientOid:'hunt_'+Date.now().toString(36),
     symbol,side,type:'market',size:qty,leverage:Number(S.config.leverage)||1,marginMode:'CROSS'});
