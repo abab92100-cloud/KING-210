@@ -9,7 +9,7 @@ import './server-shims'; // أولًا دائمًا: يثبّت البيئة ق�
 import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
-  strategyFingerprint, alignStrategy, gridStatus, ensureGroupFour, cancelEntryOrders, cleanStart, enableEntries,
+  strategyFingerprint, alignStrategy, gridStatus, ensureGroupFour, cancelEntryOrders, cleanStart, enableEntries, syncBooks,
 } from './engine';
 
 const SRV_VER = 'TRG-NEW-1.0.0';
@@ -231,6 +231,7 @@ const srv = createServer(async (req, res) => {
           case 'cancelEntries': { const rr=await cancelEntryOrders(); return send(res,200,rr); }
           case 'cleanStart': { const rr=await cleanStart(); return send(res,200,rr); }
           case 'enableEntries': return send(res,200, enableEntries());
+          case 'syncBooks': return send(res,200, syncBooks(j.totalEq, j.share));
           case 'ensureFour': { const need=ensureGroupFour(); return send(res, 200, { ok:true, need }); }
           default: return send(res, 400, { ok: false, error: 'إجراء غير معروف: ' + a });
         }
@@ -268,6 +269,14 @@ const srv = createServer(async (req, res) => {
       // الكلي يقسمه المنسق مرة واحدة: كل محرك يستلم نصيبه (÷5) فوراً
       // ─── مواءمة الاستراتيجية (أمر المالك): كل المحركات بنفس الاستراتيجية
       // تُطبّق من المحرك الأول على الباقي — العملة والرصيد يبقيان خاصين ───
+      if (a === 'reconcileBooks') {
+        // اقرأ حقوق الحساب الحقيقية من المحرك الأول ثم بثّ النصيب للجميع
+        const h:any = await jfetch('http://127.0.0.1:' + (BASE_PORT + 1) + '/cmd', 15000, { action: 'syncBooks', totalEq: j.totalEq, share: j.share });
+        const eq = Number(j.totalEq) || 0, share = eq > 0 ? Math.round((eq / FLEET_N) * 100) / 100 : 0;
+        const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) =>
+          jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 15000, { action: 'syncBooks', totalEq: eq, share })));
+        return send(res, 200, { ok: true, equity: eq, share, results: rs });
+      }
       if (a === 'enableAll') {
         const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) =>
           jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 8000, { action: 'enableEntries' })));

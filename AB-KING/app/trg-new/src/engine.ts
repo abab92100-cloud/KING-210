@@ -1399,6 +1399,25 @@ export function enableEntries(){
   pushLog('server','▶️ فُتحت بوابة الأوامر — استعادة الأوامر المفقودة (حتى 4 لكل صفقة) بلا زيادة أو نقصان');
   return { ok:true, enabled:true };
 }
+/* ─── مطابقة الدفاتر مع المنصة (أمر المالك 4 نوفمبر 10:50 — بعد فارق 28$):
+   الحقوق الحقيقية في KuCoin هي المصدر الوحيد. يُعاد ضبط رأس المال والربح
+   المعروض ليطابق المنصة تماماً، ويُصفَّر «الربح المجني» الوهمي.
+   لا يُغلق مركزاً ولا يبيع بخسارة. */
+export function syncBooks(totalEq:any, share:any){
+  const eq=Number(totalEq)||0, sh=Number(share)||0;
+  if(!(eq>0)) return { ok:false, why:'لا حقوق مقروءة' };
+  const before=Number(S.config.cycleBalance)||0, beforeP=Number(S.realizedPnl)||0;
+  S._eqStart=eq;
+  S.exEquity=eq;
+  if(sh>0) S.config.cycleBalance=Math.round(sh*100)/100;
+  S.realizedPnl=0;                 // لا ربح محلي وهمي — التتبع يبدأ من حقوق المنصة
+  S.pnlReal=true;
+  S._booksSyncedAt=Date.now();
+  pushLog('server','🧾 مطابقة الدفاتر: حقوق المنصة '+fmtUsd(eq)+' · نصيب المحرك '+fmtUsd(S.config.cycleBalance)+
+    ' (كان '+fmtUsd(before)+' ورصيد ربح تقديري '+fmtUsd(beforeP)+' أُلغي) — المنصة هي المرجع');
+  saveAll(); emit();
+  return { ok:true, equity:eq, share:S.config.cycleBalance, clearedProfit:beforeP };
+}
 export function gridStatus(){
   const c=S.config;
   return { symbol:c.symbol, mode:c.mode, cycleBalance:c.cycleBalance, leverage:c.leverage,
