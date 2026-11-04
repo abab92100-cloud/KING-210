@@ -10,9 +10,10 @@ import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
   strategyFingerprint, alignStrategy, gridStatus, ensureGroupFour, cancelEntryOrders, cleanStart, enableEntries, syncBooks,
+  requestHalt, clearHalt, haltRequested,
 } from './engine';
 
-const SRV_VER = 'KING-1.9.8';
+const SRV_VER = 'KING-1.9.9';
 const FLEET_N = 1;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
@@ -277,6 +278,15 @@ const srv = createServer(async (req, res) => {
           jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 15000, { action: 'syncBooks', totalEq: eq, share })));
         return send(res, 200, { ok: true, equity: eq, share, results: rs });
       }
+      if (a === 'stop' || a === 'pause' || a === 'start') {
+        // رد فوري: اكتب/ارفع مفتاح الإيقاف محلياً أولاً ثم بثّ خلفياً
+        try{ if(a==='start') clearHalt(); else requestHalt(a==='stop'?'إيقاف':'توقيت'); }catch{}
+        const payload = { action: a };
+        Promise.all(Array.from({ length: FLEET_N }, (_, i) =>
+          jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 8000, payload))).catch(()=>{});
+        return send(res, 200, { ok: true, instant: true, halted: a !== 'start' });
+      }
+      if (a === 'haltState') return send(res, 200, { ok: true, halted: haltRequested() });
       if (a === 'enableAll') {
         const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) =>
           jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 8000, { action: 'enableEntries' })));

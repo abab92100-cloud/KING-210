@@ -605,6 +605,24 @@ export async function backgroundPipeline(){
 /* ─── قاعدة الخمس (أمر المالك 3 نوفمبر 23:19): قبل فتح أي صفقة جديدة
    يُقرأ عدد المراكز الحقيقية في المنصة — 5 أو أكثر = توقف تام حتى تُغلق
    واحدة (بربح أو يدوياً). تُقرأ من المنصة كل 5 ثوانٍ ─── */
+/* ─── مفتاح إيقاف محلي (حل جذري لأزرار لا تستجيب): يُكتب ملف HALT في
+   مجلد الحالة، ويقرأه كل محرك في كل نبضة (كل ثانية) — الإيقاف يعمل حتى لو
+   فشلت الشبكة أو تجمّدت طلبات HTTP. يستجيب فوراً بلا انتظار أي محرك ─── */
+function haltPath(){
+  try{
+    const dir=(S as any)._storeDir||process.env.ABKING_DIR||((process.env.HOME||'/root')+'/.ab-king');
+    return String(dir)+'/HALT';
+  }catch{ return '/tmp/ab-king-HALT'; }
+}
+export function haltRequested(){
+  try{ const fs=require('fs'); return !!fs.existsSync(haltPath()); }catch{ return false; }
+}
+export function requestHalt(reason='إيقاف من الواجهة'){
+  try{ const fs=require('fs'); fs.writeFileSync(haltPath(), JSON.stringify({at:Date.now(),reason})); }catch{}
+}
+export function clearHalt(){
+  try{ const fs=require('fs'); fs.unlinkSync(haltPath()); }catch{}
+}
 export function fleetFullNow(){
   return (Math.max(0,Number(S._exOpenCount)||0)) >= 5;
 }
@@ -1549,7 +1567,7 @@ async function exPlaceLimit(intent){
   await ensureLiveMeta(intent.symbol);
   // ⛔ إيقاف صلب (أمر المالك 4 نوفمبر 00:32): البوت الموقوف/المؤقت لا يفتح أي
   // صفقة إطلاقاً — الحالة تُفحص في نقطة الإرسال الأخيرة
-  if(!intent.reduceOnly&&S.status!=='running'){
+  if(!intent.reduceOnly&&(S.status!=='running'||haltRequested())){
     throw new Error('⛔ البوت غير مُشغّل — لا أوامر دخول (اضغط تشغيل)'); }
   if(!intent.reduceOnly&&!S._entriesEnabled){
     throw new Error('⛔ بوابة الدخول مغلقة — نفّذ «تفعيل الأوامر»'); }
@@ -3849,6 +3867,8 @@ export async function botTick(){
 
 /* ---------- أوامر التشغيل ---------- */
 export function startBot(){
+  clearHalt(); // رفع مفتاح الإيقاف المحلي
+
   try{ pushLog('server','🧬 بصمة الاستراتيجية: '+strategyFingerprint()); }catch{}
   try{ pushLog('server','⚙️ الإعدادات الفعّالة: '+(S.config.mode==='live'?'حقيقي':'ورقي')+' · '+S.config.displaySymbol+
     ' · رافعة '+S.config.leverage+'× · مستويات '+S.config.levels+' · خطوة '+S.config.gridStepPct+'%'+
@@ -3873,7 +3893,9 @@ export function startBot(){
     ' (تركيز يناسب رأس المال) والصيد يعمل');
   nativeNotify('AB-KING يعمل ✓','البوت متصل بـ KuCoin ويتداول '+(S.config.displaySymbol||S.config.symbol)+' — يستمر حتى في الخلفية',true);
   toast('البوت يعمل الآن'); emit(); saveAll(); }
-export function pauseBot(){ if(R()){ remoteCmd('pause').then(()=>remoteSync()); return; }
+export function pauseBot(){
+  requestHalt('توقيت مؤقت'); // يمنع أي أمر جديد فوراً وبلا شبكة
+  if(R()){ remoteCmd('pause').then(()=>remoteSync()); return; }
   if(S.status!=='running') return;
   S.status='paused';
   for(const l of S.grid){ if(!l.reduceOnly&&(l.status==='open'||l.status==='armed')){
@@ -3883,7 +3905,10 @@ export function pauseBot(){ if(R()){ remoteCmd('pause').then(()=>remoteSync()); 
   if(S.config.mode==='live'&&S.keys) exCancelAll(S.config.symbol).catch(()=>{});
   pushLog('info','إيقاف مؤقت — لا صفقات جديدة، الجني مستمر');
   emit(); saveAll(); }
-export async function stopBot(){ if(R()){ await remoteCmd('stop'); await remoteSync(); return; }
+export async function stopBot(){
+  // فوري أولاً: اكتب مفتاح الإيقاف المحلي فوراً (يعمل حتى لو فشلت الشبكة)
+  requestHalt('إيقاف من الواجهة');
+  if(R()){ try{ await remoteCmd('stop'); }catch{} await remoteSync().catch(()=>{}); return; }
   if(S.status==='idle') return;
   S.status='stopped';
   S._entriesEnabled=false; // البوابة تُغلق أيضاً — لا أوامر بعد الإيقاف
