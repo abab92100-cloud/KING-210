@@ -413,7 +413,8 @@ function tpBase() {
   return dynamicTpNet();
 }
 var clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-var uid = (p) => p + "_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+var _oidSeq = 0;
+var uid = (p) => p + "_" + Date.now().toString(36) + "_" + (_oidSeq = (_oidSeq + 1) % 1e5).toString(36) + "_" + Math.random().toString(36).slice(2, 8);
 var fmtPx = (n) => {
   n = Number(n);
   if (!n || !isFinite(n) || n <= 0) return "\u2014";
@@ -5173,7 +5174,8 @@ async function liveSync() {
   if (R()) return;
   if (S.config.mode !== "live" || !S.keys) return;
   if (S._rlUntil && Date.now() < S._rlUntil) return;
-  if (Date.now() - (S._syncAt || 0) < 8e3) return;
+  const slotOff = ((Number(S._mySlot) || 1) - 1) * 1600;
+  if (Date.now() - (S._syncAt || 0) < 12e3 + slotOff) return;
   S._syncAt = Date.now();
   if (!S._orphanAt || Date.now() - S._orphanAt > 3e5) {
     S._orphanAt = Date.now();
@@ -5306,7 +5308,12 @@ async function liveSync() {
         }));
         try {
           const liveSet = /* @__PURE__ */ new Map();
-          for (const ep of S.exPositions) liveSet.set(String(ep.symbol).replace(/USDTM$/i, "").toUpperCase(), ep);
+          const MY = String(S.config.displaySymbol || "").toUpperCase().replace(/USDTM$/, "");
+          for (const ep of S.exPositions) {
+            const symU = String(ep.symbol).replace(/USDTM$/i, "").toUpperCase();
+            if (MY && symU !== MY) continue;
+            liveSet.set(symU, ep);
+          }
           for (const [sym2, ep] of liveSet) {
             const row = S.journal.find((j) => j.status === "open" && String(j.symbol).toUpperCase() === sym2);
             if (row) {
