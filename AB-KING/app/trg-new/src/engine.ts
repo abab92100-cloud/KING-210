@@ -623,6 +623,21 @@ export function requestHalt(reason='إيقاف من الواجهة'){
 export function clearHalt(){
   try{ const fs=require('fs'); fs.unlinkSync(haltPath()); }catch{}
 }
+/* ─── بوابة التسلسل (أمر المالك 4 نوفمبر): الأسطول يُبنى صفقة بعد صفقة.
+   المحرك رقم N لا يفتح صفقته حتى تفتح المحركات 1..N-1 صفقاتها — وبين كل
+   فتحين دراسة جديدة كاملة للمنصة (بيانات محدثة) ─── */
+export function setFleetGate(opened:any, slot:any){
+  const o=Math.max(0,Math.min(10,Number(opened)||0)), sl=Math.max(1,Number(slot)||1);
+  const before=Number(S._fleetOpened)||0;
+  S._fleetOpened=o; S._mySlot=sl;
+  if(o!==before){ if(o<sl-1&&(!S._seqLogAt||Date.now()-S._seqLogAt>60000)){ S._seqLogAt=Date.now();
+      pushLog('server','⏳ التسلسل: بانتظار الأسطول '+(o+1)+' ليؤسس صفقته قبل الأسطول '+sl+' — ثم دراسة جديدة');
+    } else if(o===sl-1&&(!S._seqReadyAt||Date.now()-S._seqReadyAt>60000)){ S._seqReadyAt=Date.now();
+      pushLog('server','✅ دور الأسطول '+sl+' — دراسة محدثة للمنصة ثم تُفتح صفقته');
+      // دراسة إجبارية ببيانات جديدة قبل الفتح (لا فتح على دراسة قديمة)
+      try{ S._studyAt=0; startStudy(false); }catch{} } }
+  return { ok:true, opened:o, slot:sl };
+}
 export function fleetFullNow(){
   return (Math.max(0,Number(S._exOpenCount)||0)) >= 5;
 }
@@ -2890,6 +2905,11 @@ function huntTrigger(p){ if(S.status!=='running'||!p) return null;
   if(batchHoldActive()) return null;
   if(S._noNewEntries) return null; // تجميد كامل: مراكز منصة زائدة لم تُغلق بربح بعد
   // قاعدة الخمس: لا مركز جديد إن كان العدد في المنصة ≥ 5 (يُفحص قبل كل فتح)
+  // بوابة التسلسل: لا فتح حتى يسبقني الأسطول السابق بدوره
+  if(!S.position&&(Number(S._fleetOpened)||0)<((Number(S._mySlot)||1)-1)){
+    if(!S._seqBlkAt||Date.now()-S._seqBlkAt>60000){ S._seqBlkAt=Date.now();
+      pushLog('server','⏳ الأسطول '+((Number(S._mySlot)||1))+' ينتظر الأسطول '+((Number(S._fleetOpened)||0)+1)+' — لا فتح قبل دوره'); }
+    return null; }
   if(!S.position&&fleetFullNow()){
     if(!S._fullBlkAt||Date.now()-S._fullBlkAt>300000){ S._fullBlkAt=Date.now();
       pushLog('server','⛔ عدد المراكز في المنصة '+(S._exOpenCount)+' (5 أو أكثر) — لا صفقة جديدة حتى تُغلق واحدة'); }
@@ -3868,6 +3888,10 @@ export async function botTick(){
 /* ---------- أوامر التشغيل ---------- */
 export function startBot(){
   clearHalt(); // رفع مفتاح الإيقاف المحلي
+  // عند التشغيل: مسح كامل للمنصة ودراسة جديدة قبل أي دخول (أمر المالك)
+  try{ S._studyAt=0; S._fleetOpened=Number(S._fleetOpened)||0;
+    startStudy(false); scanRadar().catch(()=>{});
+    pushLog('server','🔎 تشغيل: مسح كامل للسوق ودراسة محدثة — لا دخول قبل اكتمالها'); }catch{}
 
   try{ pushLog('server','🧬 بصمة الاستراتيجية: '+strategyFingerprint()); }catch{}
   try{ pushLog('server','⚙️ الإعدادات الفعّالة: '+(S.config.mode==='live'?'حقيقي':'ورقي')+' · '+S.config.displaySymbol+

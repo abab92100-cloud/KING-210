@@ -10,10 +10,10 @@ import {
   S, initEngine, startBot, pauseBot, stopBot, newCycle,
   saveCfg, saveKeys, clearKeys, scanRadar, pushLog, liveSync, repairAccount,
   strategyFingerprint, alignStrategy, gridStatus, ensureGroupFour, cancelEntryOrders, cleanStart, enableEntries, syncBooks,
-  requestHalt, clearHalt, haltRequested,
+  requestHalt, clearHalt, haltRequested, setFleetGate,
 } from './engine';
 
-const SRV_VER = 'KING-1.9.9';
+const SRV_VER = 'KING-1.9.10';
 const FLEET_N = 1;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
@@ -136,6 +136,16 @@ const alignFleetStrategy = async () => {
 };
 setInterval(() => { alignFleetStrategy().catch(() => { }); }, 300000).unref?.();
 
+// ─── التسلسل (أمر المالك 4 نوفمبر): بثّ عدد الأساطيل التي فتحت صفقتها إلى
+// كل محرك كل 5 ثوانٍ — المحرك رقم N لا يفتح حتى تفتح المحركات 1..N-1 ───
+async function broadcastFleetGate() {
+  let opened = 0;
+  for (let i = 1; i <= FLEET_N; i++) if (slotStates[i] && slotStates[i].position) opened++;
+  await Promise.all(Array.from({ length: FLEET_N }, (_, i) =>
+    jfetch('http://127.0.0.1:' + (BASE_PORT + 1 + i) + '/cmd', 5000, { action: 'fleetGate', opened })));
+}
+setInterval(() => { broadcastFleetGate().catch(() => { }); }, 5000).unref?.();
+
 function mergedState(selIn = 0) {
   const live: any[] = [];
   for (let i = 1; i <= FLEET_N; i++) if (slotStates[i]) live.push(slotStates[i]);
@@ -233,6 +243,7 @@ const srv = createServer(async (req, res) => {
           case 'cleanStart': { const rr=await cleanStart(); return send(res,200,rr); }
           case 'enableEntries': return send(res,200, enableEntries());
           case 'syncBooks': return send(res,200, syncBooks(j.totalEq, j.share));
+          case 'fleetGate': return send(res,200, setFleetGate(j.opened, SLOT));
           case 'ensureFour': { const need=ensureGroupFour(); return send(res, 200, { ok:true, need }); }
           default: return send(res, 400, { ok: false, error: 'إجراء غير معروف: ' + a });
         }
