@@ -1534,6 +1534,14 @@ async function exPlaceLimit(intent){
     throw new Error('⛔ البوت غير مُشغّل — لا أوامر دخول (اضغط تشغيل)'); }
   if(!intent.reduceOnly&&!S._entriesEnabled){
     throw new Error('⛔ بوابة الدخول مغلقة — نفّذ «تفعيل الأوامر»'); }
+  if(!intent.reduceOnly&&S.position){
+    const placed=(Number(S._exEntryOpenN)||0)+(Number(S._entryFillsN)||0);
+    if(placed>=4){ throw new Error('⛔ المركز مكتمل (4 أوامر) — لا إضافة'); }
+    const lev=Math.max(1,Number(S.config.leverage)||1);
+    const posMargin=((S.position.size||0)*(S.multiplier||1)*(S.position.entry||0))/lev;
+    const newMargin=((Number(intent.qty)||0)*(S.multiplier||1)*(Number(intent.price)||1))/lev;
+    const capM=Math.max(5,(Number(S.config.cycleBalance)||0)*4);
+    if(posMargin+newMargin>capM){ throw new Error('⛔ سقف الهامش: التجاوز يمنع الإضافة'); } }
   // ─── بوابة الإرسال النهائية (درس UNI: مستوى محفوظ بحجم 30 وحدة من إصدار
   // قديم أُعيد إرساله!): السقف يُطبق هنا حتماً مهما كان المحفوظ، والتقريب
   // يستخدم tick الرمز نفسه من خريطة المواصفات لا tick العملة السابقة ───
@@ -1722,6 +1730,7 @@ export function batchHoldActive(){
   const __filled=Math.max(0,Number(S._entryFillsN)||0);
   const __real=Math.max(__live+__filled, 0);
   S._batchFills=__real;
+  // سقف صارم: 4 أوامر دخول للمركز الواحد مدى حياته (كانت 18 تعبئة = 663$)
   if(__real<(S._cycleMaxFills||4)) return false;
   // ─── قاعدة المالك الزمنية (أمر 2026-10-24): انزلاق بعد 4 أوامر =
   // توقف كامل 3 ساعات، ثم دراسة: استمرار الانزلاق = +ساعة إضافية ودراسة،
@@ -1737,20 +1746,10 @@ export function batchHoldActive(){
   // ─── قاعدة المجموعات (أمر المالك 2 نوفمبر، الأحدث ويلغي ما قبله):
   // 4 أوامر لكل مجموعة → توقف 3 ساعات → تحقق استقرار فعلي (لا قاع/قمة
   // جديدة منذ 30 دقيقة) → فتح المجموعة التالية (4 أوامر بتباعد خاص) ───
-  const held=(Date.now()-(S._batchHoldAt||0));
-  const calm=S._batchWorseAt?(Date.now()-S._batchWorseAt):0;
-  if(held<3*3600000) return true;                      // 3 ساعات كاملة
-  if(!(calm>=30*60000)){                               // استقرار مطلوب
-    if(!S._batchStudiedAt||Date.now()-S._batchStudiedAt>1800000){ S._batchStudiedAt=Date.now();
-      pushLog('server','🧷 3 ساعات مضت — الانزلاق لم يستقر بعد (قاع/قمة جديدة قبل '+Math.floor(calm/60000)+' دقيقة) — استمرار التوقف'); }
-    return true; }
-  // استقرار مؤكد → مجموعة جديدة
-  S._batchHoldAt=0; S._batchFills=0; S._batchWorst=null; S._batchWorseAt=0; S._batchStudiedAt=false;
-  S._groupN=(S._groupN||1)+1;
-  S._cycleMaxFills=4;
-  pushLog('server','✅ استقرار مؤكد بعد 3 ساعات — فتح المجموعة '+(S._groupN)+' (4 أوامر بتباعدها الخاص)');
-  startStudy(false); // دراسة محدثة قبل المجموعة الجديدة
-  return false; }
+  // توقف مطلق حتى تُجنى الصفقة (لا تعزيز ولا مجموعات إضافية)
+  if(S._batchHoldAt&&(!S._batchHoldLogAt||Date.now()-S._batchHoldLogAt>1800000)){ S._batchHoldLogAt=Date.now();
+    pushLog('server','🧷 بلغ المركز 4 أوامر — توقف كامل حتى الجني (لا تعزيز ولا مجموعات إضافية)'); }
+  return true; }
 
 export function exposureCapped(){ const pos=S.position; if(!pos) return false;
   const notional=pos.size*(S.multiplier||1)*(pos.entry||0);
@@ -3247,7 +3246,24 @@ export function studiedEarlyExit(p:any){
   if(hit){ S._earlyExitAt=Date.now(); return hit; } // تهدئة تُستهلك بالقرار الفعلي فقط
   return null; }
 
-export async function flattenAt(p:any,source:any){ const pos=S.position;
+export async function flattenAt(p:any,source:any){
+  // ⛔ لا «جني» إلا بربح صافٍ حقيقي ≥ الحد (لا صفر ولا خسارة تظهر كربح)
+  try{
+    const r=String(source||'');
+    const isProfit=/جني|ربح|هدف/.test(r)&&!/داهم|إيقاف|خسارة/.test(r);
+    if(isProfit&&S.position){
+      const mult=S.multiplier||1;
+      const dir=S.position.side==='short'?-1:1;
+      const gross=(Number(p)-S.position.entry)*dir*(S.position.size||0)*mult;
+      const fees=(S.position.size||0)*mult*Number(p||0)*0.0006*2;
+      const net=gross-fees;
+      const floor=Math.max(0.05,Number(S.config.tpNet||0.10)*0.9);
+      if(net<floor){
+        if(!S._tpFloorAt||Date.now()-S._tpFloorAt>120000){ S._tpFloorAt=Date.now();
+          pushLog('server','⏳ تأجيل جني: الصافي '+fmtUsd(net)+' أقل من الحد '+fmtUsd(floor)+' — الانتظار'); }
+        return; } }
+  }catch{}
+  const pos=S.position;
   /* ─── الحاجز المطلق (قاعدة المالك): لا إغلاق بخسارة أبداً ───
      مهما كان المصدر (جني مبكر، حد صبر، عودة إندكس...) — الإغلاق ينفّذ
      فقط بصافٍ موجب. الاستثناءان الوحيدان: خطر التصفية الداهم (وإلا ضاع
@@ -3485,7 +3501,10 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
         const av=Number(a&&a.availableBalance); if(av>=0&&isFinite(av)) S.exAvail=av;
         // رصيد الحساب الكلي (equity) — المرجع الثابت لحساب التصفية وميزانية
         // الأحجام، لا ينهار لحظيًا بحجز الأوامر المركونة كما يفعل «المتاح»
-        const eq=Number(a&&a.accountEquity); if(eq>0&&isFinite(eq)) S.exEquity=eq; }).catch(()=>{}); }
+        const eq=Number(a&&a.accountEquity);
+        if(eq>0&&isFinite(eq)){ S.exEquity=eq;
+          if(!(S._eqStart>0)) S._eqStart=eq;
+          S.realizedPnl=Math.round((eq-(S._eqStart||eq))*100)/100; S.pnlReal=true; } }).catch(()=>{}); }
     // الرافعة ثابتة كما ضبطها المالك تمامًا — لا تكيّف ولا تحذير:
     // في وضع CROSS تُتجاهل رافعة الأمر وتُطبَّق رافعة الرمز، لذا تُفرض على المنصة
     // عبر نقطة KuCoin الرسمية (مخنوقة 5 دقائق، صامتة إن رُفضت أثناء مركز مفتوح)
