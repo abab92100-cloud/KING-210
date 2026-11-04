@@ -2310,6 +2310,21 @@ function enableEntries() {
   pushLog("server", "\u25B6\uFE0F \u0641\u064F\u062A\u062D\u062A \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u2014 \u0627\u0633\u062A\u0639\u0627\u062F\u0629 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0641\u0642\u0648\u062F\u0629 (\u062D\u062A\u0649 4 \u0644\u0643\u0644 \u0635\u0641\u0642\u0629) \u0628\u0644\u0627 \u0632\u064A\u0627\u062F\u0629 \u0623\u0648 \u0646\u0642\u0635\u0627\u0646");
   return { ok: true, enabled: true };
 }
+function syncBooks(totalEq, share) {
+  const eq = Number(totalEq) || 0, sh = Number(share) || 0;
+  if (!(eq > 0)) return { ok: false, why: "\u0644\u0627 \u062D\u0642\u0648\u0642 \u0645\u0642\u0631\u0648\u0621\u0629" };
+  const before = Number(S.config.cycleBalance) || 0, beforeP = Number(S.realizedPnl) || 0;
+  S._eqStart = eq;
+  S.exEquity = eq;
+  if (sh > 0) S.config.cycleBalance = Math.round(sh * 100) / 100;
+  S.realizedPnl = 0;
+  S.pnlReal = true;
+  S._booksSyncedAt = Date.now();
+  pushLog("server", "\u{1F9FE} \u0645\u0637\u0627\u0628\u0642\u0629 \u0627\u0644\u062F\u0641\u0627\u062A\u0631: \u062D\u0642\u0648\u0642 \u0627\u0644\u0645\u0646\u0635\u0629 " + fmtUsd(eq) + " \xB7 \u0646\u0635\u064A\u0628 \u0627\u0644\u0645\u062D\u0631\u0643 " + fmtUsd(S.config.cycleBalance) + " (\u0643\u0627\u0646 " + fmtUsd(before) + " \u0648\u0631\u0635\u064A\u062F \u0631\u0628\u062D \u062A\u0642\u062F\u064A\u0631\u064A " + fmtUsd(beforeP) + " \u0623\u064F\u0644\u063A\u064A) \u2014 \u0627\u0644\u0645\u0646\u0635\u0629 \u0647\u064A \u0627\u0644\u0645\u0631\u062C\u0639");
+  saveAll();
+  emit();
+  return { ok: true, equity: eq, share: S.config.cycleBalance, clearedProfit: beforeP };
+}
 function gridStatus() {
   const c = S.config;
   return {
@@ -5985,7 +6000,7 @@ function initEngine() {
 // src/server-entry.ts
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "KING-1.9.7";
+var SRV_VER = "KING-1.9.8";
 var FLEET_N = 1;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
@@ -6246,6 +6261,8 @@ var srv = createServer(async (req, res) => {
           }
           case "enableEntries":
             return send(res, 200, enableEntries());
+          case "syncBooks":
+            return send(res, 200, syncBooks(j.totalEq, j.share));
           case "ensureFour": {
             const need = ensureGroupFour();
             return send(res, 200, { ok: true, need });
@@ -6282,6 +6299,12 @@ var srv = createServer(async (req, res) => {
       } catch {
       }
       const a = String(j.action || "");
+      if (a === "reconcileBooks") {
+        const h = await jfetch("http://127.0.0.1:" + (BASE_PORT + 1) + "/cmd", 15e3, { action: "syncBooks", totalEq: j.totalEq, share: j.share });
+        const eq = Number(j.totalEq) || 0, share = eq > 0 ? Math.round(eq / FLEET_N * 100) / 100 : 0;
+        const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 15e3, { action: "syncBooks", totalEq: eq, share })));
+        return send(res, 200, { ok: true, equity: eq, share, results: rs });
+      }
       if (a === "enableAll") {
         const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 8e3, { action: "enableEntries" })));
         return send(res, 200, { ok: true, results: rs });
