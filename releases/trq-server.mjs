@@ -2373,6 +2373,44 @@ function enableEntries() {
   pushLog("server", "\u25B6\uFE0F \u0641\u064F\u062A\u062D\u062A \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u2014 \u0627\u0633\u062A\u0639\u0627\u062F\u0629 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0641\u0642\u0648\u062F\u0629 (\u062D\u062A\u0649 4 \u0644\u0643\u0644 \u0635\u0641\u0642\u0629) \u0628\u0644\u0627 \u0632\u064A\u0627\u062F\u0629 \u0623\u0648 \u0646\u0642\u0635\u0627\u0646");
   return { ok: true, enabled: true };
 }
+function resetState() {
+  const before = {
+    journal: (S.journal || []).length,
+    logs: (S.logs || []).length,
+    pos: !!S.position,
+    realized: Number(S.realizedPnl) || 0
+  };
+  S.journal = [];
+  S.logs = [];
+  S.grid = [];
+  S.position = null;
+  S.activeCycle = null;
+  S.realizedPnl = 0;
+  S.cycleHarvested = 0;
+  S.feesPaid = 0;
+  S.fundingPaid = 0;
+  S.slipCost = 0;
+  S._entryFillsN = 0;
+  S._batchFills = 0;
+  S._batchHoldAt = 0;
+  S._groupIdx = 1;
+  S._groupFillBase = 0;
+  S._groupDoneAt = 0;
+  S._groupExtreme = 0;
+  S._groupAnchor = 0;
+  S._groupPlacedTotal = 0;
+  S.recentCoins = {};
+  S._nextReady = false;
+  S._nextSymbol = null;
+  S._studiedAt = 0;
+  S.status = "stopped";
+  S._entriesEnabled = false;
+  S._eqStart = 0;
+  pushLog("server", "\u{1F9F9} \u062A\u0635\u0641\u064A\u0631 \u0627\u0644\u062D\u0627\u0644\u0629: \u062D\u064F\u0630\u0641 " + before.journal + " \u0635\u0641\u0642\u0629 \u0642\u062F\u064A\u0645\u0629 \u0648" + before.logs + " \u0633\u062C\u0644\u0627\u064B \u0648\u0631\u0635\u064A\u062F \u0631\u0628\u062D \u062A\u0642\u062F\u064A\u0631\u064A " + fmtUsd(before.realized) + " \u2014 \u0628\u062F\u0627\u064A\u0629 \u0646\u0638\u064A\u0641\u0629 (\u0627\u0644\u0645\u0641\u0627\u062A\u064A\u062D \u0648\u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0645\u062D\u0641\u0648\u0638\u0629)");
+  saveAll();
+  emit();
+  return { ok: true, cleared: before };
+}
 function syncBooks(totalEq, share) {
   const eq = Number(totalEq) || 0, sh = Number(share) || 0;
   if (!(eq > 0)) return { ok: false, why: "\u0644\u0627 \u062D\u0642\u0648\u0642 \u0645\u0642\u0631\u0648\u0621\u0629" };
@@ -4388,7 +4426,7 @@ function huntTrigger(p) {
   if (toxicBlocked(S.config.direction)) return null;
   if (batchHoldActive()) return null;
   if (S._noNewEntries) return null;
-  if (!S.position && (Number(S._fleetOpened) || 0) < (Number(S._mySlot) || 1) - 1) {
+  if (S.config.seqMode === true && !S.position && (Number(S._fleetOpened) || 0) < (Number(S._mySlot) || 1) - 1) {
     if (!S._seqBlkAt || Date.now() - S._seqBlkAt > 6e4) {
       S._seqBlkAt = Date.now();
       pushLog("server", "\u23F3 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + (Number(S._mySlot) || 1) + " \u064A\u0646\u062A\u0638\u0631 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + ((Number(S._fleetOpened) || 0) + 1) + " \u2014 \u0644\u0627 \u0641\u062A\u062D \u0642\u0628\u0644 \u062F\u0648\u0631\u0647");
@@ -6150,7 +6188,7 @@ function initEngine() {
 // src/server-entry.ts
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "TRQ-TRADING-1.7.16";
+var SRV_VER = "TRQ-TRADING-1.7.17";
 var FLEET_N = 5;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
@@ -6347,7 +6385,15 @@ var srv = createServer(async (req, res) => {
     }
     const u = new URL(req.url || "/", "http://127.0.0.1");
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/health"))
-      return send(res, 200, { ok: true, name: "TRQ-TRADING Fleet Server", version: SRV_VER, fleet: FLEET_N, at: Date.now() });
+      return send(res, 200, {
+        ok: true,
+        name: "TRQ-TRADING Fleet Server",
+        version: SRV_VER,
+        fleet: FLEET_N,
+        at: Date.now(),
+        startedAt: process.uptime?.() ? Math.round(Date.now() - process.uptime() * 1e3) : null,
+        pid: process.pid
+      });
     if (SLOT > 0) {
       if (req.method === "GET" && u.pathname === "/state") {
         const lp = S.lastPrice || 0, mult = S.multiplier || 1, taker = S.takerFee || 6e-4;
@@ -6422,6 +6468,8 @@ var srv = createServer(async (req, res) => {
             return send(res, 200, enableEntries());
           case "syncBooks":
             return send(res, 200, syncBooks(j.totalEq, j.share));
+          case "resetState":
+            return send(res, 200, resetState());
           case "fleetGate":
             return send(res, 200, setFleetGate(j.opened, SLOT));
           case "ensureFour": {
@@ -6478,6 +6526,10 @@ var srv = createServer(async (req, res) => {
         return send(res, 200, { ok: true, instant: true, halted: a !== "start" });
       }
       if (a === "haltState") return send(res, 200, { ok: true, halted: haltRequested() });
+      if (a === "resetAll") {
+        const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 3e4, { action: "resetState" })));
+        return send(res, 200, { ok: true, results: rs });
+      }
       if (a === "enableAll") {
         const rs = await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 8e3, { action: "enableEntries" })));
         return send(res, 200, { ok: true, results: rs });
