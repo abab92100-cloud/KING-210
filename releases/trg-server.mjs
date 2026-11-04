@@ -2519,6 +2519,19 @@ async function exPlaceLimit(intent) {
   if (!intent.reduceOnly && !S._entriesEnabled) {
     throw new Error("\u26D4 \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u063A\u0644\u0642\u0629 \u2014 \u0646\u0641\u0651\u0630 \xAB\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0623\u0648\u0627\u0645\u0631\xBB");
   }
+  if (!intent.reduceOnly && S.position) {
+    const placed = (Number(S._exEntryOpenN) || 0) + (Number(S._entryFillsN) || 0);
+    if (placed >= 4) {
+      throw new Error("\u26D4 \u0627\u0644\u0645\u0631\u0643\u0632 \u0645\u0643\u062A\u0645\u0644 (4 \u0623\u0648\u0627\u0645\u0631) \u2014 \u0644\u0627 \u0625\u0636\u0627\u0641\u0629");
+    }
+    const lev = Math.max(1, Number(S.config.leverage) || 1);
+    const posMargin = (S.position.size || 0) * (S.multiplier || 1) * (S.position.entry || 0) / lev;
+    const newMargin = (Number(intent.qty) || 0) * (S.multiplier || 1) * (Number(intent.price) || 1) / lev;
+    const capM = Math.max(5, (Number(S.config.cycleBalance) || 0) * 4);
+    if (posMargin + newMargin > capM) {
+      throw new Error("\u26D4 \u0633\u0642\u0641 \u0627\u0644\u0647\u0627\u0645\u0634: \u0627\u0644\u062A\u062C\u0627\u0648\u0632 \u064A\u0645\u0646\u0639 \u0627\u0644\u0625\u0636\u0627\u0641\u0629");
+    }
+  }
   if (!intent.reduceOnly) {
     const before = Math.floor(Number(intent.qty) || 0);
     const capped = capEntryQty(before, intent.price);
@@ -2746,29 +2759,14 @@ function batchHoldActive() {
   if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 18e5)) {
     S._batchHoldLogAt = Date.now();
     const el = Math.floor((Date.now() - S._batchHoldAt) / H), min = Math.floor((Date.now() - S._batchHoldAt) % H / 6e4);
-    const calm2 = S._batchWorseAt ? Math.floor((Date.now() - S._batchWorseAt) / H) : 0;
-    pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D: " + S._batchFills + " \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u0645\u0636\u0649 " + el + "\u0633" + min + "\u062F \u0645\u0646 \u0648\u062C\u0648\u0628 \u0627\u0644\u06403 \u0633\u0627\u0639\u0627\u062A" + (S._batchWorseAt ? Date.now() - S._batchWorseAt > H ? " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u062A\u0648\u0642\u0641 \u0645\u0646\u0630 " + calm2 + " \u0633\u0627\u0639\u0629" : " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u0627 \u0632\u0627\u0644 \u0646\u0634\u0637\u0627\u064B" : " \u2014 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629"));
+    const calm = S._batchWorseAt ? Math.floor((Date.now() - S._batchWorseAt) / H) : 0;
+    pushLog("server", "\u{1F9F7} \u0627\u0644\u0642\u0627\u0637\u0639 \u0645\u0627\u0636\u064D: " + S._batchFills + " \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644 \u2014 \u0645\u0636\u0649 " + el + "\u0633" + min + "\u062F \u0645\u0646 \u0648\u062C\u0648\u0628 \u0627\u0644\u06403 \u0633\u0627\u0639\u0627\u062A" + (S._batchWorseAt ? Date.now() - S._batchWorseAt > H ? " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u062A\u0648\u0642\u0641 \u0645\u0646\u0630 " + calm + " \u0633\u0627\u0639\u0629" : " \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0645\u0627 \u0632\u0627\u0644 \u0646\u0634\u0637\u0627\u064B" : " \u2014 \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0642\u0631\u0627\u0621\u0629"));
   }
-  const held = Date.now() - (S._batchHoldAt || 0);
-  const calm = S._batchWorseAt ? Date.now() - S._batchWorseAt : 0;
-  if (held < 3 * 36e5) return true;
-  if (!(calm >= 30 * 6e4)) {
-    if (!S._batchStudiedAt || Date.now() - S._batchStudiedAt > 18e5) {
-      S._batchStudiedAt = Date.now();
-      pushLog("server", "\u{1F9F7} 3 \u0633\u0627\u0639\u0627\u062A \u0645\u0636\u062A \u2014 \u0627\u0644\u0627\u0646\u0632\u0644\u0627\u0642 \u0644\u0645 \u064A\u0633\u062A\u0642\u0631 \u0628\u0639\u062F (\u0642\u0627\u0639/\u0642\u0645\u0629 \u062C\u062F\u064A\u062F\u0629 \u0642\u0628\u0644 " + Math.floor(calm / 6e4) + " \u062F\u0642\u064A\u0642\u0629) \u2014 \u0627\u0633\u062A\u0645\u0631\u0627\u0631 \u0627\u0644\u062A\u0648\u0642\u0641");
-    }
-    return true;
+  if (S._batchHoldAt && (!S._batchHoldLogAt || Date.now() - S._batchHoldLogAt > 18e5)) {
+    S._batchHoldLogAt = Date.now();
+    pushLog("server", "\u{1F9F7} \u0628\u0644\u063A \u0627\u0644\u0645\u0631\u0643\u0632 4 \u0623\u0648\u0627\u0645\u0631 \u2014 \u062A\u0648\u0642\u0641 \u0643\u0627\u0645\u0644 \u062D\u062A\u0649 \u0627\u0644\u062C\u0646\u064A (\u0644\u0627 \u062A\u0639\u0632\u064A\u0632 \u0648\u0644\u0627 \u0645\u062C\u0645\u0648\u0639\u0627\u062A \u0625\u0636\u0627\u0641\u064A\u0629)");
   }
-  S._batchHoldAt = 0;
-  S._batchFills = 0;
-  S._batchWorst = null;
-  S._batchWorseAt = 0;
-  S._batchStudiedAt = false;
-  S._groupN = (S._groupN || 1) + 1;
-  S._cycleMaxFills = 4;
-  pushLog("server", "\u2705 \u0627\u0633\u062A\u0642\u0631\u0627\u0631 \u0645\u0624\u0643\u062F \u0628\u0639\u062F 3 \u0633\u0627\u0639\u0627\u062A \u2014 \u0641\u062A\u062D \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0629 " + S._groupN + " (4 \u0623\u0648\u0627\u0645\u0631 \u0628\u062A\u0628\u0627\u0639\u062F\u0647\u0627 \u0627\u0644\u062E\u0627\u0635)");
-  startStudy(false);
-  return false;
+  return true;
 }
 function exposureCapped() {
   const pos = S.position;
@@ -4700,6 +4698,26 @@ function studiedEarlyExit(p) {
   return null;
 }
 async function flattenAt(p, source) {
+  try {
+    const r = String(source || "");
+    const isProfit = /جني|ربح|هدف/.test(r) && !/داهم|إيقاف|خسارة/.test(r);
+    if (isProfit && S.position) {
+      const mult = S.multiplier || 1;
+      const dir2 = S.position.side === "short" ? -1 : 1;
+      const gross = (Number(p) - S.position.entry) * dir2 * (S.position.size || 0) * mult;
+      const fees = (S.position.size || 0) * mult * Number(p || 0) * 6e-4 * 2;
+      const net = gross - fees;
+      const floor = Math.max(0.05, Number(S.config.tpNet || 0.1) * 0.9);
+      if (net < floor) {
+        if (!S._tpFloorAt || Date.now() - S._tpFloorAt > 12e4) {
+          S._tpFloorAt = Date.now();
+          pushLog("server", "\u23F3 \u062A\u0623\u062C\u064A\u0644 \u062C\u0646\u064A: \u0627\u0644\u0635\u0627\u0641\u064A " + fmtUsd(net) + " \u0623\u0642\u0644 \u0645\u0646 \u0627\u0644\u062D\u062F " + fmtUsd(floor) + " \u2014 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631");
+        }
+        return;
+      }
+    }
+  } catch {
+  }
   const pos = S.position;
   if (pos && p > 0) {
     const mult = S.multiplier || 1, q = pos.size || 0;
@@ -5034,7 +5052,12 @@ async function liveSync() {
         const av = Number(a && a.availableBalance);
         if (av >= 0 && isFinite(av)) S.exAvail = av;
         const eq = Number(a && a.accountEquity);
-        if (eq > 0 && isFinite(eq)) S.exEquity = eq;
+        if (eq > 0 && isFinite(eq)) {
+          S.exEquity = eq;
+          if (!(S._eqStart > 0)) S._eqStart = eq;
+          S.realizedPnl = Math.round((eq - (S._eqStart || eq)) * 100) / 100;
+          S.pnlReal = true;
+        }
       }).catch(() => {
       });
     }
