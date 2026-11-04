@@ -1377,6 +1377,27 @@ function clearHalt() {
   } catch {
   }
 }
+function setFleetGate(opened, slot) {
+  const o = Math.max(0, Math.min(10, Number(opened) || 0)), sl = Math.max(1, Number(slot) || 1);
+  const before = Number(S._fleetOpened) || 0;
+  S._fleetOpened = o;
+  S._mySlot = sl;
+  if (o !== before) {
+    if (o < sl - 1 && (!S._seqLogAt || Date.now() - S._seqLogAt > 6e4)) {
+      S._seqLogAt = Date.now();
+      pushLog("server", "\u23F3 \u0627\u0644\u062A\u0633\u0644\u0633\u0644: \u0628\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + (o + 1) + " \u0644\u064A\u0624\u0633\u0633 \u0635\u0641\u0642\u062A\u0647 \u0642\u0628\u0644 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + sl + " \u2014 \u062B\u0645 \u062F\u0631\u0627\u0633\u0629 \u062C\u062F\u064A\u062F\u0629");
+    } else if (o === sl - 1 && (!S._seqReadyAt || Date.now() - S._seqReadyAt > 6e4)) {
+      S._seqReadyAt = Date.now();
+      pushLog("server", "\u2705 \u062F\u0648\u0631 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + sl + " \u2014 \u062F\u0631\u0627\u0633\u0629 \u0645\u062D\u062F\u062B\u0629 \u0644\u0644\u0645\u0646\u0635\u0629 \u062B\u0645 \u062A\u064F\u0641\u062A\u062D \u0635\u0641\u0642\u062A\u0647");
+      try {
+        S._studyAt = 0;
+        startStudy(false);
+      } catch {
+      }
+    }
+  }
+  return { ok: true, opened: o, slot: sl };
+}
 function fleetFullNow() {
   return Math.max(0, Number(S._exOpenCount) || 0) >= 5;
 }
@@ -4298,6 +4319,13 @@ function huntTrigger(p) {
   if (toxicBlocked(S.config.direction)) return null;
   if (batchHoldActive()) return null;
   if (S._noNewEntries) return null;
+  if (!S.position && (Number(S._fleetOpened) || 0) < (Number(S._mySlot) || 1) - 1) {
+    if (!S._seqBlkAt || Date.now() - S._seqBlkAt > 6e4) {
+      S._seqBlkAt = Date.now();
+      pushLog("server", "\u23F3 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + (Number(S._mySlot) || 1) + " \u064A\u0646\u062A\u0638\u0631 \u0627\u0644\u0623\u0633\u0637\u0648\u0644 " + ((Number(S._fleetOpened) || 0) + 1) + " \u2014 \u0644\u0627 \u0641\u062A\u062D \u0642\u0628\u0644 \u062F\u0648\u0631\u0647");
+    }
+    return null;
+  }
   if (!S.position && fleetFullNow()) {
     if (!S._fullBlkAt || Date.now() - S._fullBlkAt > 3e5) {
       S._fullBlkAt = Date.now();
@@ -5609,6 +5637,15 @@ async function botTick() {
 function startBot() {
   clearHalt();
   try {
+    S._studyAt = 0;
+    S._fleetOpened = Number(S._fleetOpened) || 0;
+    startStudy(false);
+    scanRadar().catch(() => {
+    });
+    pushLog("server", "\u{1F50E} \u062A\u0634\u063A\u064A\u0644: \u0645\u0633\u062D \u0643\u0627\u0645\u0644 \u0644\u0644\u0633\u0648\u0642 \u0648\u062F\u0631\u0627\u0633\u0629 \u0645\u062D\u062F\u062B\u0629 \u2014 \u0644\u0627 \u062F\u062E\u0648\u0644 \u0642\u0628\u0644 \u0627\u0643\u062A\u0645\u0627\u0644\u0647\u0627");
+  } catch {
+  }
+  try {
     pushLog("server", "\u{1F9EC} \u0628\u0635\u0645\u0629 \u0627\u0644\u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A\u0629: " + strategyFingerprint());
   } catch {
   }
@@ -6044,7 +6081,7 @@ function initEngine() {
 // src/server-entry.ts
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-var SRV_VER = "TRQ-TRADING-1.7.15";
+var SRV_VER = "TRQ-TRADING-1.7.16";
 var FLEET_N = 5;
 var BASE_PORT = 9010;
 var SLOT = parseInt(String(process.env.ABKING_SLOT || ""), 10) || 0;
@@ -6181,6 +6218,15 @@ setInterval(() => {
   alignFleetStrategy().catch(() => {
   });
 }, 3e5).unref?.();
+async function broadcastFleetGate() {
+  let opened = 0;
+  for (let i = 1; i <= FLEET_N; i++) if (slotStates[i] && slotStates[i].position) opened++;
+  await Promise.all(Array.from({ length: FLEET_N }, (_, i) => jfetch("http://127.0.0.1:" + (BASE_PORT + 1 + i) + "/cmd", 5e3, { action: "fleetGate", opened })));
+}
+setInterval(() => {
+  broadcastFleetGate().catch(() => {
+  });
+}, 5e3).unref?.();
 function mergedState(selIn = 0) {
   const live = [];
   for (let i = 1; i <= FLEET_N; i++) if (slotStates[i]) live.push(slotStates[i]);
@@ -6307,6 +6353,8 @@ var srv = createServer(async (req, res) => {
             return send(res, 200, enableEntries());
           case "syncBooks":
             return send(res, 200, syncBooks(j.totalEq, j.share));
+          case "fleetGate":
+            return send(res, 200, setFleetGate(j.opened, SLOT));
           case "ensureFour": {
             const need = ensureGroupFour();
             return send(res, 200, { ok: true, need });
