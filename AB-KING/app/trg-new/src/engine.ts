@@ -702,6 +702,8 @@ export async function scanRadar(){
       return {...r, preScore: Math.max(0, Math.min(100, Math.round(sc))) };
     }).sort((a,b)=>b.preScore-a.preScore);
     // only the top 30 candidates get the deep check (candles + ticker) - fast AND precise
+    if(!S._scanLogAt||Date.now()-S._scanLogAt>300000){ S._scanLogAt=Date.now();
+      pushLog('server','🔎 مسح شامل: '+rows.length+' عملة في المنصة — فحص معمّق لأفضل '+Math.min(30,preScored.length)); }
     const det=await Promise.all(preScored.slice(0,30).map(async r=>{
       const out={...r,vol:0,spread:0,trendPct:0,price:0};
       try{ const ks=await fetchKlines(r.symbol,15);
@@ -3696,20 +3698,24 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
         // له في المنصة يُقفل. كان التطبيق يعرض 3 بينما المنصة فيها 5 ───
         try{
           const liveSet=new Map<string,any>();
-          for(const ep of S.exPositions) liveSet.set(String(ep.symbol).replace(/USDTM$/i,''),ep);
+          for(const ep of S.exPositions) liveSet.set(String(ep.symbol).replace(/USDTM$/i,'').toUpperCase(),ep);
           for(const [sym,ep] of liveSet){
-            const hasOpen=S.journal.some((j:any)=>j.status==='open'&&String(j.symbol).toUpperCase()===sym.toUpperCase());
-            if(!hasOpen){
+            const row=S.journal.find((j:any)=>j.status==='open'&&String(j.symbol).toUpperCase()===sym);
+            if(row){ // موجود: حدّث الكمية والمتوسط وربح المنصة (بلا تكرار)
+              row.qty=ep.size; row.entry=ep.entry; row.side=ep.side; row.exPnl=Number(ep.pnl)||0;
+              if(!row.mult) row.mult=Number(S.multiplier)||1; row.lastPx=S.lastPrice||row.lastPx;
+            } else {
               S.journal.push({id:uid('jsy'),symbol:sym,side:ep.side,entry:ep.entry,qty:ep.size,
                 exit:null,pnl:0,fees:0,openedAt:Date.now(),closedAt:0,mergedOrders:1,
-                status:'open',source:'مزامنة المنصة'} as any);
+                status:'open',source:'مزامنة المنصة',exPnl:Number(ep.pnl)||0,
+                mult:Number(S.multiplier)||1,lastPx:S.lastPrice||0} as any);
             }
           }
           for(const j of S.journal){
             if(j.status!=='open') continue;
             if(!liveSet.has(String(j.symbol).toUpperCase())){
-              j.status='closed'; j.closedAt=Date.now(); j.exit=j.exit||j.entry;
-              if(j.source!=='إيقاف') j.source='مزامنة المنصة (لم يعد قائماً)';
+              j.status='closed'; j.closedAt=Date.now(); j.exit=j.exit||j.entry; j.pnl=0;
+              if(j.source!=='إيقاف') j.source='أُغلق على المنصة';
             } } }catch(e){ logSwallow('journalSync',e); }
         if(!S._exListLogAt||Date.now()-S._exListLogAt>300000){ S._exListLogAt=Date.now();
           if(n>0) pushLog('server','📋 مراكز المنصة الحقيقية ('+n+'): '+S.exPositions.map((p:any)=>p.symbol.replace('USDTM','')).join(' · ')); }
@@ -4003,6 +4009,9 @@ export async function botTick(){
 /* ---------- أوامر التشغيل ---------- */
 export function startBot(){
   clearHalt(); // رفع مفتاح الإيقاف المحلي
+  S._entriesEnabled=true; // «تشغيل» = بدء التداول فعلياً (لا بوابة سرّية معطّلة)
+  if(!S._startGateLog||Date.now()-S._startGateLog>1000){ S._startGateLog=Date.now();
+    pushLog('server','▶️ تشغيل: بوابة الأوامر مفتوحة — البحث الشامل والدراسة ثم الفتح'); }
   // عند التشغيل: مسح كامل للمنصة ودراسة جديدة قبل أي دخول (أمر المالك)
   try{ S._studyAt=0; S._fleetOpened=Number(S._fleetOpened)||0;
     startStudy(false); scanRadar().catch(()=>{});

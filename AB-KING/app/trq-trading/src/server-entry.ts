@@ -13,7 +13,7 @@ import {
   requestHalt, clearHalt, haltRequested, setFleetGate, resetState,
 } from './engine';
 
-const SRV_VER = 'TRQ-TRADING-1.7.17';
+const SRV_VER = 'TRQ-TRADING-1.7.18';
 const FLEET_N = 5;
 const BASE_PORT = 9010; // منفذ أسطول TRG-NEW — مستقل عن AB-KING (8787) وعن TRQ (8987)
 const SLOT = parseInt(String((process.env as any).ABKING_SLOT || ''), 10) || 0;
@@ -214,8 +214,12 @@ const srv = createServer(async (req, res) => {
         // حمولة أنحف: آخر 30 صفقة و80 سجل سيرفر — يخفف حمل الجوال ويحمي نبض القنوات
         const st: any={...S, journal:(S.journal||[]).slice(-120).map((r:any)=>{
           if(r.status!=='open') return r;
-          const feeEst=lp? r.qty*mult*lp*taker:0;
-          const f=lp? ((r.side==='short'?1:-1)*(r.entry-lp)*mult*r.qty-(r.fees||0)-feeEst):0;
+          // صف مُزامن من المنصة: ربحه العائم هو رقم المنصة نفسه (لا حساب محلي)
+          if(r.exPnl!==undefined&&r.exPnl!==null) return {...r, floatNet: Math.round((Number(r.exPnl))*100)/100};
+          const rm=Number(r.mult)||mult;      // مضاعف عملة الصف نفسه (لا عملة العرض)
+          const rp=(r.symbol&&r.symbol.toUpperCase()===String(S.config.displaySymbol||'').toUpperCase())?lp:(Number(r.lastPx)||lp);
+          const feeEst=rp? r.qty*rm*rp*taker:0;
+          const f=rp? ((r.side==='short'?1:-1)*(r.entry-rp)*rm*r.qty-(r.fees||0)-feeEst):0;
           return {...r, floatNet: Math.round((f+Number.EPSILON)*100)/100}; }),
           logs:(S.logs||[]).slice(-80)};
         return send(res, 200, { ok: true, at: Date.now(), state: st }); }
