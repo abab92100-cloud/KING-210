@@ -68,7 +68,8 @@ function tpBase(){
 
 /* ---------- أدوات ---------- */
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
-const uid=p=>p+'_'+Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
+let _oidSeq=0;
+const uid=p=>p+'_'+Date.now().toString(36)+'_'+((_oidSeq=(_oidSeq+1)%100000)).toString(36)+'_'+Math.random().toString(36).slice(2,8);
 const fmtPx=n=>{ n=Number(n); if(!n||!isFinite(n)||n<=0) return '—';
   if(n>=1000) return n.toLocaleString('en-US',{maximumFractionDigits:2});
   if(n>=1) return n.toFixed(2);
@@ -3606,7 +3607,8 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
   // تهدئة أعمق (ملاحظة المالك 3 نوفمبر: «لا شيء يعمل» بسبب سيل 429):
   // دورة كل 8 ثوانٍ + تبريد 45 ثانية عند الرفض — القراءة أهدأ والأخطاء أقل
   if(S._rlUntil&&Date.now()<S._rlUntil) return;
-  if(Date.now()-(S._syncAt||0)<8000) return;
+  const slotOff=((Number(S._mySlot)||1)-1)*1600;   // تدرّج بين المحركات (سبب 429)
+  if(Date.now()-(S._syncAt||0)<(12000+slotOff)) return;
   S._syncAt=Date.now();
   // سرب إنقاذ المراكز اليتيمة كل 5 دقائق — قبل أي منطق آخر
   if(!S._orphanAt||Date.now()-S._orphanAt>300000){ S._orphanAt=Date.now(); orphanSweep().catch(()=>{}); }
@@ -3698,7 +3700,12 @@ export async function liveSync(){ if(R()) return; // وضع المرآة: الح
         // له في المنصة يُقفل. كان التطبيق يعرض 3 بينما المنصة فيها 5 ───
         try{
           const liveSet=new Map<string,any>();
-          for(const ep of S.exPositions) liveSet.set(String(ep.symbol).replace(/USDTM$/i,'').toUpperCase(),ep);
+          const MY=String(S.config.displaySymbol||'').toUpperCase().replace(/USDTM$/,'');
+          for(const ep of S.exPositions){
+            const symU=String(ep.symbol).replace(/USDTM$/i,'').toUpperCase();
+            if(MY&&symU!==MY) continue;              // سجل هذا المحرك = عملته فقط
+            liveSet.set(symU,ep);
+          }
           for(const [sym,ep] of liveSet){
             const row=S.journal.find((j:any)=>j.status==='open'&&String(j.symbol).toUpperCase()===sym);
             if(row){ // موجود: حدّث الكمية والمتوسط وربح المنصة (بلا تكرار)
