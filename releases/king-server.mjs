@@ -2641,7 +2641,26 @@ async function exPlaceLimit(intent) {
     marginMode: "CROSS"
   });
 }
+function assertEntryAllowed(symbol2, qty, price) {
+  if (S.status !== "running") throw new Error("\u26D4 \u0627\u0644\u0628\u0648\u062A \u063A\u064A\u0631 \u0645\u064F\u0634\u063A\u0651\u0644 \u2014 \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644");
+  if (haltRequested()) throw new Error("\u26D4 \u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0625\u064A\u0642\u0627\u0641 \u0645\u0641\u0639\u0651\u0644 \u2014 \u0644\u0627 \u0623\u0648\u0627\u0645\u0631 \u062F\u062E\u0648\u0644");
+  if (!S._entriesEnabled) throw new Error("\u26D4 \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0645\u063A\u0644\u0642\u0629 \u2014 \u0646\u0641\u0651\u0630 \xAB\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0623\u0648\u0627\u0645\u0631\xBB");
+  const placed = (Number(S._exEntryOpenN) || 0) + (Number(S._entryFillsN) || 0);
+  if (placed >= 20) throw new Error("\u26D4 \u0627\u0643\u062A\u0645\u0644\u062A \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0627\u062A \u0627\u0644\u062E\u0645\u0633 (20 \u0623\u0645\u0631\u0627\u064B)");
+  if (S.position) {
+    const lev = Math.max(1, Number(S.config.leverage) || 1), mult = S.multiplier || 1, px = Number(price) || Number(S.lastPrice) || 0;
+    const posMargin = (S.position.size || 0) * mult * (S.position.entry || 0) / lev;
+    const newMargin = Math.abs(Number(qty) || 0) * mult * px / lev;
+    const capM = Math.max(5, (Number(S.config.cycleBalance) || 0) * 4);
+    if (px > 0 && posMargin + newMargin > capM) throw new Error("\u26D4 \u0633\u0642\u0641 \u0627\u0644\u0647\u0627\u0645\u0634: \u0627\u0644\u062A\u062C\u0627\u0648\u0632 \u064A\u0645\u0646\u0639 \u0627\u0644\u0625\u0636\u0627\u0641\u0629");
+  }
+  void symbol2;
+}
 async function exPlaceMarket(symbol2, side, qty) {
+  const px = Number(S.lastPrice) || Number(S.markPrice) || 0;
+  const capped = capEntryQty(qty, px > 0 ? px : 1);
+  assertEntryAllowed(symbol2, capped, px);
+  qty = capped;
   await ensureLiveMeta(symbol2);
   return placeOrderSmart({
     clientOid: "hunt_" + Date.now().toString(36),
